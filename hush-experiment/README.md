@@ -142,16 +142,15 @@ Example template:
 """Description of what this example demonstrates."""
 
 import asyncio
-from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
+from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, set_global_hub
 from hush.core.registry import ResourceHub
-from hush.providers import YourNode, YourPlugin
+from hush.providers import YourNode  # Plugin auto-registers!
 
 
 async def main():
-    # Setup
+    # Setup (optional - load custom config)
     hub = ResourceHub.from_yaml("../resources.yaml")
-    hub.register_plugin(YourPlugin)
-    ResourceHub.set_instance(hub)
+    set_global_hub(hub)
 
     # Build workflow
     with WorkflowEngine(name="example") as workflow:
@@ -166,6 +165,8 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+> **Note:** As of the latest version, plugins auto-register when imported! You no longer need to manually call `hub.register_plugin()`. Just import the nodes you need and they'll work automatically.
 
 ## Testing Integration
 
@@ -221,11 +222,15 @@ Verify that `resources.yaml` exists in the parent directory and contains valid c
 
 ### Provider initialization errors
 
-Check that you've registered the necessary plugins before using nodes:
+As of the latest version, plugins auto-register when you import them. Just make sure to import the nodes you need:
 ```python
-hub.register_plugin(EmbeddingPlugin)
-hub.register_plugin(LLMPlugin)
-hub.register_plugin(RerankPlugin)
+from hush.providers import EmbeddingNode, LLMNode, RerankNode  # Auto-registers!
+```
+
+If you need to use a custom ResourceHub, set it as the global hub:
+```python
+from hush.core import set_global_hub
+set_global_hub(your_custom_hub)
 ```
 
 ### Missing dependencies for specific providers
