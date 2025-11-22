@@ -1,9 +1,12 @@
 """Plugin system for extending the resource registry."""
 
-from abc import ABC, abstractmethod
-from typing import Any, Optional, Type, TypeVar
+from abc import ABC, ABCMeta, abstractmethod
+from typing import Any, Optional, Type, TypeVar, TYPE_CHECKING
 
 from hush.core.utils.yaml_model import YamlModel
+
+if TYPE_CHECKING:
+    from .resource_hub import ResourceHub
 
 # Base config type that all resource configs must inherit from
 # This is an alias for YamlModel - all existing configs already inherit from YamlModel
@@ -12,7 +15,34 @@ ResourceConfig = YamlModel
 T = TypeVar('T', bound=ResourceConfig)
 
 
-class ResourcePlugin(ABC):
+class PluginMeta(ABCMeta):
+    """Metaclass for automatic plugin registration.
+
+    When a plugin class is created (not instantiated), it automatically
+    registers itself with the global RESOURCE_HUB if available.
+    """
+
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+
+        # Only auto-register concrete plugin classes (not the base class)
+        if name != 'ResourcePlugin' and not getattr(cls, '__abstractmethods__', None):
+            # Import here to avoid circular imports
+            from .resource_hub import _get_global_hub
+
+            # Get or create the global hub
+            hub = _get_global_hub()
+            if hub is not None:
+                try:
+                    hub.register_plugin(cls)
+                except Exception:
+                    # Silently fail if registration fails (e.g., during module import)
+                    pass
+
+        return cls
+
+
+class ResourcePlugin(ABC, metaclass=PluginMeta):
     """Plugin interface for resource factories.
 
     Each hush-* package can register plugins to handle their specific resource types.

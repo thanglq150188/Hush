@@ -59,6 +59,9 @@ from hush.core.streams import (
 from hush.core.loggings import LOGGER
 from hush.core.registry import (
     ResourceHub,
+    RESOURCE_HUB,
+    get_hub,
+    set_global_hub,
     ResourcePlugin,
     ResourceConfig,
     ConfigStorage,
@@ -109,6 +112,9 @@ __all__ = [
     "LOGGER",
     # Registry
     "ResourceHub",
+    "RESOURCE_HUB",
+    "get_hub",
+    "set_global_hub",
     "ResourcePlugin",
     "ResourceConfig",
     "ConfigStorage",
