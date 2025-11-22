@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List, Union
 from hush.core import BaseNode, WorkflowState
 from hush.core.schema import ParamSet
 from hush.core.configs import NodeType
-from hush.core.registry import ResourceHub
+from hush.core.registry import ResourceHub, get_hub
 
 
 class EmbeddingNode(BaseNode):
@@ -19,20 +19,19 @@ class EmbeddingNode(BaseNode):
 
     Example:
         ```python
-        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
-        from hush.core.registry import ResourceHub
-        from hush.providers import EmbeddingNode, EmbeddingPlugin
+        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, RESOURCE_HUB
+        from hush.providers import EmbeddingNode  # Plugin auto-registers!
+        from hush.providers.embeddings.config import EmbeddingConfig
 
-        # Setup ResourceHub
-        hub = ResourceHub.from_yaml("configs/resources.yaml")
-        hub.register_plugin(EmbeddingPlugin)
-        ResourceHub.set_instance(hub)
+        # Register config (optional - can also use resources.yaml)
+        config = EmbeddingConfig(api_type="hf", model="BAAI/bge-m3", dimensions=1024)
+        RESOURCE_HUB.register(config, registry_key="embedding:bge-m3", persist=False)
 
         # Create workflow
         with WorkflowEngine(name="embed") as workflow:
             embed = EmbeddingNode(
                 name="embed",
-                resource_key="bge-m3",  # References embedding:bge-m3 in resources.yaml
+                resource_key="bge-m3",  # Uses global RESOURCE_HUB
                 inputs={"texts": INPUT},
                 outputs={"embeddings": OUTPUT}
             )
@@ -74,8 +73,13 @@ class EmbeddingNode(BaseNode):
 
         self.resource_key = resource_key
 
-        # Get embedder from ResourceHub
-        hub = ResourceHub.instance()
+        # Try to get hub (prefers singleton for backwards compatibility, then global)
+        try:
+            hub = ResourceHub.instance()
+        except RuntimeError:
+            # Fall back to global hub if no singleton set
+            hub = get_hub()
+
         embedder = hub.embedding(self.resource_key)
         self.core = embedder.run
 
