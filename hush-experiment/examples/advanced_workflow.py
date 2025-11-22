@@ -32,7 +32,6 @@ async def main():
             name="embed_query",
             resource_key="bge-m3",
             inputs={"texts": INPUT["query"]},
-            outputs={"embeddings": "query_embedding"}
         )
 
         # Node 2: Embed document chunks
@@ -40,7 +39,6 @@ async def main():
             name="embed_docs",
             resource_key="bge-m3",
             inputs={"texts": INPUT["documents"]},
-            outputs={"embeddings": "doc_embeddings"}
         )
 
         # Node 3: Rerank documents based on query

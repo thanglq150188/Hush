@@ -44,10 +44,10 @@ async def main():
     # Add a generation (LLM call) as child of workflow
     generation_id = "gen_001"
     trace_info = MessageTraceInfo(
+        conversation_model="gpt-4",
         input=[{"role": "user", "content": "What is the status of my order?"}],
         output={"role": "assistant", "content": "Let me check your order status..."},
         metadata={
-            "model": "gpt-4",
             "temperature": 0.7,
             "tokens": {"prompt": 15, "completion": 25, "total": 40},
         },
@@ -64,10 +64,10 @@ async def main():
     # Add another generation as sibling
     generation_id_2 = "gen_002"
     trace_info_2 = MessageTraceInfo(
+        conversation_model="gpt-4",
         input=[{"role": "user", "content": "What is the status of my order status?"}],
         output={"role": "assistant", "content": "Your order has been shipped!"},
         metadata={
-            "model": "gpt-4",
             "temperature": 0.7,
             "tokens": {"prompt": 12, "completion": 18, "total": 30},
         },
