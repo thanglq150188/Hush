@@ -19,11 +19,14 @@ class LangfuseBackendAdapter:
     """Backend adapter for Langfuse.
 
     Handles the creation of Langfuse-specific trace objects.
+    Note: Since the buffer processes one request at a time within flush(),
+    we can use a single _current_trace variable that gets reset for each flush.
     """
 
     def __init__(self, client: 'Langfuse'):
         """Initialize adapter with Langfuse client."""
         self.client = client
+        self._current_trace = None  # Reset for each flush operation
 
     def create_span(self, item: TraceItem, parent_obj: Optional[Any]) -> Any:
         """Create a Langfuse span."""
@@ -31,14 +34,15 @@ class LangfuseBackendAdapter:
         name = data.pop("name", "unnamed-span")
 
         if parent_obj:
+            # Child span
             span = parent_obj.span(name=name, **data)
         else:
-            # Root span
-            span = self.client.span(name=name, **data)
-
-        # Update trace metadata if present
-        if item.trace_metadata:
-            span.update_trace(**item.trace_metadata)
+            # Root span - create a trace first
+            if self._current_trace is None:
+                trace_metadata = item.trace_metadata.copy() if item.trace_metadata else {}
+                trace_name = trace_metadata.pop("name", name)
+                self._current_trace = self.client.trace(name=trace_name, **trace_metadata)
+            span = self._current_trace.span(name=name, **data)
 
         return span
 
@@ -48,14 +52,15 @@ class LangfuseBackendAdapter:
         name = data.pop("name", "unnamed-generation")
 
         if parent_obj:
+            # Child generation
             generation = parent_obj.generation(name=name, **data)
         else:
-            # Root generation
-            generation = self.client.generation(name=name, **data)
-
-        # Update trace metadata if present
-        if item.trace_metadata:
-            generation.update_trace(**item.trace_metadata)
+            # Root generation - create a trace first
+            if self._current_trace is None:
+                trace_metadata = item.trace_metadata.copy() if item.trace_metadata else {}
+                trace_name = trace_metadata.pop("name", name)
+                self._current_trace = self.client.trace(name=trace_name, **trace_metadata)
+            generation = self._current_trace.generation(name=name, **data)
 
         return generation
 
@@ -67,6 +72,7 @@ class LangfuseBackendAdapter:
     def flush_backend(self) -> None:
         """Flush Langfuse client."""
         self.client.flush()
+        self._current_trace = None  # Reset for next flush
 
 
 class LangfuseTracer(BaseTracer):
@@ -135,12 +141,10 @@ class LangfuseTracer(BaseTracer):
         if self.config.no_proxy:
             os.environ.update({"NO_PROXY": self.config.no_proxy})
 
-        http_client = httpx.Client(verify=False)
         client = Langfuse(
             public_key=self.config.public_key,
             secret_key=self.config.secret_key,
-            host=self.config.host,
-            httpx_client=http_client
+            host=self.config.host
         )
 
         # Validate authentication

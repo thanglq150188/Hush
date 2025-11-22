@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = [
-    "langfuse>=2.6.0",
+    "langfuse==2.6.0",
 ]
 phoenix = [
     "arize-phoenix>=4.0.0",
@@ -30,7 +30,7 @@ langsmith = [
     "langsmith>=0.1.0",
 ]
 all = [
-    "langfuse>=2.6.0",
+    "langfuse==2.6.0",
     "arize-phoenix>=4.0.0",
     "opik>=0.1.0",
     "langsmith>=0.1.0",
@@ -56,4 +56,4 @@ line-length = 100
 target-version = "py310"
 
 [tool.uv.sources]
-hush-core = { path = "../hush-core" }
+hush-core = { path = "../hush-core", editable = true }
