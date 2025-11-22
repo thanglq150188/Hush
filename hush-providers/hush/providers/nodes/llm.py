@@ -12,7 +12,7 @@ from hush.core import BaseNode, WorkflowState, STREAM_SERVICE, LOGGER
 from hush.core.schema import ParamSet
 from hush.core.configs import NodeType
 from hush.core.utils.common import fake_chunk_from
-from hush.core.registry import ResourceHub
+from hush.core.registry import ResourceHub, get_hub
 
 
 class LLMNode(BaseNode):
@@ -23,20 +23,19 @@ class LLMNode(BaseNode):
 
     Example:
         ```python
-        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
-        from hush.core.registry import ResourceHub
-        from hush.providers import LLMNode, LLMPlugin
+        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, RESOURCE_HUB
+        from hush.providers import LLMNode  # Plugin auto-registers!
+        from hush.providers.llms.config import OpenAIConfig
 
-        # Setup ResourceHub
-        hub = ResourceHub.from_yaml("configs/resources.yaml")
-        hub.register_plugin(LLMPlugin)
-        ResourceHub.set_instance(hub)
+        # Register LLM config (optional - can also use resources.yaml)
+        config = OpenAIConfig(api_type="openai", api_key="...", model="gpt-4")
+        RESOURCE_HUB.register(config, persist=False)
 
         # Create workflow
         with WorkflowEngine(name="chat") as workflow:
             llm = LLMNode(
                 name="chat",
-                resource_key="gpt-4",  # References llm:gpt-4 in resources.yaml
+                resource_key="openai:gpt-4",  # Uses global RESOURCE_HUB
                 inputs={"messages": INPUT},
                 outputs={"content": OUTPUT},
                 stream=True
@@ -113,8 +112,13 @@ class LLMNode(BaseNode):
         self.contain_generation = True
 
         if not self.instant_response:
-            # Get LLM from ResourceHub
-            hub = ResourceHub.instance()
+            # Try to get hub (prefers singleton for backwards compatibility, then global)
+            try:
+                hub = ResourceHub.instance()
+            except RuntimeError:
+                # Fall back to global hub if no singleton set
+                hub = get_hub()
+
             llm = hub.llm(self.resource_key)
 
             if self.stream:

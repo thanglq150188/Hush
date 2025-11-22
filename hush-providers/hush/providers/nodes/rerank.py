@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from hush.core import BaseNode, WorkflowState
 from hush.core.schema import ParamSet
 from hush.core.configs import NodeType
-from hush.core.registry import ResourceHub
+from hush.core.registry import ResourceHub, get_hub
 
 
 class RerankNode(BaseNode):
@@ -19,20 +19,19 @@ class RerankNode(BaseNode):
 
     Example:
         ```python
-        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
-        from hush.core.registry import ResourceHub
-        from hush.providers import RerankNode, RerankPlugin
+        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, RESOURCE_HUB
+        from hush.providers import RerankNode  # Plugin auto-registers!
+        from hush.providers.rerankers.config import RerankingConfig
 
-        # Setup ResourceHub
-        hub = ResourceHub.from_yaml("configs/resources.yaml")
-        hub.register_plugin(RerankPlugin)
-        ResourceHub.set_instance(hub)
+        # Register config (optional - can also use resources.yaml)
+        config = RerankingConfig(api_type="hf", model="BAAI/bge-reranker-v2-m3")
+        RESOURCE_HUB.register(config, registry_key="reranking:bge-m3", persist=False)
 
         # Create workflow
         with WorkflowEngine(name="rerank") as workflow:
             rerank = RerankNode(
                 name="rerank",
-                resource_key="bge-m3",  # References reranking:bge-m3 in resources.yaml
+                resource_key="bge-m3",  # Uses global RESOURCE_HUB
                 inputs={"query": INPUT, "documents": INPUT},
                 outputs={"reranks": OUTPUT}
             )
@@ -81,8 +80,13 @@ class RerankNode(BaseNode):
 
         self.resource_key = resource_key
 
-        # Get reranker from ResourceHub
-        hub = ResourceHub.instance()
+        # Try to get hub (prefers singleton for backwards compatibility, then global)
+        try:
+            hub = ResourceHub.instance()
+        except RuntimeError:
+            # Fall back to global hub if no singleton set
+            hub = get_hub()
+
         self.backend = hub.reranker(self.resource_key)
         self.core = self._process
 
