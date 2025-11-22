@@ -7,21 +7,19 @@ This example demonstrates:
 """
 
 import asyncio
-from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
+from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, set_global_hub
 from hush.core.registry import ResourceHub
-from hush.providers import EmbeddingNode, EmbeddingPlugin
+from hush.providers import EmbeddingNode  # Plugin auto-registers!
 
 
 async def main():
     # 1. Setup ResourceHub from YAML configuration
     # This assumes you have a resources.yaml file in the parent directory
+    # Plugins are already auto-registered when EmbeddingNode is imported!
     hub = ResourceHub.from_yaml("../resources.yaml")
 
-    # 2. Register the EmbeddingPlugin to handle embedding resources
-    hub.register_plugin(EmbeddingPlugin)
-
-    # 3. Set the global ResourceHub instance
-    ResourceHub.set_instance(hub)
+    # 2. Set the global ResourceHub instance
+    set_global_hub(hub)
 
     # 4. Create a simple embedding workflow
     with WorkflowEngine(name="simple_embed") as workflow:

@@ -8,22 +8,16 @@ This example demonstrates:
 """
 
 import asyncio
-from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, BaseNode
+from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, BaseNode, set_global_hub
 from hush.core.registry import ResourceHub
-from hush.providers import LLMNode, EmbeddingNode, RerankNode
-from hush.providers import LLMPlugin, EmbeddingPlugin, RerankPlugin
+from hush.providers import LLMNode, EmbeddingNode, RerankNode  # Plugins auto-register!
 
 
 async def main():
-    # 1. Setup ResourceHub with all plugins
+    # 1. Setup ResourceHub (plugins auto-register when imported above!)
+    # Load custom config from file
     hub = ResourceHub.from_yaml("../resources.yaml")
-
-    # Register all provider plugins
-    hub.register_plugin(LLMPlugin)
-    hub.register_plugin(EmbeddingPlugin)
-    hub.register_plugin(RerankPlugin)
-
-    ResourceHub.set_instance(hub)
+    set_global_hub(hub)  # Use this hub as the global one
 
     # 2. Create an advanced RAG workflow
     # This workflow:
@@ -156,9 +150,9 @@ async def run_simple_llm_example():
     print("SIMPLE LLM EXAMPLE")
     print("="*80)
 
+    # Plugins already auto-registered!
     hub = ResourceHub.from_yaml("../resources.yaml")
-    hub.register_plugin(LLMPlugin)
-    ResourceHub.set_instance(hub)
+    set_global_hub(hub)
 
     with WorkflowEngine(name="simple_chat") as workflow:
         llm = LLMNode(
