@@ -1,0 +1,147 @@
+# Hush Resources Configuration
+# Copy this file to resources.yaml and fill in your actual credentials
+
+# LLM Providers
+llm:gpt-4o:
+  _class: OpenAIConfig
+  api_key: your-openai-api-key-here
+  api_type: openai
+  base_url: https://api.openai.com/v1
+  extra_fields: null
+  model: gpt-4o
+  proxy: null
+
+llm:qwen3-30b-a3b:
+  _class: OpenAIConfig
+  api_key: your-openrouter-api-key-here
+  api_type: openai
+  base_url: https://openrouter.ai/api/v1
+  extra_fields: null
+  model: qwen/qwen3-next-80b-a3b-instruct
+  proxy: null
+
+# Embedding Providers
+embedding:bge-m3:
+  _class: EmbeddingConfig
+  api_key: your-deepinfra-api-key-here
+  api_type: vllm
+  base_url: https://api.deepinfra.com/v1/openai/embeddings
+  dimensions: 1024
+  embed_batch_size: null
+  extra_fields: null
+  model: BAAI/bge-m3
+
+embedding:bge-m3-hf:
+  _class: EmbeddingConfig
+  api_type: hf
+  api_key: ""
+  base_url: ""
+  dimensions: 1024
+  embed_batch_size: null
+  extra_fields: null
+  model: BAAI/bge-m3
+
+embedding:bge-m3-onnx:
+  _class: EmbeddingConfig
+  api_type: onnx
+  api_key: ""
+  base_url: ""
+  dimensions: 1024
+  embed_batch_size: null
+  extra_fields: null
+  model: /path/to/bge-m3-model
+
+# Reranking Providers
+reranking:bge-m3:
+  _class: RerankingConfig
+  api_key: your-pinecone-api-key-here
+  api_type: pipecone
+  api_version: 2025-04
+  base_url: https://api.pinecone.io/rerank
+  extra_fields: null
+  model: bge-reranker-v2-m3
+
+reranking:bge-m3-hf:
+  _class: RerankingConfig
+  api_type: hf
+  api_key: ""
+  api_version: ""
+  base_url: ""
+  extra_fields: null
+  model: BAAI/bge-reranker-v2-m3
+
+reranking:bge-m3-onnx:
+  _class: RerankingConfig
+  api_type: onnx
+  api_key: ""
+  api_version: ""
+  base_url: ""
+  extra_fields: null
+  model: /path/to/bge-m3-reranker
+
+# Monitoring (Optional)
+langfuse:vpbank:
+  _class: LangfuseConfig
+  secret_key: your-langfuse-secret-key-here
+  public_key: your-langfuse-public-key-here
+  host: https://cloud.langfuse.com
+  enabled: true
+  sample_rate: 1.0
+
+# Cache (Optional)
+# redis:vpbank:
+#   _class: RedisConfig
+#   host: your-redis-host
+#   port: 6379
+#   username: default
+#   password: your-redis-password
+
+# Vector Database (Optional)
+# milvus:vpbank:
+#   _class: MilvusConfig
+#   host: localhost
+#   port: 19530
+#   collection_name: document_vectors
+#   dimension: 1536
+#   index_type: IVF_FLAT
+#   metric_type: L2
+#   nlist: 1024
+
+# Document Database (Optional)
+# mongo:3c7b9e2f4d8a1f6e:
+#   _class: MongoConfig
+#   uri: mongodb://localhost:27017
+#   database: beegen_db
+#   authen_source: admin
+#   username: admin
+#   password: admin_password
+#   max_pool_size: 100
+#   min_pool_size: 10
+
+# Storage (Optional)
+# s3:ai-center-cua:
+#   _class: S3Config
+#   bucket_name: your-bucket-name
+#   region: ap-southeast-1
+#   aws_access_key_id: YOUR_ACCESS_KEY
+#   aws_secret_access_key: YOUR_SECRET_KEY
+#   endpoint_url: https://s3.ap-southeast-1.amazonaws.com
+
+# Authentication (Optional)
+# keycloak:7f9e2d1a8c4b6e3f:
+#   _class: KeycloakConfig
+#   server_url: https://keycloak.example.com
+#   realm: beegen
+#   client_id: beegen-api
+#   client_secret: your-client-secret
+
+# MCP Server (Optional)
+# mcp:code-analysis:
+#   _class: MCPConfig
+#   server_name: code-analysis
+#   command: python
+#   args:
+#     - -m
+#     - mcp_server.analysis
+#   env:
+#     LOG_LEVEL: info
