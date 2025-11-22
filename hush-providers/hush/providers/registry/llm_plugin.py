@@ -35,6 +35,8 @@ class LLMPlugin(ResourcePlugin):
 
         # Include provider type in key for clarity
         if hasattr(config, 'api_type') and config.api_type:
-            return f"llm:{config.api_type}:{config.model}"
+            # Extract the enum value if it's an enum
+            api_type = config.api_type.value if hasattr(config.api_type, 'value') else config.api_type
+            return f"llm:{api_type}:{config.model}"
 
         return f"llm:{config.model}"
