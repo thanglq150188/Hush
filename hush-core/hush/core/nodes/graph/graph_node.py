@@ -8,7 +8,7 @@ import asyncio
 from hush.core.configs.edge_config import EdgeConfig, EdgeType
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.base import BaseNode, END
-from hush.core.states.workflow_state import WorkflowState
+from hush.core.states import BaseState, StateSchema
 from hush.core.utils.context import _current_graph
 from hush.core.utils.bimap import BiMap
 from hush.core.loggings import LOGGER
@@ -81,33 +81,34 @@ class GraphNode(BaseNode):
 
     def _setup_schema(self):
         """Initialize input/output schema."""
-        from hush.core.nodes.base import INPUT, OUTPUT
-        from hush.core.schema import ParamSet
+        from hush.core.utils.common import Param
 
         LOGGER.info(f"Graph '{self.name}': Creating configs...")
-        input_schema = ParamSet.new().build()
-        output_schema = ParamSet.new().var("continue_loop: bool = False").build()
+        input_schema = {}
+        output_schema = {"continue_loop": Param(type=bool, default=False)}
 
         for _, node in self._nodes.items():
+            # Check inputs: if ref_key is self (father), it's a graph input
             for var, ref in node.inputs.items():
                 if isinstance(ref, dict) and len(ref) > 0:
                     ref_key, ref_var = next(iter(ref.items()))
-                    if ref_key == INPUT:
+                    if ref_key is self:  # INPUT["x"] resolved to father
                         if var not in node.input_schema:
                             raise KeyError(
                                 f"Variable not found in input schema: "
-                                f"{node.father.name if node.father else 'ROOT'}:{ref_var} <-- {node.name}.{var}"
+                                f"{self.name}:{ref_var} <-- {node.name}.{var}"
                             )
                         input_schema[ref_var] = node.input_schema[var]
 
+            # Check outputs: if ref_key is self (father), it's a graph output
             for var, ref in node.outputs.items():
                 if isinstance(ref, dict) and len(ref) > 0:
                     ref_key, ref_var = next(iter(ref.items()))
-                    if ref_key == OUTPUT:
+                    if ref_key is self:  # OUTPUT["x"] resolved to father
                         if var not in node.output_schema:
                             raise KeyError(
                                 f"Variable not found in output schema: "
-                                f"{node.father.name if node.father else 'ROOT'}:{ref_var} <-- {node.name}.{var}"
+                                f"{self.name}:{ref_var} <-- {node.name}.{var}"
                             )
                         output_schema[ref_var] = node.output_schema[var]
 
@@ -156,7 +157,6 @@ class GraphNode(BaseNode):
             name: len(preds) for name, preds in self.prevs.items()
         }
 
-        self._post_init()
         self._is_building = False
 
     @staticmethod
@@ -255,7 +255,7 @@ class GraphNode(BaseNode):
 
     async def run(
         self,
-        state: WorkflowState,
+        state: BaseState,
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute graph by running all nodes in dependency order."""
@@ -341,8 +341,104 @@ class GraphNode(BaseNode):
             state[self.full_name, "error", context_id] = error_msg
 
         finally:
-            await asyncio.sleep(0.000001)
             end_time = datetime.now()
-            state.set_by_index(self.metrics['start_time'], start_time, context_id=context_id)
-            state.set_by_index(self.metrics['end_time'], end_time, context_id=context_id)
+            state[self.full_name, "start_time", context_id] = start_time
+            state[self.full_name, "end_time", context_id] = end_time
             return _outputs
+
+
+if __name__ == "__main__":
+    from hush.core.nodes.base import START, END, INPUT, OUTPUT
+    from hush.core.nodes.transform.code_node import CodeNode
+
+    async def main():
+        print("=" * 60)
+        print("Test 1: Simple linear graph (A -> B -> C)")
+        print("=" * 60)
+
+        with GraphNode(name="linear_graph") as graph:
+            node_a = CodeNode(
+                name="node_a",
+                code_fn=lambda x: {"result": x + 10},
+                inputs={"x": INPUT["x"]}
+            )
+
+            node_b = CodeNode(
+                name="node_b",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": node_a["result"]}
+            )
+
+            node_c = CodeNode(
+                name="node_c",
+                code_fn=lambda x: {"result": x - 5},
+                inputs={"x": node_b["result"]},
+                outputs=OUTPUT  # graph output = node output
+            )
+
+            START >> node_a >> node_b >> node_c >> END
+
+        graph.build()
+        graph.show()
+
+        # Create schema from graph (simple!)
+        schema = StateSchema(graph)
+        schema.show()
+
+        # Create state and run
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+        print(f"\nInput: x=5")
+        print(f"Expected: ((5 + 10) * 2) - 5 = 25")
+        print(f"Result: {result}")
+
+        print("\n" + "=" * 60)
+        print("Test 2: Parallel graph (A -> [B, C] -> D)")
+        print("=" * 60)
+
+        with GraphNode(name="parallel_graph") as graph2:
+            node_a = CodeNode(
+                name="start_node",
+                code_fn=lambda x: {"value": x},
+                inputs={"x": INPUT["x"]}
+            )
+
+            node_b = CodeNode(
+                name="branch_1",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": node_a["value"]}
+            )
+
+            node_c = CodeNode(
+                name="branch_2",
+                code_fn=lambda x: {"result": x * 3},
+                inputs={"x": node_a["value"]}
+            )
+
+            node_d = CodeNode(
+                name="merge_node",
+                code_fn=lambda a, b: {"final": a + b},
+                inputs={"a": node_b["result"], "b": node_c["result"]},
+                outputs=OUTPUT  # graph output = node output
+            )
+
+            START >> node_a >> [node_b, node_c] >> node_d >> END
+
+        graph2.build()
+        graph2.show()
+
+        schema2 = StateSchema(graph2)
+        schema2.show()
+
+        state2 = schema2.create_state(inputs={"x": 10})
+        
+        result2 = await graph2.run(state2)
+        print(f"\nInput: x=10")
+        print(f"Expected: (10*2) + (10*3) = 50")
+        print(f"Result: {result2}")
+
+        print("\n" + "=" * 60)
+        print("All tests passed!")
+        print("=" * 60)
+
+    asyncio.run(main())

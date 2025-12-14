@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 from hush.core.nodes.base import BaseNode
 from hush.core.configs.node_config import NodeType
-from hush.core.schema import ParamSet
+from hush.core.utils.common import Param
 
 
 ParserType = Literal["json", "xml", "yaml", "regex", "key_value"]
@@ -40,12 +40,10 @@ class ExtractField:
 
 def parse_json(text: str) -> Dict[str, Any]:
     """Parse JSON text."""
-    # Clean markdown code blocks
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-
     return json.loads(text)
 
 
@@ -66,7 +64,6 @@ def parse_xml(text: str) -> Dict[str, Any]:
                     result[child.tag] = child_dict
         return result
 
-    # Clean markdown code blocks
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -77,21 +74,20 @@ def parse_xml(text: str) -> Dict[str, Any]:
 
 
 def parse_yaml(text: str) -> Dict[str, Any]:
-    """Parse YAML text (basic implementation)."""
+    """Parse YAML text."""
     try:
         import yaml
-        # Clean markdown code blocks
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
         return yaml.safe_load(text)
     except ImportError:
-        raise ImportError("pyyaml is required for YAML parsing. Install with: pip install pyyaml")
+        raise ImportError("pyyaml is required for YAML parsing")
 
 
 class ParserNode(BaseNode):
-    """Node for parsing text into structured data using various parsers."""
+    """Node for parsing text into structured data."""
 
     type: NodeType = "parser"
 
@@ -105,12 +101,6 @@ class ParserNode(BaseNode):
         'extract_fields'
     ]
 
-    input_schema: ParamSet = (
-        ParamSet.new()
-            .var("text: str", required=True)
-            .build()
-    )
-
     def __init__(
         self,
         format: Optional[ParserType] = None,
@@ -120,43 +110,33 @@ class ParserNode(BaseNode):
         pattern: Optional[str] = None,
         **kwargs
     ):
-        """Initialize ParserNode.
+        if not extract_schema:
+            raise TypeError("extract_schema is required")
 
-        Args:
-            format: Parser format type (json, xml, yaml, regex, key_value)
-            extract_schema: List of output variable definitions
-            separator: Separator for KEY_VALUE parser
-            template: Template for STRUCTURED parser
-            pattern: Pattern for REGEX parser
-            **kwargs: Additional keyword arguments for NodeConfig
-        """
+        # Parse schema into structured format
+        extract_fields = [
+            ExtractField.from_string(schema_str)
+            for schema_str in extract_schema
+        ]
 
-        super().__init__(**kwargs)
+        # Build schemas
+        input_schema = {"text": Param(type=str, required=True)}
+        output_schema = {field.output_key: Param(type=Any) for field in extract_fields}
+
+        super().__init__(
+            input_schema=input_schema,
+            output_schema=output_schema,
+            **kwargs
+        )
 
         self.format = format or "xml"
         self.separator = separator
         self.template = template
         self.pattern = pattern
         self.extract_schema = extract_schema
+        self.extract_fields = extract_fields
 
-        if not self.extract_schema:
-            raise TypeError(f"{self.name}'s extract_schema has not been provided")
-
-        # Parse schema into structured format
-        self.extract_fields = [
-            ExtractField.from_string(schema_str)
-            for schema_str in self.extract_schema
-        ]
-
-        # Build output schema from extract_fields
-        output_schema = ParamSet.new()
-        for field in self.extract_fields:
-            output_schema = output_schema.var(f"{field.output_key}: {field.type_hint}")
-        self.output_schema = output_schema.build()
-
-        # Set up parser backend
         self.backend = self._create_parser()
-
         self.core = self._process
 
     def _create_parser(self):
@@ -173,9 +153,7 @@ class ParserNode(BaseNode):
 
             def regex_parser(text: str) -> Dict[str, Any]:
                 match = re.search(self.pattern, text)
-                if match:
-                    return match.groupdict()
-                return {}
+                return match.groupdict() if match else {}
 
             return regex_parser
         elif self.format == "key_value":
@@ -204,27 +182,142 @@ class ParserNode(BaseNode):
         return current
 
     async def _process(self, text: str) -> Dict[str, Any]:
-        """Parse text and return structured data according to extract_fields."""
-
+        """Parse text and extract fields."""
         if not text:
             return {}
 
-        # Parse the text using the backend parser
         parsed_data = self.backend(text)
 
-        # Extract values according to extract_fields
         result = {}
         for field in self.extract_fields:
-            extracted_value = self._extract_value_by_path(parsed_data, field.chain_path)
-            result[field.output_key] = extracted_value
+            result[field.output_key] = self._extract_value_by_path(parsed_data, field.chain_path)
 
         return result
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata dictionary."""
+        """Return subclass-specific metadata."""
         return {
             "format": self.format,
             "separator": self.separator,
             "template": self.template,
             "pattern": self.pattern
         }
+
+
+if __name__ == "__main__":
+    import asyncio
+    from hush.core.states import StateSchema
+
+    async def main():
+        schema = StateSchema("test")
+        state = schema.create_state()
+
+        # Test 1: JSON parser
+        print("=" * 50)
+        print("Test 1: JSON Parser")
+        print("=" * 50)
+
+        json_parser = ParserNode(
+            name="json_parser",
+            format="json",
+            extract_schema=[
+                "user.name",
+                "user.age",
+                "status",
+            ],
+            inputs={"text": '{"user": {"name": "John", "age": 30}, "status": "active"}'}
+        )
+
+        print(f"Input schema: {json_parser.input_schema}")
+        print(f"Output schema: {json_parser.output_schema}")
+
+        result = await json_parser.run(state)
+        print(f"Result: {result}")
+
+        # Test 2: XML parser
+        print("\n" + "=" * 50)
+        print("Test 2: XML Parser")
+        print("=" * 50)
+
+        xml_text = """
+        <response>
+            <user>
+                <name>Alice</name>
+                <email>alice@example.com</email>
+            </user>
+            <code>200</code>
+        </response>
+        """
+
+        xml_parser = ParserNode(
+            name="xml_parser",
+            format="xml",
+            extract_schema=[
+                "response.user.name",
+                "response.user.email",
+                "response.code",
+            ],
+            inputs={"text": xml_text}
+        )
+
+        result2 = await xml_parser.run(state)
+        print(f"Result: {result2}")
+
+        # Test 3: Key-Value parser
+        print("\n" + "=" * 50)
+        print("Test 3: Key-Value Parser")
+        print("=" * 50)
+
+        kv_text = """
+        name=Bob
+        age=25
+        city=New York
+        """
+
+        kv_parser = ParserNode(
+            name="kv_parser",
+            format="key_value",
+            separator="=",
+            extract_schema=["name", "age", "city"],
+            inputs={"text": kv_text}
+        )
+
+        result3 = await kv_parser.run(state)
+        print(f"Result: {result3}")
+
+        # Test 4: Regex parser
+        print("\n" + "=" * 50)
+        print("Test 4: Regex Parser")
+        print("=" * 50)
+
+        regex_text = "User: john_doe, Email: john@example.com, Score: 95"
+
+        regex_parser = ParserNode(
+            name="regex_parser",
+            format="regex",
+            pattern=r"User: (?P<username>\w+), Email: (?P<email>[\w@.]+), Score: (?P<score>\d+)",
+            extract_schema=["username", "email", "score"],
+            inputs={"text": regex_text}
+        )
+
+        result4 = await regex_parser.run(state)
+        print(f"Result: {result4}")
+
+        # Test 5: Quick test using __call__
+        print("\n" + "=" * 50)
+        print("Test 5: Quick test using __call__")
+        print("=" * 50)
+
+        quick_parser = ParserNode(
+            name="quick_json",
+            format="json",
+            extract_schema=["name", "age"]
+        )
+        result5 = quick_parser(text='{"name": "Bob", "age": 25}')
+        print(f"quick_parser(text=...) = {result5}")
+
+        print("\n" + "=" * 50)
+        print("All tests passed!")
+        print("=" * 50)
+
+    asyncio.run(main())

@@ -12,12 +12,12 @@ class YamlModel(BaseModel):
 
     @classmethod
     def read_yaml(
-        cls,
-        file_path: Path,
+        cls, 
+        file_path: Path, 
         encoding: str = "utf-8"
     ) -> Dict:
         """Read yaml file and return a dict
-
+        
         Raises:
             FileNotFoundError: If the yaml file does not exist
             yaml.YAMLError: If the yaml file is malformed
@@ -25,7 +25,7 @@ class YamlModel(BaseModel):
         """
         if not file_path.exists():
             raise FileNotFoundError(f"YAML file not found: {file_path}")
-
+        
         try:
             with open(file_path, "r", encoding=encoding) as file:
                 content = yaml.safe_load(file)
@@ -37,17 +37,17 @@ class YamlModel(BaseModel):
 
     @classmethod
     def from_yaml_file(
-        cls,
+        cls, 
         file_path: Path
     ) -> "YamlModel":
         """Read yaml file and return a YamlModel instance
-
+        
         Raises:
             FileNotFoundError: If the yaml file does not exist
             yaml.YAMLError: If the yaml file is malformed
             IOError: If there's an error reading the file
             ValidationError: If the yaml content doesn't match the model schema
-        """
+        """        
         yaml_data = cls.read_yaml(file_path)
         try:
             return cls(**yaml_data)
@@ -55,12 +55,12 @@ class YamlModel(BaseModel):
             raise ValueError(f"Error creating {cls.__name__} from {file_path}: {e}")
 
     def to_yaml_file(
-        self,
-        file_path: Path,
+        self, 
+        file_path: Path, 
         encoding: str = "utf-8"
     ) -> None:
         """Dump YamlModel instance to yaml file
-
+        
         Raises:
             IOError: If there's an error writing to the file
             yaml.YAMLError: If there's an error serializing to YAML
@@ -68,7 +68,7 @@ class YamlModel(BaseModel):
         try:
             # Create parent directories if they don't exist
             file_path.parent.mkdir(parents=True, exist_ok=True)
-
+            
             with open(file_path, "w", encoding=encoding) as file:
                 yaml.dump(self.model_dump(), file, default_flow_style=False)
         except IOError as e:
@@ -78,10 +78,10 @@ class YamlModel(BaseModel):
 
     def to_yaml_string(self) -> str:
         """Export YamlModel instance to a YAML string
-
+        
         Returns:
             str: The YAML representation of the model
-
+            
         Raises:
             yaml.YAMLError: If there's an error serializing to YAML
         """

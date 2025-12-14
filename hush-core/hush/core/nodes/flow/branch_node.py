@@ -3,25 +3,16 @@
 from typing import Dict, Any, Optional, List
 
 from hush.core.configs.node_config import NodeType
-from hush.core.states.workflow_state import WorkflowState
+from hush.core.states import BaseState
 from hush.core.nodes.base import BaseNode
-from hush.core.schema import ParamSet
-from hush.core.utils.common import extract_condition_variables
+from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
-
 
 
 class BranchNode(BaseNode):
     """A node that evaluates conditions and routes flow to different target nodes."""
 
     type: NodeType = "branch"
-
-    output_schema: ParamSet = (
-        ParamSet.new()
-            .var("target: str", required=True)
-            .var("matched: str")
-            .build()
-    )
 
     __slots__ = [
         'given_candidates',
@@ -37,16 +28,14 @@ class BranchNode(BaseNode):
         default: Optional[str] = None,
         **kwargs
     ):
-        """Initialize BranchNode.
+        # Build schemas before super().__init__
+        input_schema, output_schema = self._build_schemas(cases or {})
 
-        Args:
-            cases: Dictionary mapping conditions to target node names
-            candidates: Optional explicit list of candidate targets
-            default: Default target node if no conditions match
-            **kwargs: Additional keyword arguments for BaseNode
-        """
-
-        super().__init__(**kwargs)
+        super().__init__(
+            input_schema=input_schema,
+            output_schema=output_schema,
+            **kwargs
+        )
 
         self.cases = cases or {}
 
@@ -57,21 +46,26 @@ class BranchNode(BaseNode):
         self.default = default.name if hasattr(default, 'is_base_node') else default
         self.given_candidates = candidates
 
-        self._build_schema()
-
         self.conditions = self._compile_conditions()
-
         self.core = self._create_core_function()
 
-    def _build_schema(self):
-        input_schema = ParamSet.new().var("anchor: str = None")
+    def _build_schemas(self, cases: Dict[str, str]) -> tuple:
+        """Build input/output schemas."""
+        # Input schema: anchor + condition variables
+        input_schema = {"anchor": Param(type=str, default=None)}
 
-        for condition in self.cases:
+        for condition in cases:
             vars = extract_condition_variables(condition)
             for k, v in vars.items():
-                input_schema = input_schema.var(f"{k}: {v}", required=True)
+                input_schema[k] = Param(type=Any, required=True)
 
-        self.input_schema = input_schema.build()
+        # Output schema
+        output_schema = {
+            "target": Param(type=str, required=True),
+            "matched": Param(type=str)
+        }
+
+        return input_schema, output_schema
 
     @property
     def candidates(self) -> List[str]:
@@ -134,7 +128,7 @@ class BranchNode(BaseNode):
 
     def get_target(
         self,
-        state: WorkflowState,
+        state: BaseState,
         context_id: Optional[str] = None
     ) -> Optional[str]:
         return state[self.full_name, "target", context_id]
