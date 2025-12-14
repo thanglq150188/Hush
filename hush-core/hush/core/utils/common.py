@@ -1,8 +1,26 @@
 """Common utility functions for hush-core."""
 
+import asyncio
 import re
 import uuid
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Type
+
+
+@dataclass
+class Param:
+    """Parameter definition for node inputs/outputs.
+
+    Example:
+        input_schema = {
+            "query": Param(str, required=True, description="Search query"),
+            "limit": Param(int, default=10, description="Max results"),
+        }
+    """
+    type: Type = str
+    required: bool = False
+    default: Any = None
+    description: str = ""
 
 
 def unique_name() -> str:
@@ -57,3 +75,36 @@ def fake_chunk_from(content: str, model: str = "default") -> Dict[str, Any]:
         }],
         "model": model
     }
+
+
+def ensure_async(func: Callable) -> Callable:
+    """Ensure a function is async-compatible.
+
+    If the function is already async, return it as-is.
+    If it's synchronous, wrap it to run in a thread pool executor.
+
+    Args:
+        func: The function to make async-compatible
+
+    Returns:
+        An async function that can be awaited
+
+    Example:
+        def sync_func(x):
+            return x * 2
+
+        async def async_func(x):
+            return x * 2
+
+        # Both can now be awaited:
+        func = ensure_async(sync_func)
+        result = await func(10)
+    """
+    if asyncio.iscoroutinefunction(func):
+        return func
+
+    async def async_wrapper(*args, **kwargs):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+    return async_wrapper

@@ -1,6 +1,7 @@
-from .streamer_factory import create_streaming_service
+from .base import BaseStreamingService
+from .memory import InMemoryStreamService
 
-# Default streaming service instance (in-memory)
-STREAM_SERVICE = create_streaming_service(backend="memory")
+# Default instance
+STREAM_SERVICE = InMemoryStreamService()
 
-__all__ = ["create_streaming_service", "STREAM_SERVICE"]
+__all__ = ["BaseStreamingService", "InMemoryStreamService", "STREAM_SERVICE"]

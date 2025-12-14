@@ -3,7 +3,7 @@ import time
 from typing import AsyncGenerator, Dict, Set, Optional, Any
 from collections import defaultdict
 from hush.core.loggings import LOGGER
-from .base_streamer import BaseStreamingService
+from .base import BaseStreamingService
 
 
 class InMemoryStreamService(BaseStreamingService):

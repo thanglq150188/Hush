@@ -1,28 +1,31 @@
-"""Centralized resource registry with plugin-based extensibility."""
+"""Centralized resource registry with lazy loading and pluggable storage."""
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, ClassVar, Any, List, Type
+from typing import Any, ClassVar, Dict, List, Optional
 
-from .plugin import ResourcePlugin, ResourceConfig
-from .storage import ConfigStorage, FileConfigStorage, InMemoryConfigStorage
+from hush.core.utils.yaml_model import YamlModel
+
+from .storage import ConfigStorage, YamlConfigStorage
+from .resource_factory import ResourceFactory, get_config_class
+
+logger = logging.getLogger(__name__)
 
 
-# Global hub instance - will be lazily initialized
+# Global hub instance - lazily initialized
 _GLOBAL_HUB: Optional['ResourceHub'] = None
 
 
 def _get_global_hub() -> Optional['ResourceHub']:
     """Get or create the global ResourceHub instance.
 
-    This function implements lazy initialization of the global hub.
-    It tries to load configuration from:
+    Tries to load configuration from:
     1. HUSH_CONFIG environment variable
     2. ./resources.yaml (current directory)
     3. ~/.hush/resources.yaml (user home)
-    4. Falls back to in-memory storage
 
     Returns:
         The global ResourceHub instance, or None if initialization fails
@@ -31,7 +34,6 @@ def _get_global_hub() -> Optional['ResourceHub']:
 
     if _GLOBAL_HUB is None:
         try:
-            # Try to find config file
             config_path = None
 
             # 1. Check environment variable
@@ -47,15 +49,18 @@ def _get_global_hub() -> Optional['ResourceHub']:
             elif (Path.home() / '.hush' / 'resources.yaml').exists():
                 config_path = Path.home() / '.hush' / 'resources.yaml'
 
-            # Create hub from file or in-memory
+            # Create hub
             if config_path:
                 _GLOBAL_HUB = ResourceHub.from_yaml(config_path)
             else:
-                _GLOBAL_HUB = ResourceHub.from_memory()
+                # No config file found, create with default path
+                _GLOBAL_HUB = ResourceHub.from_yaml(
+                    Path.home() / '.hush' / 'resources.yaml'
+                )
 
-        except Exception:
-            # If anything fails, create in-memory hub
-            _GLOBAL_HUB = ResourceHub.from_memory()
+        except Exception as e:
+            logger.error(f"Failed to initialize global hub: {e}")
+            return None
 
     return _GLOBAL_HUB
 
@@ -67,6 +72,9 @@ def get_hub() -> 'ResourceHub':
 
     Returns:
         The global ResourceHub instance
+
+    Raises:
+        RuntimeError: If hub initialization fails
 
     Example:
         from hush.core.registry import get_hub
@@ -83,7 +91,7 @@ def get_hub() -> 'ResourceHub':
 def set_global_hub(hub: 'ResourceHub'):
     """Set a custom global ResourceHub instance.
 
-    Use this to override the default global hub with a custom one.
+    Use this to override the default global hub.
 
     Args:
         hub: ResourceHub instance to use as global
@@ -99,27 +107,22 @@ def set_global_hub(hub: 'ResourceHub'):
 
 
 class ResourceHub:
-    """Centralized registry for managing application resources with plugin architecture.
+    """Centralized registry for managing application resources.
 
-    The ResourceHub provides:
-    - Unified access to various resources (LLMs, databases, caches, etc.)
-    - Plugin-based extensibility for different resource types
-    - Multiple storage backends (file, memory, or custom)
-    - Singleton pattern support
+    Features:
+    - Lazy loading: resources are instantiated on first access
+    - Pluggable storage: YAML, JSON, or custom backends
+    - Extensible: external packages register their configs and factories
 
     Example:
         # Basic usage
         hub = ResourceHub.from_yaml("configs/resources.yaml")
-        llm = hub.get("llm:gpt-4")
-
-        # Register plugins from other packages
-        from hush.providers import LLMPlugin, EmbeddingPlugin
-        hub.register_plugin(LLMPlugin)
-        hub.register_plugin(EmbeddingPlugin)
-
-        # Access with type-specific methods
         llm = hub.llm("gpt-4")
-        embedding = hub.embedding("bge-m3")
+        redis = hub.redis("default")
+
+        # Or use global hub
+        from hush.core.registry import RESOURCE_HUB
+        llm = RESOURCE_HUB.llm("gpt-4")
     """
 
     _instance: ClassVar[Optional['ResourceHub']] = None
@@ -132,12 +135,7 @@ class ResourceHub:
         """
         self._storage = storage
         self._instances: Dict[str, Any] = {}
-        self._configs: Dict[str, ResourceConfig] = {}
-        self._plugins: Dict[str, Type[ResourcePlugin]] = {}
-        self._class_to_plugin: Dict[str, Type[ResourcePlugin]] = {}
-
-        # Load existing configs
-        self._load_all_configs()
+        self._configs: Dict[str, YamlModel] = {}
 
     # ========================================================================
     # Factory Methods
@@ -151,9 +149,9 @@ class ResourceHub:
             path: Path to YAML configuration file
 
         Returns:
-            ResourceHub instance with YAML storage
+            ResourceHub instance
         """
-        storage = FileConfigStorage(Path(path), format='yaml')
+        storage = YamlConfigStorage(Path(path))
         return cls(storage)
 
     @classmethod
@@ -164,26 +162,15 @@ class ResourceHub:
             path: Path to JSON configuration file
 
         Returns:
-            ResourceHub instance with JSON storage
+            ResourceHub instance
         """
-        storage = FileConfigStorage(Path(path), format='json')
-        return cls(storage)
-
-    @classmethod
-    def from_memory(cls) -> 'ResourceHub':
-        """Create hub with in-memory storage (for testing).
-
-        Returns:
-            ResourceHub instance with in-memory storage
-        """
-        storage = InMemoryConfigStorage()
+        from .storage import JsonConfigStorage
+        storage = JsonConfigStorage(Path(path))
         return cls(storage)
 
     @classmethod
     def instance(cls) -> 'ResourceHub':
         """Get the singleton instance.
-
-        Note: You must call set_instance() first to configure the singleton.
 
         Returns:
             The global ResourceHub singleton
@@ -208,118 +195,88 @@ class ResourceHub:
         cls._instance = hub
 
     # ========================================================================
-    # Plugin Management
+    # Config Loading (Lazy)
     # ========================================================================
 
-    def register_plugin(self, plugin: Type[ResourcePlugin]):
-        """Register a resource plugin.
+    def _load_config(self, key: str) -> Optional[YamlModel]:
+        """Load a single config from storage (lazy, on-demand)."""
+        if key in self._configs:
+            return self._configs[key]
 
-        Args:
-            plugin: Plugin class to register
+        config_data = self._storage.load_one(key)
+        if not config_data:
+            return None
 
-        Example:
-            from hush.providers import LLMPlugin
-            hub.register_plugin(LLMPlugin)
-        """
-        resource_type = plugin.resource_type()
-        config_class = plugin.config_class()
+        config_class_name = config_data.get('_class')
+        if not config_class_name:
+            logger.warning(f"Missing '_class' field for key: {key}")
+            return None
 
-        self._plugins[resource_type] = plugin
+        config_class = get_config_class(config_class_name)
+        if not config_class:
+            logger.warning(f"Unknown config class: {config_class_name}")
+            return None
 
-        # Register the config class and all its subclasses
-        # This allows plugins to handle config hierarchies (e.g., OpenAIConfig extends LLMConfig)
-        def register_config_class(cls):
-            self._class_to_plugin[cls.__name__] = plugin
-            # Recursively register subclasses
-            for subclass in cls.__subclasses__():
-                register_config_class(subclass)
+        try:
+            # Parse config (remove _class field)
+            data = {k: v for k, v in config_data.items() if k != '_class'}
+            config = config_class.model_validate(data)
+            self._configs[key] = config
+            return config
+        except Exception as e:
+            logger.error(f"Failed to parse config '{key}': {e}")
+            return None
 
-        register_config_class(config_class)
+    def _hash_of(self, config: YamlModel) -> str:
+        """Generate MD5 hash of config for unique identification."""
+        return hashlib.md5(config.model_dump_json().encode()).hexdigest()[:8]
 
-        # Reload configs to instantiate resources for this plugin
-        self._load_all_configs()
+    def _key_of(self, config: YamlModel) -> str:
+        """Generate registry key from config type and model/hash."""
+        type_name = type(config).__name__.replace('Config', '').lower()
 
-    def register_plugins(self, *plugins: Type[ResourcePlugin]):
-        """Register multiple plugins at once.
+        # Model-based resources use model name
+        if hasattr(config, 'model') and config.model:
+            return f"{type_name}:{config.model}"
 
-        Args:
-            *plugins: Plugin classes to register
+        # Name-based resources
+        if hasattr(config, 'name') and config.name:
+            return f"{type_name}:{config.name}"
 
-        Example:
-            from hush.providers import LLMPlugin, EmbeddingPlugin, RerankPlugin
-            hub.register_plugins(LLMPlugin, EmbeddingPlugin, RerankPlugin)
-        """
-        for plugin in plugins:
-            self.register_plugin(plugin)
-
-    def has_plugin(self, resource_type: str) -> bool:
-        """Check if a plugin is registered for a resource type.
-
-        Args:
-            resource_type: Resource type identifier
-
-        Returns:
-            True if plugin is registered
-        """
-        return resource_type in self._plugins
+        # Fall back to hash
+        return f"{type_name}:{self._hash_of(config)}"
 
     # ========================================================================
-    # Config & Instance Management
+    # Public API
     # ========================================================================
-
-    def _load_all_configs(self):
-        """Load configurations from storage and instantiate resources."""
-        raw_configs = self._storage.load_all()
-
-        for key, config_dict in raw_configs.items():
-            if not isinstance(config_dict, dict):
-                continue
-
-            config_class_name = config_dict.get('_class')
-            if not config_class_name:
-                continue
-
-            # Check if we have a plugin for this config type
-            plugin = self._class_to_plugin.get(config_class_name)
-            if not plugin:
-                # No plugin registered yet, skip for now
-                continue
-
-            try:
-                # Parse config (remove _class field)
-                config_data = {k: v for k, v in config_dict.items() if k != '_class'}
-                config_class = plugin.config_class()
-                config = config_class.model_validate(config_data)
-
-                # Store config and create instance
-                self._configs[key] = config
-                self._instances[key] = plugin.create(config)
-
-            except Exception as e:
-                # Log error but continue loading other configs
-                print(f"Warning: Failed to load config '{key}': {e}")
 
     def keys(self) -> List[str]:
-        """Return all registered resource keys.
+        """Return all registered resource keys (loads all configs from storage)."""
+        all_configs = self._storage.load_all()
 
-        Returns:
-            List of registry keys
-        """
-        return list(self._instances.keys())
+        for key, config_data in all_configs.items():
+            if key not in self._configs:
+                config_class_name = config_data.get('_class')
+                if config_class_name:
+                    config_class = get_config_class(config_class_name)
+                    if config_class:
+                        try:
+                            data = {k: v for k, v in config_data.items() if k != '_class'}
+                            self._configs[key] = config_class.model_validate(data)
+                        except Exception as e:
+                            logger.error(f"Failed to parse config '{key}': {e}")
+
+        return list(self._configs.keys())
 
     def has(self, key: str) -> bool:
-        """Check if resource exists in registry.
-
-        Args:
-            key: Registry key
-
-        Returns:
-            True if resource exists
-        """
-        return key in self._instances
+        """Check if resource exists in registry."""
+        if key in self._configs:
+            return True
+        # Try to load from storage
+        return self._load_config(key) is not None
 
     def get(self, key: str) -> Any:
-        """Retrieve resource instance by key.
+        """Retrieve resource instance by key (lazy loads on first access).
 
         Args:
             key: Registry key for the resource
@@ -330,11 +287,26 @@ class ResourceHub:
         Raises:
             KeyError: If key not found
         """
-        if key not in self._instances:
+        # Return cached instance if exists
+        if key in self._instances:
+            return self._instances[key]
+
+        # Load config from storage
+        config = self._load_config(key)
+        if not config:
             raise KeyError(f"Resource '{key}' not found in registry")
+
+        # Lazy instantiate the resource
+        instance = ResourceFactory.create(config)
+        if instance is None:
+            raise RuntimeError(f"Failed to create resource for '{key}'")
+
+        self._instances[key] = instance
+        logger.info(f"Lazy loaded resource: {key}")
+
         return self._instances[key]
 
-    def get_config(self, key: str) -> ResourceConfig:
+    def get_config(self, key: str) -> YamlModel:
         """Get the config object for a resource.
 
         Args:
@@ -346,89 +318,71 @@ class ResourceHub:
         Raises:
             KeyError: If key not found
         """
-        if key not in self._configs:
+        config = self._load_config(key)
+        if not config:
             raise KeyError(f"Config '{key}' not found in registry")
-        return self._configs[key]
+        return config
 
     def register(
         self,
-        config: ResourceConfig,
-        registry_key: Optional[str] = None,
-        persist: bool = True
+        config: YamlModel,
+        registry_key: Optional[str] = None
     ) -> str:
         """Register a new resource configuration.
 
         Args:
             config: Resource configuration object
             registry_key: Optional custom key (auto-generated if not provided)
-            persist: Whether to save to storage backend
 
         Returns:
             The registry key used
-
-        Raises:
-            ValueError: If no plugin registered for this config type
         """
-        config_class_name = type(config).__name__
-
-        # Find plugin for this config
-        plugin = self._class_to_plugin.get(config_class_name)
-        if not plugin:
-            raise ValueError(
-                f"No plugin registered for config type: {config_class_name}. "
-                f"Register a plugin using hub.register_plugin(YourPlugin)"
-            )
-
-        # Generate key if not provided
         if not registry_key:
-            registry_key = plugin.generate_key(config)
+            registry_key = self._key_of(config)
 
         # Store config and create instance
         self._configs[registry_key] = config
-        self._instances[registry_key] = plugin.create(config)
+        self._instances[registry_key] = ResourceFactory.create(config)
 
         # Persist to storage
-        if persist:
-            config_dict = json.loads(config.model_dump_json(exclude_none=True))
-            config_dict['_class'] = config_class_name
-            self._storage.save(registry_key, config_dict)
+        config_dict = json.loads(config.model_dump_json(exclude_none=True))
+        config_dict['_class'] = type(config).__name__
+        self._storage.save(registry_key, config_dict)
 
+        logger.info(f"Registered: {registry_key}")
         return registry_key
 
-    def remove(self, key: str, persist: bool = True) -> bool:
+    def remove(self, key: str) -> bool:
         """Remove a resource from registry.
 
         Args:
             key: Registry key to remove
-            persist: Whether to remove from storage backend
 
         Returns:
             True if removed, False if not found
         """
-        if key not in self._instances:
-            return False
+        if key not in self._configs and key not in self._instances:
+            # Try loading first
+            if not self._load_config(key):
+                return False
 
-        del self._instances[key]
-        del self._configs[key]
+        if key in self._instances:
+            del self._instances[key]
+        if key in self._configs:
+            del self._configs[key]
 
-        if persist:
-            self._storage.remove(key)
-
+        self._storage.remove(key)
+        logger.info(f"Removed: {key}")
         return True
 
-    def clear(self, persist: bool = True):
-        """Remove all resources from registry.
-
-        Args:
-            persist: Whether to clear storage backend as well
-        """
-        keys = list(self._instances.keys())
+    def clear(self):
+        """Remove all resources from registry and storage."""
+        keys = list(self._configs.keys())
         self._instances.clear()
         self._configs.clear()
-
-        if persist:
-            for key in keys:
-                self._storage.remove(key)
+        for key in keys:
+            self._storage.remove(key)
+        logger.info("Cleared all resources")
 
     def close(self):
         """Close storage connections and cleanup."""
@@ -436,7 +390,7 @@ class ResourceHub:
             self._storage.close()
 
     # ========================================================================
-    # Convenience Methods (Can be extended by subclasses or composition)
+    # Type-specific Accessors
     # ========================================================================
 
     def _get_with_prefix(self, key: str, prefix: str) -> Any:
@@ -448,17 +402,18 @@ class ResourceHub:
     def llm(self, key: str) -> Any:
         """Get LLM instance by key.
 
-        Automatically adds 'llm:' prefix if not present.
+        Automatically handles provider prefixes (azure:, openai:, gemini:).
 
         Args:
-            key: LLM identifier (e.g., 'gpt-4' or 'llm:gpt-4')
+            key: LLM identifier (e.g., 'gpt-4', 'azure:gpt-4', 'llm:gpt-4')
 
         Returns:
             LLM instance
         """
-        # Handle provider prefixes (azure:, openai:, gemini:)
-        if ':' in key and not key.startswith('llm:'):
-            key = f"llm:{key}"
+        # Handle provider prefixes
+        for prefix in ['azure:', 'openai:', 'gemini:']:
+            if key.startswith(prefix):
+                return self._get_with_prefix(key, 'llm')
         return self._get_with_prefix(key, 'llm')
 
     def embedding(self, key: str) -> Any:
@@ -474,7 +429,7 @@ class ResourceHub:
         return self._get_with_prefix(key, 'redis')
 
     def mongo(self, key: str) -> Any:
-        """Get MongoDB client by key."""
+        """Get async MongoDB client by key."""
         return self._get_with_prefix(key, 'mongo')
 
     def milvus(self, key: str) -> Any:
