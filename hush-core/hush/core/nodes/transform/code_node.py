@@ -83,13 +83,41 @@ def parse_comment(comment: str) -> tuple:
     return param_type, description
 
 
+def _extract_dict_keys(dict_node: ast.Dict, source_lines: List[str]) -> Dict[str, Param]:
+    """Extract keys from an AST Dict node."""
+    schema = {}
+    for key_node in dict_node.keys:
+        if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+            key_name = key_node.value
+
+            # Extract type and description from inline comment
+            param_type = Any
+            description = ""
+            for src_line in source_lines:
+                if "#" in src_line and f'"{key_name}"' in src_line:
+                    comment = src_line.split("#", 1)[1].strip()
+                    param_type, description = parse_comment(comment)
+                    break
+
+            schema[key_name] = Param(
+                type=param_type,
+                description=description
+            )
+    return schema
+
+
 def extract_return_schema(func: Callable) -> Dict[str, Param]:
     """Extract return schema from function source code using AST.
 
     Supports:
+        # Regular functions
         return {"key": value}
         return {"key": value,  # description}
         return {"key": value,  # (type) description}
+
+        # Lambda functions
+        lambda x: {"key": value}
+        lambda x: {"key": value,  # (type) description}
     """
     try:
         source = inspect.getsource(func)
@@ -99,25 +127,16 @@ def extract_return_schema(func: Callable) -> Dict[str, Param]:
 
         schema = {}
         for node in ast.walk(tree):
+            # Handle regular function return statements
             if isinstance(node, ast.Return) and node.value:
                 if isinstance(node.value, ast.Dict):
-                    for key_node in node.value.keys:
-                        if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                            key_name = key_node.value
+                    schema.update(_extract_dict_keys(node.value, source_lines))
 
-                            # Extract type and description from inline comment
-                            param_type = Any
-                            description = ""
-                            for src_line in source_lines:
-                                if "#" in src_line and f'"{key_name}"' in src_line:
-                                    comment = src_line.split("#", 1)[1].strip()
-                                    param_type, description = parse_comment(comment)
-                                    break
+            # Handle lambda expressions (body is the return value)
+            elif isinstance(node, ast.Lambda):
+                if isinstance(node.body, ast.Dict):
+                    schema.update(_extract_dict_keys(node.body, source_lines))
 
-                            schema[key_name] = Param(
-                                type=param_type,
-                                description=description
-                            )
         return schema
     except Exception:
         return {}

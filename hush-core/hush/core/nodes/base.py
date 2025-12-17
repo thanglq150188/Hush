@@ -113,7 +113,7 @@ class BaseNode(ABC):
 
         def resolve_node(node):
             """Resolve INPUT/OUTPUT to father node."""
-            if hasattr(node, 'name') and node.name in ("__INPUT__", "__OUTPUT__"):
+            if node.name in ["__INPUT__", "__OUTPUT__"]:
                 return self.father if self.father else node
             return node
 
@@ -121,7 +121,8 @@ class BaseNode(ABC):
         if hasattr(connections, "name"):
             resolved = resolve_node(connections)
             if schema:
-                return {k: {resolved: k} for k in schema}
+                result = {k: {resolved: k} for k in schema}
+                return result
             return {}
 
         # Case: connections is a dict
@@ -149,7 +150,7 @@ class BaseNode(ABC):
                     else:
                         result[key] = value
             return result
-
+        
         return {}
 
     @property

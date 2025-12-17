@@ -28,7 +28,6 @@ from hush.core.nodes import (
     StreamNode,
     CodeNode,
     code_node,
-    LambdaNode,
     ParserNode,
     ParserType,
     START,
@@ -83,7 +82,6 @@ __all__ = [
     "StreamNode",
     "CodeNode",
     "code_node",
-    "LambdaNode",
     "ParserNode",
     "ParserType",
     # Markers
