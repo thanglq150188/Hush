@@ -80,12 +80,13 @@ class GraphNode(BaseNode):
             raise ValueError("Graph must have at least one exit node.")
 
     def _setup_schema(self):
-        """Initialize input/output schema."""
+        """Initialize input/output schema and inputs dictionary."""
         from hush.core.utils.common import Param
 
         LOGGER.info(f"Graph '{self.name}': Creating configs...")
         input_schema = {}
         output_schema = {"continue_loop": Param(type=bool, default=False)}
+        graph_inputs = {}
 
         for _, node in self._nodes.items():
             # Check inputs: if ref_key is self (father), it's a graph input
@@ -99,6 +100,8 @@ class GraphNode(BaseNode):
                                 f"{self.name}:{ref_var} <-- {node.name}.{var}"
                             )
                         input_schema[ref_var] = node.input_schema[var]
+                        # Build inputs dict for get_inputs() to work
+                        graph_inputs[ref_var] = {self: ref_var}
 
             # Check outputs: if ref_key is self (father), it's a graph output
             for var, ref in node.outputs.items():
@@ -114,6 +117,7 @@ class GraphNode(BaseNode):
 
         self.input_schema = input_schema
         self.output_schema = output_schema
+        self.inputs = graph_inputs
 
     def _build_flow_type(self):
         """Determine flow type of each node based on connection pattern."""
@@ -268,6 +272,10 @@ class GraphNode(BaseNode):
         _outputs = {}
 
         try:
+            # Reset continue_loop to False at start of each graph run
+            # It will be set to True only if CONTINUE is reached
+            state[self.full_name, "continue_loop", context_id] = False
+
             _inputs = self.get_inputs(state, context_id=context_id)
 
             if self.name != BaseNode.INNER_PROCESS:
@@ -305,8 +313,13 @@ class GraphNode(BaseNode):
                     node = self._nodes[node_name]
 
                     if node.type == "branch":
+                        from hush.core.nodes.base import CONTINUE
                         branch_target = node.get_target(state, context_id)
-                        if branch_target != END.name:
+                        if branch_target == CONTINUE.name:
+                            # Branch routed to CONTINUE - set continue_loop flag
+                            state[self.full_name, "continue_loop", context_id] = True
+                            next_nodes = []
+                        elif branch_target != END.name:
                             next_nodes = [branch_target]
                         else:
                             next_nodes = []

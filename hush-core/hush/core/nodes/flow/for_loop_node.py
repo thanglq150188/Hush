@@ -97,3 +97,115 @@ class ForLoopNode(BaseNode):
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
             return _outputs
+
+
+if __name__ == "__main__":
+    from hush.core.states import StateSchema
+    from hush.core.nodes.base import START, END
+    from hush.core.nodes.transform.code_node import code_node
+
+    async def main():
+        schema = StateSchema("test")
+        state = schema.create_state()
+
+        # Test 1: Basic for loop - double each number
+        print("=" * 50)
+        print("Test 1: Basic for loop - double each number")
+        print("=" * 50)
+
+        @code_node
+        def double(value: int):
+            return {"result": value * 2}
+
+        with ForLoopNode(
+            name="double_loop",
+            inputs={"batch_data": [{"value": 1}, {"value": 2}, {"value": 3}]}
+        ) as loop1:
+            node = double(inputs={"value": loop1._graph["value"]})
+            START >> node >> END
+
+        loop1.build()
+
+        print(f"Input schema: {loop1.input_schema}")
+        print(f"Output schema: {loop1.output_schema}")
+
+        result = await loop1.run(state)
+        print(f"Result: {result}")
+
+        # Test 2: Process strings
+        print("\n" + "=" * 50)
+        print("Test 2: Process strings - uppercase")
+        print("=" * 50)
+
+        @code_node
+        def uppercase(text: str):
+            return {"upper": text.upper()}
+
+        with ForLoopNode(
+            name="uppercase_loop",
+            inputs={"batch_data": [{"text": "hello"}, {"text": "world"}, {"text": "test"}]}
+        ) as loop2:
+            node = uppercase(inputs={"text": loop2._graph["text"]})
+            START >> node >> END
+
+        loop2.build()
+
+        result2 = await loop2.run(state)
+        print(f"Result: {result2}")
+
+        # Test 3: Multiple inputs per iteration
+        print("\n" + "=" * 50)
+        print("Test 3: Multiple inputs per iteration")
+        print("=" * 50)
+
+        @code_node
+        def add(a: int, b: int):
+            return {"sum": a + b}
+
+        with ForLoopNode(
+            name="add_loop",
+            inputs={"batch_data": [
+                {"a": 1, "b": 2},
+                {"a": 10, "b": 20},
+                {"a": 100, "b": 200}
+            ]}
+        ) as loop3:
+            node = add(inputs={"a": loop3._graph["a"], "b": loop3._graph["b"]})
+            START >> node >> END
+
+        loop3.build()
+
+        result3 = await loop3.run(state)
+        print(f"Result: {result3}")
+
+        # Test 4: Chain of nodes in loop
+        print("\n" + "=" * 50)
+        print("Test 4: Chain of nodes in loop")
+        print("=" * 50)
+
+        @code_node
+        def add_one(x: int):
+            return {"y": x + 1}
+
+        @code_node
+        def multiply_two(y: int):
+            return {"z": y * 2}
+
+        with ForLoopNode(
+            name="chain_loop",
+            inputs={"batch_data": [{"x": 1}, {"x": 2}, {"x": 3}]}
+        ) as loop4:
+            n1 = add_one(inputs={"x": loop4._graph["x"]})
+            n2 = multiply_two(inputs={"y": n1["y"]})
+            START >> n1 >> n2 >> END
+
+        loop4.build()
+
+        result4 = await loop4.run(state)
+        print(f"Result (x+1)*2: {result4}")
+
+        print("\n" + "=" * 50)
+        print("All tests passed!")
+        print("=" * 50)
+
+    asyncio.run(main())

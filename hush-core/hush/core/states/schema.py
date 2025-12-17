@@ -130,15 +130,16 @@ class StateSchema:
         return self.links.get((node, var), (node, var))
 
     def load_from(self, node) -> "StateSchema":
-        """Load input connections from a node and its children as links.
+        """Load input/output connections from a node and its children as links.
 
         Uses duck typing - works with any object that has:
         - full_name (str): The node's full hierarchical name
         - inputs (dict): Input connections {var: {source_node: source_var} or literal}
+        - outputs (dict): Output connections {var: {target_node: target_var} or literal}
         - _nodes (dict, optional): Child nodes for recursive loading
 
         Args:
-            node: Node-like object with full_name and inputs attributes
+            node: Node-like object with full_name, inputs, and outputs attributes
 
         Returns:
             Self for chaining
@@ -150,16 +151,30 @@ class StateSchema:
         node_name = node.full_name
 
         # Load this node's input connections as links
+        # inputs={"x": other_node["y"]} means: node.x -> other_node.y
         for var_name, ref in (node.inputs or {}).items():
             if isinstance(ref, dict) and ref:
                 ref_node, ref_var = next(iter(ref.items()))
                 if hasattr(ref_node, 'full_name'):
                     self.link(node_name, var_name, ref_node.full_name, ref_var)
 
+        # Load this node's output connections as links
+        # outputs={"result": father["result"]} means: father.result -> node.result
+        for var_name, ref in (node.outputs or {}).items():
+            if isinstance(ref, dict) and ref:
+                ref_node, ref_var = next(iter(ref.items()))
+                if hasattr(ref_node, 'full_name'):
+                    # Output connection: graph.var -> node.var
+                    self.link(ref_node.full_name, ref_var, node_name, var_name)
+
         # Recursively load children (for graph nodes)
         if hasattr(node, '_nodes') and node._nodes:
             for child in node._nodes.values():
                 self.load_from(child)
+
+        # Recursively load inner graph (for iteration nodes like ForLoopNode)
+        if hasattr(node, '_graph') and node._graph:
+            self.load_from(node._graph)
 
         return self
 

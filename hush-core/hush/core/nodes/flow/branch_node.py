@@ -1,12 +1,14 @@
 """Branch node for conditional routing in workflows."""
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
 from hush.core.configs.node_config import NodeType
-from hush.core.states import BaseState
 from hush.core.nodes.base import BaseNode
 from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
+
+if TYPE_CHECKING:
+    from hush.core.states import BaseState
 
 
 class BranchNode(BaseNode):
@@ -128,7 +130,7 @@ class BranchNode(BaseNode):
 
     def get_target(
         self,
-        state: BaseState,
+        state: 'BaseState',
         context_id: Optional[str] = None
     ) -> Optional[str]:
         return state[self.full_name, "target", context_id]
@@ -141,3 +143,119 @@ class BranchNode(BaseNode):
             "candidates": self.candidates,
             "num_conditions": len(self.conditions)
         }
+
+
+if __name__ == "__main__":
+    import asyncio
+    from hush.core.states import StateSchema
+
+    async def main():
+        schema = StateSchema("test")
+        state = schema.create_state()
+
+        # Test 1: Basic condition routing
+        print("=" * 50)
+        print("Test 1: Basic condition routing")
+        print("=" * 50)
+
+        branch = BranchNode(
+            name="router",
+            cases={
+                "score >= 90": "excellent",
+                "score >= 70": "good",
+                "score >= 50": "pass",
+            },
+            default="fail",
+            inputs={"score": 85}
+        )
+
+        print(f"Input schema: {branch.input_schema}")
+        print(f"Output schema: {branch.output_schema}")
+        print(f"Candidates: {branch.candidates}")
+
+        result = await branch.run(state)
+        print(f"Result (score=85): {result}")
+
+        # Test 2: Multiple variables
+        print("\n" + "=" * 50)
+        print("Test 2: Multiple variables")
+        print("=" * 50)
+
+        branch2 = BranchNode(
+            name="multi_router",
+            cases={
+                "age >= 18 and verified": "adult_verified",
+                "age >= 18": "adult_unverified",
+                "age >= 13": "teen",
+            },
+            default="child",
+            inputs={"age": 20, "verified": True}
+        )
+
+        print(f"Input schema: {branch2.input_schema}")
+        result2 = await branch2.run(state)
+        print(f"Result (age=20, verified=True): {result2}")
+
+        # Test 3: Anchor override
+        print("\n" + "=" * 50)
+        print("Test 3: Anchor override")
+        print("=" * 50)
+
+        branch3 = BranchNode(
+            name="anchor_router",
+            cases={
+                "status == 'active'": "process",
+            },
+            default="skip",
+            inputs={"status": "active", "anchor": "force_target"}
+        )
+
+        result3 = await branch3.run(state)
+        print(f"Result (with anchor='force_target'): {result3}")
+
+        # Test 4: Default fallback
+        print("\n" + "=" * 50)
+        print("Test 4: Default fallback")
+        print("=" * 50)
+
+        branch4 = BranchNode(
+            name="fallback_router",
+            cases={
+                "value > 100": "high",
+                "value > 50": "medium",
+            },
+            default="low",
+            inputs={"value": 10}
+        )
+
+        result4 = await branch4.run(state)
+        print(f"Result (value=10, no match): {result4}")
+
+        # Test 5: Quick test using __call__
+        print("\n" + "=" * 50)
+        print("Test 5: Quick test using __call__")
+        print("=" * 50)
+
+        branch5 = BranchNode(
+            name="quick_branch",
+            cases={
+                "x > 0": "positive",
+                "x < 0": "negative",
+            },
+            default="zero"
+        )
+
+        result5 = branch5(x=5)
+        print(f"branch5(x=5) = {result5}")
+
+        result6 = branch5(x=-3)
+        print(f"branch5(x=-3) = {result6}")
+
+        result7 = branch5(x=0)
+        print(f"branch5(x=0) = {result7}")
+
+        print("\n" + "=" * 50)
+        print("All tests passed!")
+        print("=" * 50)
+
+    asyncio.run(main())
