@@ -2,10 +2,12 @@
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
+import traceback
 
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.iteration.base import IterationNode
 from hush.core.utils.common import Param
+from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
     from hush.core.states import BaseState
@@ -14,8 +16,7 @@ if TYPE_CHECKING:
 class WhileLoopNode(IterationNode):
     """A node that iterates while a condition is true.
 
-    The loop continues while inner graph outputs `continue_loop=True`.
-    Use BranchNode to route to CONTINUE (to continue loop) or END (to exit).
+    The loop continues while `continue_loop=True`.
 
     Example:
         with WhileLoopNode(name="loop", inputs={"counter": 0}) as loop:
@@ -50,6 +51,8 @@ class WhileLoopNode(IterationNode):
         """Set input/output schema from inner graph after build."""
         self.input_schema = self._graph.input_schema.copy() if self._graph.input_schema else {}
         self.output_schema = self._graph.output_schema.copy() if self._graph.output_schema else {}
+        # self.output_schema["continue_loop"] = Param(type=bool, required=False, default=True)
+
 
         # Ensure inputs in self.inputs are in schema
         for key in self.inputs:
@@ -60,61 +63,96 @@ class WhileLoopNode(IterationNode):
         if "iteration_metrics" not in self.output_schema:
             self.output_schema["iteration_metrics"] = Param(type=Dict, required=False)
 
-    async def _execute_loop(
+    async def run(
         self,
         state: 'BaseState',
-        inputs: Dict[str, Any],
-        request_id: str,
-        context_id: Optional[str]
+        context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute the while loop until continue_loop is False."""
-        _continue = True
-        step_count = 0
-        step_inputs = inputs
+        parent_name = self.father.full_name if self.father else None
+        state.record_execution(self.full_name, parent_name, context_id)
+
+        request_id = state.request_id
+        start_time = datetime.now()
         _outputs = {}
 
-        # Track latencies for metrics
-        latencies_ms: List[float] = []
-        success_count = 0
-        error_count = 0
+        try:
+            _inputs = self.get_inputs(state, context_id)
 
-        while _continue and step_count < self._max_iterations:
-            step_name = f"while-{step_count}"
-            start_time = datetime.now()
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_inputs)[:200]
+                )
 
-            self.inject_inputs(state, step_inputs, step_name)
+            _continue = True
+            step_count = 0
+            step_inputs = _inputs
 
-            try:
-                _outputs = await self._graph.run(state, context_id=step_name)
-                success_count += 1
-            except Exception as e:
-                error_count += 1
-                raise e
-            finally:
-                end_time = datetime.now()
-                latency = (end_time - start_time).total_seconds() * 1000
-                latencies_ms.append(latency)
+            # Track latencies for metrics
+            latencies_ms: List[float] = []
+            success_count = 0
+            error_count = 0
 
-            # Get updated inputs for next iteration
-            step_inputs = self._graph.get_inputs(state, context_id=step_name)
-            step_count += 1
+            while _continue and step_count < self._max_iterations:
+                step_name = f"while-{step_count}"
+                iter_start_time = datetime.now()
 
-            # Check continue_loop from graph outputs (set by CONTINUE node)
-            _continue = _outputs.get("continue_loop", False)
+                self.inject_inputs(state, step_inputs, step_name)
 
-        # Calculate iteration metrics
-        iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
-        iteration_metrics.update({
-            "total_iterations": step_count,
-            "success_count": success_count,
-            "error_count": error_count,
-            "max_iterations_reached": step_count >= self._max_iterations,
-        })
+                try:
+                    _outputs = await self._graph.run(state, context_id=step_name)
+                    success_count += 1
+                except Exception as e:
+                    error_count += 1
+                    raise e
+                finally:
+                    iter_end_time = datetime.now()
+                    latency = (iter_end_time - iter_start_time).total_seconds() * 1000
+                    latencies_ms.append(latency)
 
-        # Add iteration_metrics to outputs
-        _outputs["iteration_metrics"] = iteration_metrics
+                # Get updated inputs for next iteration
+                step_inputs = self._graph.get_inputs(state, context_id=step_name)
+                step_count += 1
 
-        return _outputs
+                # Check continue_loop from graph outputs (set by CONTINUE node)
+                _continue = _outputs.get("continue_loop", True)
+                # if _continue is None:
+                #     _continue = True  # Default to True if not set
+
+            # Calculate iteration metrics
+            iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
+            iteration_metrics.update({
+                "total_iterations": step_count,
+                "success_count": success_count,
+                "error_count": error_count,
+                "max_iterations_reached": step_count >= self._max_iterations,
+            })
+
+            # Add iteration_metrics to outputs
+            _outputs["iteration_metrics"] = iteration_metrics
+
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_outputs)[:200]
+                )
+
+            self.store_result(state, _outputs, context_id)
+
+        except Exception as e:
+            error_msg = traceback.format_exc()
+            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error(error_msg)
+            state[self.full_name, "error", context_id] = error_msg
+
+        finally:
+            end_time = datetime.now()
+            state[self.full_name, "start_time", context_id] = start_time
+            state[self.full_name, "end_time", context_id] = end_time
+            return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Return subclass-specific metadata."""
@@ -126,7 +164,7 @@ class WhileLoopNode(IterationNode):
 if __name__ == "__main__":
     import asyncio
     from hush.core.states import StateSchema
-    from hush.core.nodes.base import START, END, INPUT, CONTINUE
+    from hush.core.nodes.base import START, END, INPUT, OUTPUT
     from hush.core.nodes.transform.code_node import code_node
     from hush.core.nodes.flow.branch_node import BranchNode
 
@@ -140,10 +178,16 @@ if __name__ == "__main__":
         def increment(counter: int):
             new_counter = counter + 1
             return {"new_counter": new_counter}
+        
+        @code_node
+        def stop_loop():
+            return {
+                "continue_loop": False # (bool = True)
+            }
 
         with WhileLoopNode(
             name="counter_loop",
-            inputs={"counter": 0}
+            inputs={"counter": 0, "continue_loop": True}
         ) as loop1:
             node = increment(
                 inputs={"counter": INPUT["counter"]},
@@ -151,131 +195,141 @@ if __name__ == "__main__":
             )
             check = BranchNode(
                 name="check",
-                cases={"new_counter < 5": CONTINUE},
-                default=END,
+                cases={"new_counter < 5": END},
+                default="stop_loop",
                 inputs={"new_counter": node["new_counter"]}
             )
-            START >> node >> check >> [CONTINUE, END]
+
+            _stop = stop_loop(
+                outputs={"continue_loop": OUTPUT}
+            )
+
+            START >> node >> check >> [_stop, END]
+            _stop >> END
 
         loop1.build()
 
         schema1 = StateSchema(loop1)
+
         state1 = schema1.create_state()
 
-        print(f"Input schema: {loop1.input_schema}")
-        print(f"Output schema: {loop1.output_schema}")
+        print(f"Input schema: {loop1._graph.input_schema}")
+        print(f"Output schema: {loop1._graph.output_schema}")
         schema1.show_links()
+        schema1.show_defaults()
 
         result = await loop1.run(state1)
-        print(f"Result: {result}")
-        print(f"Iterations: {result.get('iteration_metrics', {}).get('total_iterations')}")
 
-        # Test 2: Accumulator loop (sum until >= 100)
-        print("\n" + "=" * 50)
-        print("Test 2: Accumulator loop (sum until >= 100)")
-        print("=" * 50)
+        state1.show()
+        # print(f"Result: {result}")
+        # print(f"Iterations: {result.get('iteration_metrics', {}).get('total_iterations')}")
 
-        @code_node
-        def accumulate(total: int, step: int):
-            new_total = total + step
-            return {"new_total": new_total, "new_step": step}
+        # # Test 2: Accumulator loop (sum until >= 100)
+        # print("\n" + "=" * 50)
+        # print("Test 2: Accumulator loop (sum until >= 100)")
+        # print("=" * 50)
 
-        with WhileLoopNode(
-            name="accumulator_loop",
-            inputs={"total": 0, "step": 15}
-        ) as loop2:
-            node = accumulate(
-                inputs={"total": INPUT["total"], "step": INPUT["step"]},
-                outputs={"new_total": INPUT["total"], "new_step": INPUT["step"]}
-            )
-            check = BranchNode(
-                name="check",
-                cases={"new_total < 100": CONTINUE},
-                default=END,
-                inputs={"new_total": node["new_total"]}
-            )
-            START >> node >> check >> [CONTINUE, END]
+        # @code_node
+        # def accumulate(total: int, step: int):
+        #     new_total = total + step
+        #     return {"new_total": new_total, "new_step": step}
 
-        loop2.build()
+        # with WhileLoopNode(
+        #     name="accumulator_loop",
+        #     inputs={"total": 0, "step": 15}
+        # ) as loop2:
+        #     node = accumulate(
+        #         inputs={"total": INPUT["total"], "step": INPUT["step"]},
+        #         outputs={"new_total": INPUT["total"], "new_step": INPUT["step"]}
+        #     )
+        #     check = BranchNode(
+        #         name="check",
+        #         cases={"new_total < 100": CONTINUE},
+        #         default=END,
+        #         inputs={"new_total": node["new_total"]}
+        #     )
+        #     START >> node >> check >> [CONTINUE, END]
 
-        schema2 = StateSchema(loop2)
-        state2 = schema2.create_state()
+        # loop2.build()
 
-        result2 = await loop2.run(state2)
-        print(f"Result: {result2}")
-        print(f"Iterations: {result2.get('iteration_metrics', {}).get('total_iterations')}")
+        # schema2 = StateSchema(loop2)
+        # state2 = schema2.create_state()
 
-        # Test 3: Max iterations safety (always continues, limited by max_iterations)
-        print("\n" + "=" * 50)
-        print("Test 3: Max iterations safety (max_iterations=5)")
-        print("=" * 50)
+        # result2 = await loop2.run(state2)
+        # print(f"Result: {result2}")
+        # print(f"Iterations: {result2.get('iteration_metrics', {}).get('total_iterations')}")
 
-        @code_node
-        def infinite_loop(value: int):
-            return {"new_value": value + 1}
+        # # Test 3: Max iterations safety (always continues, limited by max_iterations)
+        # print("\n" + "=" * 50)
+        # print("Test 3: Max iterations safety (max_iterations=5)")
+        # print("=" * 50)
 
-        with WhileLoopNode(
-            name="safe_loop",
-            max_iterations=5,
-            inputs={"value": 0}
-        ) as loop3:
-            node = infinite_loop(
-                inputs={"value": INPUT["value"]},
-                outputs={"new_value": INPUT["value"]}
-            )
-            # Always continue - max_iterations will stop it
-            START >> node >> CONTINUE
+        # @code_node
+        # def infinite_loop(value: int):
+        #     return {"new_value": value + 1}
 
-        loop3.build()
+        # with WhileLoopNode(
+        #     name="safe_loop",
+        #     max_iterations=5,
+        #     inputs={"value": 0}
+        # ) as loop3:
+        #     node = infinite_loop(
+        #         inputs={"value": INPUT["value"]},
+        #         outputs={"new_value": INPUT["value"]}
+        #     )
+        #     # Always continue - max_iterations will stop it
+        #     START >> node >> CONTINUE
 
-        schema3 = StateSchema(loop3)
-        state3 = schema3.create_state()
+        # loop3.build()
 
-        result3 = await loop3.run(state3)
-        print(f"Result: {result3}")
-        print(f"Max iterations reached: {result3.get('iteration_metrics', {}).get('max_iterations_reached')}")
+        # schema3 = StateSchema(loop3)
+        # state3 = schema3.create_state()
 
-        # Test 4: Chain of nodes in loop (double until >= 1000)
-        print("\n" + "=" * 50)
-        print("Test 4: Chain of nodes in loop (double until >= 1000)")
-        print("=" * 50)
+        # result3 = await loop3.run(state3)
+        # print(f"Result: {result3}")
+        # print(f"Max iterations reached: {result3.get('iteration_metrics', {}).get('max_iterations_reached')}")
 
-        @code_node
-        def double_value(x: int):
-            return {"doubled": x * 2}
+        # # Test 4: Chain of nodes in loop (double until >= 1000)
+        # print("\n" + "=" * 50)
+        # print("Test 4: Chain of nodes in loop (double until >= 1000)")
+        # print("=" * 50)
 
-        @code_node
-        def update_x(doubled: int):
-            return {"new_x": doubled}
+        # @code_node
+        # def double_value(x: int):
+        #     return {"doubled": x * 2}
 
-        with WhileLoopNode(
-            name="chain_loop",
-            inputs={"x": 1}
-        ) as loop4:
-            n1 = double_value(inputs={"x": INPUT["x"]})
-            n2 = update_x(
-                inputs={"doubled": n1["doubled"]},
-                outputs={"new_x": INPUT["x"]}
-            )
-            check = BranchNode(
-                name="check",
-                cases={"new_x < 1000": CONTINUE},
-                default=END,
-                inputs={"new_x": n2["new_x"]}
-            )
-            START >> n1 >> n2 >> check >> [CONTINUE, END]
+        # @code_node
+        # def update_x(doubled: int):
+        #     return {"new_x": doubled}
 
-        loop4.build()
+        # with WhileLoopNode(
+        #     name="chain_loop",
+        #     inputs={"x": 1}
+        # ) as loop4:
+        #     n1 = double_value(inputs={"x": INPUT["x"]})
+        #     n2 = update_x(
+        #         inputs={"doubled": n1["doubled"]},
+        #         outputs={"new_x": INPUT["x"]}
+        #     )
+        #     check = BranchNode(
+        #         name="check",
+        #         cases={"new_x < 1000": CONTINUE},
+        #         default=END,
+        #         inputs={"new_x": n2["new_x"]}
+        #     )
+        #     START >> n1 >> n2 >> check >> [CONTINUE, END]
 
-        schema4 = StateSchema(loop4)
-        state4 = schema4.create_state()
+        # loop4.build()
 
-        result4 = await loop4.run(state4)
-        print(f"Result: {result4}")
-        print(f"Iterations: {result4.get('iteration_metrics', {}).get('total_iterations')}")
+        # schema4 = StateSchema(loop4)
+        # state4 = schema4.create_state()
 
-        print("\n" + "=" * 50)
-        print("All tests passed!")
-        print("=" * 50)
+        # result4 = await loop4.run(state4)
+        # print(f"Result: {result4}")
+        # print(f"Iterations: {result4.get('iteration_metrics', {}).get('total_iterations')}")
+
+        # print("\n" + "=" * 50)
+        # print("All tests passed!")
+        # print("=" * 50)
 
     asyncio.run(main())

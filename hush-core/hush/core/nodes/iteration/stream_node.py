@@ -104,172 +104,205 @@ class StreamNode(IterationNode):
                 "latency_ms": latency_ms
             }
 
-    async def _execute_loop(
+    async def run(
         self,
         state: 'BaseState',
-        inputs: Dict[str, Any],
-        request_id: str,
-        context_id: Optional[str]
+        context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Process streaming data with concurrent processing but ordered output."""
-        _outputs = self.get_outputs(state, context_id=context_id)
+        parent_name = self.father.full_name if self.father else None
+        state.record_execution(self.full_name, parent_name, context_id)
 
-        input_stream: AsyncIterable = inputs.get("input_stream")
-        batch_condition: Optional[Callable[[List, Any], bool]] = inputs.get("batch_condition")
-        output_handler: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("output_handler")
+        request_id = state.request_id
+        start_time = datetime.now()
+        _outputs = {}
 
-        # Create semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(self._max_concurrency)
+        try:
+            _inputs = self.get_inputs(state, context_id)
+            _outputs = self.get_outputs(state, context_id=context_id)
 
-        # Track ongoing tasks and results
-        active_tasks: Dict[int, asyncio.Task] = {}
-        completed_results: Dict[int, Dict] = {}
-        next_result_id = 0
-        chunk_id = 0
-        stream_ended = False
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_inputs)[:200]
+                )
 
-        # Track metrics
-        all_latencies: List[float] = []
-        handler_latencies: List[float] = []
-        success_count = 0
-        error_count = 0
-        handler_error_count = 0
+            input_stream: AsyncIterable = _inputs.get("input_stream")
+            batch_condition: Optional[Callable[[List, Any], bool]] = _inputs.get("batch_condition")
+            output_handler: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("output_handler")
 
-        # Batching state
-        current_batch: List = []
+            # Create semaphore to limit concurrency
+            semaphore = asyncio.Semaphore(self._max_concurrency)
 
-        async def process_with_semaphore(chunk_data: Any, cid: int) -> Dict[str, Any]:
-            """Process chunk with semaphore limiting."""
-            async with semaphore:
-                return await self._process_chunk(chunk_data, cid, state, request_id)
+            # Track ongoing tasks and results
+            active_tasks: Dict[int, asyncio.Task] = {}
+            completed_results: Dict[int, Dict] = {}
+            next_result_id = 0
+            chunk_id = 0
+            stream_ended = False
 
-        async def flush_batch(batch: List) -> None:
-            """Flush a batch by creating a processing task."""
-            nonlocal chunk_id
-            if not batch:
-                return
+            # Track metrics
+            all_latencies: List[float] = []
+            handler_latencies: List[float] = []
+            success_count = 0
+            error_count = 0
+            handler_error_count = 0
 
-            # Create batch data
-            batch_data = {"batch": batch, "batch_size": len(batch)}
+            # Batching state
+            current_batch: List = []
 
-            task = asyncio.create_task(
-                process_with_semaphore(batch_data, chunk_id)
-            )
-            active_tasks[chunk_id] = task
-            chunk_id += 1
+            async def process_with_semaphore(chunk_data: Any, cid: int) -> Dict[str, Any]:
+                """Process chunk with semaphore limiting."""
+                async with semaphore:
+                    return await self._process_chunk(chunk_data, cid, state, request_id)
 
-        async def consume_stream():
-            """Consume chunks from input stream and launch tasks."""
-            nonlocal chunk_id, stream_ended, current_batch
+            async def flush_batch(batch: List) -> None:
+                """Flush a batch by creating a processing task."""
+                nonlocal chunk_id
+                if not batch:
+                    return
 
-            try:
-                async for chunk in input_stream:
-                    if batch_condition:
-                        # Dynamic batching mode
-                        if current_batch and batch_condition(current_batch, chunk):
-                            await flush_batch(current_batch)
-                            current_batch = []
-                        current_batch.append(chunk)
+                # Create batch data
+                batch_data = {"batch": batch, "batch_size": len(batch)}
+
+                task = asyncio.create_task(
+                    process_with_semaphore(batch_data, chunk_id)
+                )
+                active_tasks[chunk_id] = task
+                chunk_id += 1
+
+            async def consume_stream():
+                """Consume chunks from input stream and launch tasks."""
+                nonlocal chunk_id, stream_ended, current_batch
+
+                try:
+                    async for chunk in input_stream:
+                        if batch_condition:
+                            # Dynamic batching mode
+                            if current_batch and batch_condition(current_batch, chunk):
+                                await flush_batch(current_batch)
+                                current_batch = []
+                            current_batch.append(chunk)
+                        else:
+                            # No batching - process each chunk individually with semaphore
+                            task = asyncio.create_task(
+                                process_with_semaphore(chunk, chunk_id)
+                            )
+                            active_tasks[chunk_id] = task
+                            chunk_id += 1
+
+                    # Flush remaining batch
+                    if batch_condition and current_batch:
+                        await flush_batch(current_batch)
+
+                except Exception as e:
+                    LOGGER.error(f"[{request_id}] Stream consumption error: {e}")
+                finally:
+                    stream_ended = True
+                    LOGGER.debug(f"[{request_id}] Stream ended, total chunks: {chunk_id}")
+
+            # Start consuming stream
+            consumer_task = asyncio.create_task(consume_stream())
+
+            # Emit results in order as they complete
+            while True:
+                # Check if we're done
+                if stream_ended and next_result_id >= chunk_id:
+                    break
+
+                # Wait for next result in sequence
+                if next_result_id in active_tasks:
+                    # If already completed, use cached result
+                    if next_result_id in completed_results:
+                        result = completed_results.pop(next_result_id)
                     else:
-                        # No batching - process each chunk individually with semaphore
-                        task = asyncio.create_task(
-                            process_with_semaphore(chunk, chunk_id)
-                        )
-                        active_tasks[chunk_id] = task
-                        chunk_id += 1
+                        # Wait for this specific task
+                        result = await active_tasks[next_result_id]
 
-                # Flush remaining batch
-                if batch_condition and current_batch:
-                    await flush_batch(current_batch)
+                    # Collect metrics from result
+                    if result.get("success"):
+                        all_latencies.append(result.get("latency_ms", 0))
+                        success_count += 1
+                    else:
+                        all_latencies.append(result.get("latency_ms", 0))
+                        error_count += 1
 
-            except Exception as e:
-                LOGGER.error(f"[{request_id}] Stream consumption error: {e}")
-            finally:
-                stream_ended = True
-                LOGGER.debug(f"[{request_id}] Stream ended, total chunks: {chunk_id}")
+                    # Call output handler if provided and result is successful
+                    if output_handler and result.get("success"):
+                        handler_start = datetime.now()
+                        try:
+                            await output_handler(result["result"])
+                        except Exception as e:
+                            handler_error_count += 1
+                            LOGGER.error(f"[{request_id}] Output handler error: {e}")
+                        finally:
+                            handler_end = datetime.now()
+                            handler_latency = (handler_end - handler_start).total_seconds() * 1000
+                            handler_latencies.append(handler_latency)
 
-        # Start consuming stream
-        consumer_task = asyncio.create_task(consume_stream())
+                    # Clean up completed task
+                    del active_tasks[next_result_id]
+                    next_result_id += 1
 
-        # Emit results in order as they complete
-        while True:
-            # Check if we're done
-            if stream_ended and next_result_id >= chunk_id:
-                break
-
-            # Wait for next result in sequence
-            if next_result_id in active_tasks:
-                # If already completed, use cached result
-                if next_result_id in completed_results:
-                    result = completed_results.pop(next_result_id)
                 else:
-                    # Wait for this specific task
-                    result = await active_tasks[next_result_id]
+                    # Wait for more chunks to arrive
+                    await asyncio.sleep(0.001)
 
-                # Collect metrics from result
-                if result.get("success"):
-                    all_latencies.append(result.get("latency_ms", 0))
-                    success_count += 1
-                else:
-                    all_latencies.append(result.get("latency_ms", 0))
-                    error_count += 1
+                    # Check completed tasks ahead of sequence
+                    for task_id, task in list(active_tasks.items()):
+                        if task_id > next_result_id and task.done():
+                            completed_results[task_id] = await task
 
-                # Call output handler if provided and result is successful
-                if output_handler and result.get("success"):
-                    handler_start = datetime.now()
-                    try:
-                        await output_handler(result["result"])
-                    except Exception as e:
-                        handler_error_count += 1
-                        LOGGER.error(f"[{request_id}] Output handler error: {e}")
-                    finally:
-                        handler_end = datetime.now()
-                        handler_latency = (handler_end - handler_start).total_seconds() * 1000
-                        handler_latencies.append(handler_latency)
+            # Wait for consumer to finish
+            await consumer_task
 
-                # Clean up completed task
-                del active_tasks[next_result_id]
-                next_result_id += 1
+            LOGGER.info(f"[{request_id}] StreamNode processed {chunk_id} chunks")
 
-            else:
-                # Wait for more chunks to arrive
-                await asyncio.sleep(0.001)
+            # Calculate iteration metrics
+            iteration_metrics = self._calculate_iteration_metrics(all_latencies)
+            iteration_metrics.update({
+                "total_iterations": chunk_id,
+                "success_count": success_count,
+                "error_count": error_count,
+            })
 
-                # Check completed tasks ahead of sequence
-                for task_id, task in list(active_tasks.items()):
-                    if task_id > next_result_id and task.done():
-                        completed_results[task_id] = await task
+            # Calculate output_handler metrics if handler was used
+            if handler_latencies:
+                handler_metrics = self._calculate_iteration_metrics(handler_latencies)
+                iteration_metrics["output_handler"] = {
+                    "latency_avg_ms": handler_metrics["latency_avg_ms"],
+                    "latency_min_ms": handler_metrics["latency_min_ms"],
+                    "latency_max_ms": handler_metrics["latency_max_ms"],
+                    "latency_p50_ms": handler_metrics["latency_p50_ms"],
+                    "latency_p95_ms": handler_metrics["latency_p95_ms"],
+                    "latency_p99_ms": handler_metrics["latency_p99_ms"],
+                    "call_count": len(handler_latencies),
+                    "error_count": handler_error_count,
+                }
 
-        # Wait for consumer to finish
-        await consumer_task
+            _outputs["iteration_metrics"] = iteration_metrics
 
-        LOGGER.info(f"[{request_id}] StreamNode processed {chunk_id} chunks")
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_outputs)[:200]
+                )
 
-        # Calculate iteration metrics
-        iteration_metrics = self._calculate_iteration_metrics(all_latencies)
-        iteration_metrics.update({
-            "total_iterations": chunk_id,
-            "success_count": success_count,
-            "error_count": error_count,
-        })
+            self.store_result(state, _outputs, context_id)
 
-        # Calculate output_handler metrics if handler was used
-        if handler_latencies:
-            handler_metrics = self._calculate_iteration_metrics(handler_latencies)
-            iteration_metrics["output_handler"] = {
-                "latency_avg_ms": handler_metrics["latency_avg_ms"],
-                "latency_min_ms": handler_metrics["latency_min_ms"],
-                "latency_max_ms": handler_metrics["latency_max_ms"],
-                "latency_p50_ms": handler_metrics["latency_p50_ms"],
-                "latency_p95_ms": handler_metrics["latency_p95_ms"],
-                "latency_p99_ms": handler_metrics["latency_p99_ms"],
-                "call_count": len(handler_latencies),
-                "error_count": handler_error_count,
-            }
+        except Exception as e:
+            error_msg = traceback.format_exc()
+            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error(error_msg)
+            state[self.full_name, "error", context_id] = error_msg
 
-        _outputs["iteration_metrics"] = iteration_metrics
-
-        return _outputs
+        finally:
+            end_time = datetime.now()
+            state[self.full_name, "start_time", context_id] = start_time
+            state[self.full_name, "end_time", context_id] = end_time
+            return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Return subclass-specific metadata."""

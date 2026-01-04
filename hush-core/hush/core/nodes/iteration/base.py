@@ -1,14 +1,10 @@
 """Base class for iteration nodes that contain an inner graph."""
 
-from abc import abstractmethod
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
-from datetime import datetime
-import traceback
+from typing import Dict, Any, List, TYPE_CHECKING
 
 from hush.core.nodes.base import BaseNode
 from hush.core.nodes.graph.graph_node import GraphNode
 from hush.core.utils.context import _current_graph
-from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
     from hush.core.states import BaseState
@@ -27,6 +23,9 @@ class IterationNode(BaseNode):
     - An inner GraphNode that holds the loop body
     - Context manager pattern for building the inner graph
     - Delegation methods for add_node/add_edge
+    - Utility methods for metrics calculation and input injection
+
+    Subclasses must implement their own run() method.
     """
 
     __slots__ = ['_graph', '_token']
@@ -122,80 +121,3 @@ class IterationNode(BaseNode):
         """
         for var_name, value in inputs.items():
             state[self._graph.full_name, var_name, context_id] = value
-
-    @abstractmethod
-    async def _execute_loop(
-        self,
-        state: 'BaseState',
-        inputs: Dict[str, Any],
-        request_id: str,
-        context_id: Optional[str]
-    ) -> Dict[str, Any]:
-        """
-        Execute the loop logic. Must be implemented by subclasses.
-
-        Args:
-            state: The workflow state
-            inputs: The input values for this node
-            request_id: The request ID for logging
-            context_id: The context ID
-
-        Returns:
-            The outputs from the loop execution
-        """
-        pass
-
-    async def run(
-        self,
-        state: 'BaseState',
-        context_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Run the iteration node with common setup/teardown.
-
-        This method handles:
-        - Recording execution
-        - Getting inputs
-        - Logging
-        - Error handling
-        - Metrics recording
-        """
-        parent_name = self.father.full_name if self.father else None
-        state.record_execution(self.full_name, parent_name, context_id)
-
-        request_id = state.request_id
-        start_time = datetime.now()
-        _outputs = {}
-
-        try:
-            _inputs = self.get_inputs(state, context_id)
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_inputs)[:200]
-                )
-
-            _outputs = await self._execute_loop(state, _inputs, request_id, context_id)
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_outputs)[:200]
-                )
-
-            self.store_result(state, _outputs, context_id)
-
-        except Exception as e:
-            error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
-            LOGGER.error(error_msg)
-            state[self.full_name, "error", context_id] = error_msg
-
-        finally:
-            end_time = datetime.now()
-            state[self.full_name, "start_time", context_id] = start_time
-            state[self.full_name, "end_time", context_id] = end_time
-            return _outputs

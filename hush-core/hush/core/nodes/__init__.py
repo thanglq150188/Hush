@@ -12,9 +12,9 @@ from .base import (
 )
 from .graph.graph_node import GraphNode
 from .flow.branch_node import BranchNode
-from .flow.for_loop_node import ForLoopNode
-from .flow.while_loop_node import WhileLoopNode
-from .flow.stream_node import StreamNode
+from .iteration.for_loop_node import ForLoopNode
+from .iteration.while_loop_node import WhileLoopNode
+from .iteration.stream_node import StreamNode
 from .transform.code_node import CodeNode, code_node
 from .transform.parser_node import ParserNode, ParserType
 

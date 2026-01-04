@@ -136,6 +136,8 @@ class StateSchema:
         - full_name (str): The node's full hierarchical name
         - inputs (dict): Input connections {var: {source_node: source_var} or literal}
         - outputs (dict): Output connections {var: {target_node: target_var} or literal}
+        - input_schema (dict, optional): Schema with Param defaults
+        - output_schema (dict, optional): Schema with Param defaults
         - _nodes (dict, optional): Child nodes for recursive loading
 
         Args:
@@ -146,17 +148,35 @@ class StateSchema:
 
         Example:
             schema = StateSchema("workflow")
-            schema.load_from(graph_node)  # Loads all connections recursively
+            schema.load_from(graph_node)  # Loads all connections and defaults recursively
         """
         node_name = node.full_name
+        inputs = node.inputs or {}
+        input_schema = getattr(node, 'input_schema', {}) or {}
+        output_schema = getattr(node, 'output_schema', {}) or {}
 
-        # Load this node's input connections as links
-        # inputs={"x": other_node["y"]} means: node.x -> other_node.y
-        for var_name, ref in (node.inputs or {}).items():
+        # Load this node's input connections as links or defaults
+        # inputs={"x": other_node["y"]} means: node.x -> other_node.y (link)
+        # inputs={"x": 0.7} means: node.x = 0.7 (default)
+        for var_name, ref in inputs.items():
             if isinstance(ref, dict) and ref:
+                # Reference to another node's output
                 ref_node, ref_var = next(iter(ref.items()))
                 if hasattr(ref_node, 'full_name'):
                     self.link(node_name, var_name, ref_node.full_name, ref_var)
+            else:
+                # Literal value - store as default
+                self.set(node_name, var_name, ref)
+
+        # Load defaults from input_schema for vars not set in inputs
+        for var_name, param in input_schema.items():
+            if var_name not in inputs and hasattr(param, 'default') and param.default is not None:
+                self.set(node_name, var_name, param.default)
+
+        # Load defaults from output_schema (for vars with default values)
+        for var_name, param in output_schema.items():
+            if hasattr(param, 'default') and param.default is not None:
+                self.set(node_name, var_name, param.default)
 
         # Load this node's output connections as links
         # outputs={"result": father["result"]} means: father.result -> node.result
