@@ -39,7 +39,6 @@ class BaseNode(ABC):
         'core',
         'father',
         'contain_generation',
-        'continue_loop'
     ]
 
     def __init__(
@@ -76,8 +75,6 @@ class BaseNode(ABC):
 
         self.core: Optional[Callable] = None
         self.contain_generation = contain_generation
-        self.continue_loop = False
-
         # Register to parent graph
         self.father = get_current()
         if self.father and hasattr(self.father, "add_node"):

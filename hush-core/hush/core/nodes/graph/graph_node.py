@@ -85,7 +85,7 @@ class GraphNode(BaseNode):
 
         LOGGER.info(f"Graph '{self.name}': Creating configs...")
         input_schema = {}
-        output_schema = {"continue_loop": Param(type=bool, default=False)}
+        output_schema = {}
         graph_inputs = {}
 
         for _, node in self._nodes.items():
@@ -224,11 +224,6 @@ class GraphNode(BaseNode):
 
             return
 
-        if target == CONTINUE.name:
-            source_node = self._nodes[source]
-            source_node.continue_loop = True
-            return
-
         if target in [INPUT.name, OUTPUT.name]:
             return
 
@@ -272,9 +267,6 @@ class GraphNode(BaseNode):
         _outputs = {}
 
         try:
-            # Reset continue_loop to False at start of each graph run
-            # It will be set to True only if CONTINUE is reached
-            state[self.full_name, "continue_loop", context_id] = False
 
             _inputs = self.get_inputs(state, context_id=context_id)
 
@@ -313,13 +305,8 @@ class GraphNode(BaseNode):
                     node = self._nodes[node_name]
 
                     if node.type == "branch":
-                        from hush.core.nodes.base import CONTINUE
                         branch_target = node.get_target(state, context_id)
-                        if branch_target == CONTINUE.name:
-                            # Branch routed to CONTINUE - set continue_loop flag
-                            state[self.full_name, "continue_loop", context_id] = True
-                            next_nodes = []
-                        elif branch_target != END.name:
+                        if branch_target != END.name:
                             next_nodes = [branch_target]
                         else:
                             next_nodes = []
@@ -335,9 +322,6 @@ class GraphNode(BaseNode):
                                 coro=self._nodes[next_node].run(state, context_id)
                             )
                             active_tasks[next_node] = task
-
-                    if node.continue_loop:
-                        state[self.full_name, "continue_loop", context_id] = True
 
             _outputs = self.get_outputs(state, context_id=context_id)
             if self.name != BaseNode.INNER_PROCESS:

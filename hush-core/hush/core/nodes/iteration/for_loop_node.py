@@ -3,11 +3,13 @@
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
 import asyncio
+import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.iteration.base import IterationNode
 from hush.core.utils.common import Param
+from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
     from hush.core.states import BaseState
@@ -42,70 +44,106 @@ class ForLoopNode(IterationNode):
 
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
-    async def _execute_loop(
+    async def run(
         self,
         state: 'BaseState',
-        inputs: Dict[str, Any],
-        request_id: str,
-        context_id: Optional[str]
+        context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute the for loop over batch_data concurrently with semaphore limiting."""
-        batch_data = inputs.get("batch_data", [])
+        parent_name = self.father.full_name if self.father else None
+        state.record_execution(self.full_name, parent_name, context_id)
 
-        # Create semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(self._max_concurrency)
+        request_id = state.request_id
+        start_time = datetime.now()
+        _outputs = {}
 
-        # Track latencies for metrics
-        latencies_ms: List[float] = []
-        success_count = 0
-        error_count = 0
+        try:
+            _inputs = self.get_inputs(state, context_id)
 
-        async def run_with_semaphore(iteration_index: int, task_id: str, loop_data: Dict[str, Any]):
-            nonlocal success_count, error_count
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_inputs)[:200]
+                )
 
-            start_time = datetime.now()
+            batch_data = _inputs.get("batch_data", [])
 
-            try:
-                async with semaphore:
-                    self.inject_inputs(state, loop_data, task_id)
-                    result = await self._graph.run(state, task_id)
-                    success_count += 1
-                    return result
-            except Exception as e:
-                error_count += 1
-                raise e
-            finally:
-                end_time = datetime.now()
-                latency = (end_time - start_time).total_seconds() * 1000
-                latencies_ms.append(latency)
+            # Create semaphore to limit concurrency
+            semaphore = asyncio.Semaphore(self._max_concurrency)
 
-        active_tasks = []
-        for i, loop_data in enumerate(batch_data):
-            task_id = f"for[{i}]"
-            active_tasks.append(run_with_semaphore(i, task_id, loop_data))
+            # Track latencies for metrics
+            latencies_ms: List[float] = []
+            success_count = 0
+            error_count = 0
 
-        results = await asyncio.gather(*active_tasks, return_exceptions=True)
+            async def run_with_semaphore(task_id: str, loop_data: Dict[str, Any]):
+                nonlocal success_count, error_count
 
-        # Separate results and exceptions
-        final_results = []
-        for r in results:
-            if isinstance(r, Exception):
-                final_results.append({"error": str(r)})
-            else:
-                final_results.append(r)
+                iter_start_time = datetime.now()
 
-        # Calculate iteration metrics
-        iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
-        iteration_metrics.update({
-            "total_iterations": len(batch_data),
-            "success_count": success_count,
-            "error_count": error_count,
-        })
+                try:
+                    async with semaphore:
+                        self.inject_inputs(state, loop_data, task_id)
+                        result = await self._graph.run(state, task_id)
+                        success_count += 1
+                        return result
+                except Exception as e:
+                    error_count += 1
+                    raise e
+                finally:
+                    iter_end_time = datetime.now()
+                    latency = (iter_end_time - iter_start_time).total_seconds() * 1000
+                    latencies_ms.append(latency)
 
-        return {
-            "batch_result": final_results,
-            "iteration_metrics": iteration_metrics
-        }
+            active_tasks = []
+            for i, loop_data in enumerate(batch_data):
+                task_id = f"for[{i}]"
+                active_tasks.append(run_with_semaphore(task_id, loop_data))
+
+            results = await asyncio.gather(*active_tasks, return_exceptions=True)
+
+            # Separate results and exceptions
+            final_results = []
+            for r in results:
+                if isinstance(r, Exception):
+                    final_results.append({"error": str(r)})
+                else:
+                    final_results.append(r)
+
+            # Calculate iteration metrics
+            iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
+            iteration_metrics.update({
+                "total_iterations": len(batch_data),
+                "success_count": success_count,
+                "error_count": error_count,
+            })
+
+            _outputs = {
+                "batch_result": final_results,
+                "iteration_metrics": iteration_metrics
+            }
+
+            if self.verbose:
+                LOGGER.info(
+                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
+                    request_id, self.name, context_id,
+                    str(self.type).upper(), str(_outputs)[:200]
+                )
+
+            self.store_result(state, _outputs, context_id)
+
+        except Exception as e:
+            error_msg = traceback.format_exc()
+            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error(error_msg)
+            state[self.full_name, "error", context_id] = error_msg
+
+        finally:
+            end_time = datetime.now()
+            state[self.full_name, "start_time", context_id] = start_time
+            state[self.full_name, "end_time", context_id] = end_time
+            return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Return subclass-specific metadata."""

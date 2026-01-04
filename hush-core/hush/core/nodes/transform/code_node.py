@@ -61,26 +61,80 @@ TYPE_MAP = {
 }
 
 
+def parse_default_value(value_str: str, param_type: type) -> Any:
+    """Parse a default value string into the appropriate type.
+
+    Returns None if parsing fails.
+    """
+    value_str = value_str.strip()
+
+    # Handle empty string
+    if not value_str:
+        if param_type == list:
+            return []
+        elif param_type == dict:
+            return {}
+        elif param_type == str:
+            return ""
+        return None
+
+    try:
+        if param_type == bool:
+            return value_str.lower() in ("true", "1", "yes")
+        elif param_type == int:
+            return int(value_str)
+        elif param_type == float:
+            return float(value_str)
+        elif param_type == list:
+            return []
+        elif param_type == dict:
+            return {}
+        else:
+            return value_str  # str or Any
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_comment(comment: str) -> tuple:
-    """Parse comment like '(type) description' into (type, description).
+    """Parse comment like '(type) description' or '(type=default) description'.
+
+    Only recognizes known types in parentheses at the START of the comment.
 
     Examples:
-        '(str) greeting message' -> (str, 'greeting message')
-        '(int) the count' -> (int, 'the count')
-        'just a description' -> (Any, 'just a description')
+        '(str) greeting message' -> (str, None, 'greeting message')
+        '(int=0) the count' -> (int, 0, 'the count')
+        '(bool=true) enabled flag' -> (bool, True, 'enabled flag')
+        'just a description' -> (Any, None, 'just a description')
+        'use (carefully) here' -> (Any, None, 'use (carefully) here')
     """
     comment = comment.strip()
+    default = None
 
     if comment.startswith("(") and ")" in comment:
-        type_part, description = comment.split(")", 1)
-        type_str = type_part[1:].strip()  # remove leading '('
-        param_type = TYPE_MAP.get(type_str, Any)
-        description = description.strip()
-    else:
-        param_type = Any
-        description = comment
+        close_idx = comment.index(")")
+        type_part = comment[1:close_idx].strip()
 
-    return param_type, description
+        # Check for default value: (type=default)
+        if "=" in type_part:
+            type_str, default_str = type_part.split("=", 1)
+            type_str = type_str.strip()
+        else:
+            type_str = type_part
+            default_str = None
+
+        # Only treat as type if it's a known type
+        if type_str in TYPE_MAP:
+            param_type = TYPE_MAP[type_str]
+            description = comment[close_idx + 1:].strip()
+
+            # Parse default value if provided
+            if default_str is not None:
+                default = parse_default_value(default_str, param_type)
+
+            return param_type, default, description
+
+    # No valid type found, treat entire comment as description
+    return Any, None, comment
 
 
 def _extract_dict_keys(dict_node: ast.Dict, source_lines: List[str]) -> Dict[str, Param]:
@@ -90,17 +144,20 @@ def _extract_dict_keys(dict_node: ast.Dict, source_lines: List[str]) -> Dict[str
         if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
             key_name = key_node.value
 
-            # Extract type and description from inline comment
+            # Extract type, default, and description from inline comment
             param_type = Any
+            default = None
             description = ""
             for src_line in source_lines:
-                if "#" in src_line and f'"{key_name}"' in src_line:
+                # Check for both single and double quotes
+                if "#" in src_line and (f'"{key_name}"' in src_line or f"'{key_name}'" in src_line):
                     comment = src_line.split("#", 1)[1].strip()
-                    param_type, description = parse_comment(comment)
+                    param_type, default, description = parse_comment(comment)
                     break
 
             schema[key_name] = Param(
                 type=param_type,
+                default=default,
                 description=description
             )
     return schema
