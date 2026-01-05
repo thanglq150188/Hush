@@ -204,16 +204,39 @@ class BaseState(ABC):
         return self._request_id == other._request_id
 
     def show(self) -> None:
-        """Debug display of current state values."""
+        """Debug display of current state values.
+
+        Shows all stored values AND all schema references with their resolved values.
+        """
         print(f"\n=== {self.__class__.__name__}: {self.name} ===")
 
-        for node, var, ctx in sorted(self._iter_keys()):
-            ref = self.schema.get_ref(node, var)
-            value = self._get_value(node, var, ctx)
-            value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
+        # Collect all keys from storage
+        stored_keys = set(self._iter_keys())
 
+        # Collect all schema refs to show resolved values
+        schema_refs = set()
+        for (node, var), value in self.schema.values.items():
+            from hush.core.states.ref import Ref
+            if isinstance(value, Ref):
+                # Add all contexts for this ref
+                for n, v, ctx in stored_keys:
+                    if n == value.node and v == value.var:
+                        schema_refs.add((node, var, ctx))
+
+        # Combine and sort all keys
+        all_keys = stored_keys | schema_refs
+
+        for node, var, ctx in sorted(all_keys):
+            ref = self.schema.get_ref(node, var)
             ctx_str = f"[{ctx}]" if ctx else ""
+
             if ref:
+                # This is a reference - show both the ref and resolved value
+                resolved_value = self._get_value(ref.node, ref.var, ctx)
+                value_str = repr(resolved_value)[:50] + "..." if len(repr(resolved_value)) > 50 else repr(resolved_value)
                 print(f"  {node}.{var}{ctx_str} -> {ref.node}.{ref.var} = {value_str}")
             else:
+                # Direct value
+                value = self._get_value(node, var, ctx)
+                value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
                 print(f"  {node}.{var}{ctx_str} = {value_str}")

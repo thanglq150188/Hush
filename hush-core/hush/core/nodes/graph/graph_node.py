@@ -66,7 +66,7 @@ class GraphNode(BaseNode):
 
     def _setup_endpoints(self):
         """Initialize entry/exit nodes."""
-        LOGGER.info(f"Graph: '{self.name}': initializing endpoints...")
+        LOGGER.debug(f"Graph '{self.name}': initializing endpoints...")
 
         if not self.entries:
             self.entries = [node for node in self._nodes if not self.prevs[node]]
@@ -75,15 +75,17 @@ class GraphNode(BaseNode):
             self.exits = [node for node in self._nodes if not self.nexts[node]]
 
         if not self.entries:
+            LOGGER.error(f"Graph '{self.name}': no entry nodes found. Check START >> node connections.")
             raise ValueError("Graph must have at least one entry node.")
         if not self.exits:
+            LOGGER.error(f"Graph '{self.name}': no exit nodes found. Check node >> END connections.")
             raise ValueError("Graph must have at least one exit node.")
 
     def _setup_schema(self):
         """Initialize input/output schema and inputs dictionary."""
         from hush.core.utils.common import Param
 
-        LOGGER.info(f"Graph '{self.name}': Creating configs...")
+        LOGGER.debug(f"Graph '{self.name}': creating schema...")
         input_schema = {}
         output_schema = {}
 
@@ -93,6 +95,9 @@ class GraphNode(BaseNode):
                 if isinstance(ref, Ref) and ref.raw_node is self:
                     # PARENT["x"] resolved to father - this is a graph input
                     if var not in node.input_schema:
+                        LOGGER.error(
+                            f"Graph '{self.name}': variable '{var}' not found in input schema of node '{node.name}'"
+                        )
                         raise KeyError(
                             f"Variable not found in input schema: "
                             f"{self.name}:{ref.var} <-- {node.name}.{var}"
@@ -104,6 +109,9 @@ class GraphNode(BaseNode):
                 if isinstance(ref, Ref) and ref.raw_node is self:
                     # PARENT["x"] resolved to father - this is a graph output
                     if var not in node.output_schema:
+                        LOGGER.error(
+                            f"Graph '{self.name}': variable '{var}' not found in output schema of node '{node.name}'"
+                        )
                         raise KeyError(
                             f"Variable not found in output schema: "
                             f"{self.name}:{ref.var} <-- {node.name}.{var}"
@@ -122,18 +130,36 @@ class GraphNode(BaseNode):
         are stored directly at (graph.full_name, var_name, context_id).
         """
         return {
-            var_name: state[self.full_name, var_name, context_id]
+            var_name: state._get_value(self.full_name, var_name, context_id)
             for var_name in self.input_schema
+        }
+
+    def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
+        """Get graph outputs using schema links.
+
+        Graph outputs are aliases to inner node outputs (e.g., graph.result -> inner_node.result).
+        We MUST follow schema links here to read from the inner node's output location.
+        """
+        return {
+            var_name: state[self.full_name, var_name, context_id]
+            for var_name in self.output_schema
         }
 
     def _build_flow_type(self):
         """Determine flow type of each node based on connection pattern."""
-        LOGGER.info(f"Graph '{self.name}': determining node flow types...")
+        LOGGER.debug(f"Graph '{self.name}': determining node flow types...")
         self.flowtype_map = BiMap[str, NodeFlowType]()
+
+        # Detect orphan nodes (no connections at all)
+        orphan_nodes = []
 
         for name, node in self._nodes.items():
             prev_count = len(self.prevs[name])
             next_count = len(self.nexts[name])
+
+            # Check for orphan nodes (not start/end and no connections)
+            if prev_count == 0 and next_count == 0 and not node.start and not node.end:
+                orphan_nodes.append(name)
 
             flow_type: NodeFlowType = "OTHER"
 
@@ -153,6 +179,13 @@ class GraphNode(BaseNode):
                 flow_type = "NORMAL"
 
             self.flowtype_map[name] = flow_type
+
+        # Warn about orphan nodes
+        if orphan_nodes:
+            LOGGER.warning(
+                f"Graph '{self.name}': orphan nodes detected (no edges): {orphan_nodes}. "
+                "These nodes will never be executed."
+            )
 
     def build(self):
         """Build graph by building child nodes then this graph."""
@@ -187,6 +220,12 @@ class GraphNode(BaseNode):
 
         if node in [START, END]:
             return node
+
+        # Warn if node with same name already exists (will be overwritten)
+        if node.name in self._nodes:
+            LOGGER.warning(
+                f"Graph '{self.name}': node '{node.name}' already exists and will be overwritten"
+            )
 
         self._nodes[node.name] = node
 
@@ -271,16 +310,11 @@ class GraphNode(BaseNode):
 
         request_id = state.request_id
         start_time = datetime.now()
+        _inputs = {}
         _outputs = {}
 
         try:
-
             _inputs = self.get_inputs(state, context_id=context_id)
-
-            if self.name != BaseNode.INNER_PROCESS:
-                if self.verbose:
-                    LOGGER.info("request[%s] - running NODE: %s[%s] (%s), inputs = %s",
-                        request_id, self.name, context_id, str(self.type).upper(), str(_inputs)[:200])
 
             if self._is_building:
                 raise ValueError(
@@ -331,10 +365,6 @@ class GraphNode(BaseNode):
                             active_tasks[next_node] = task
 
             _outputs = self.get_outputs(state, context_id=context_id)
-            if self.name != BaseNode.INNER_PROCESS:
-                if self.verbose:
-                    LOGGER.info("request[%s] - running NODE: %s[%s] (%s), outputs = %s",
-                        request_id, self.name, context_id, str(self.type).upper(), str(_outputs)[:200])
 
         except Exception as e:
             import traceback
@@ -346,6 +376,8 @@ class GraphNode(BaseNode):
 
         finally:
             end_time = datetime.now()
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+            self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
             return _outputs
@@ -363,21 +395,21 @@ if __name__ == "__main__":
         with GraphNode(name="linear_graph") as graph:
             node_a = CodeNode(
                 name="node_a",
-                code_fn=lambda x: {"x": x + 10},
+                code_fn=lambda x: {"result": x + 10},
                 inputs={"x": PARENT["x"]}
             )
 
             node_b = CodeNode(
                 name="node_b",
-                code_fn=lambda x: {"x": x * 2},
-                inputs={"x": node_a["x"]}
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": node_a["result"]}
             )
 
             node_c = CodeNode(
                 name="node_c",
-                code_fn=lambda x: {"x": x - 5},
-                inputs={"x": node_b["x"]},
-                outputs={"x": PARENT["result"]}  # graph output = node output
+                code_fn=lambda x: {"result": x - 5},
+                inputs={"x": node_b["result"]},
+                outputs={"result": PARENT["result"]}  # graph output = node output
             )
 
             START >> node_a >> node_b >> node_c >> END

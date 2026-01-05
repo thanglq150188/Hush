@@ -134,7 +134,10 @@ class StateSchema:
         return None
 
     def resolve(self, node: str, var: str) -> Tuple[str, str]:
-        """Resolve a variable to its source (follow ref chain).
+        """Resolve a variable to its source (single hop, no chaining).
+
+        Links are for reading input values from other nodes.
+        We only follow ONE hop because outputs are stored directly at node locations.
 
         Args:
             node: Node name
@@ -143,19 +146,10 @@ class StateSchema:
         Returns:
             (resolved_node, resolved_var) tuple
         """
-        seen = set()
-        while True:
-            key = (node, var)
-            if key in seen:
-                # Circular reference, return current
-                return key
-            seen.add(key)
-
-            value = self.values.get(key)
-            if isinstance(value, Ref):
-                node, var = value.node, value.var
-            else:
-                return key
+        value = self.values.get((node, var))
+        if isinstance(value, Ref):
+            return value.node, value.var
+        return node, var
 
     def load_from(self, node) -> "StateSchema":
         """Load input/output connections from a node and its children as links.

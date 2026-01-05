@@ -55,19 +55,18 @@ class ForLoopNode(IterationNode):
 
         request_id = state.request_id
         start_time = datetime.now()
+        _inputs = {}
         _outputs = {}
 
         try:
             _inputs = self.get_inputs(state, context_id)
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_inputs)[:200]
-                )
-
             batch_data = _inputs.get("batch_data", [])
+
+            # Warn if batch_data is empty
+            if not batch_data:
+                LOGGER.warning(
+                    f"ForLoopNode '{self.full_name}': batch_data is empty. No iterations will be executed."
+                )
 
             # Create semaphore to limit concurrency
             semaphore = asyncio.Semaphore(self._max_concurrency)
@@ -119,17 +118,19 @@ class ForLoopNode(IterationNode):
                 "error_count": error_count,
             })
 
+            # Warn if high error rate (>10%)
+            if len(batch_data) > 0:
+                error_rate = error_count / len(batch_data)
+                if error_rate > 0.1:
+                    LOGGER.warning(
+                        f"ForLoopNode '{self.full_name}': high error rate ({error_rate:.1%}). "
+                        f"{error_count}/{len(batch_data)} iterations failed."
+                    )
+
             _outputs = {
                 "batch_result": final_results,
                 "iteration_metrics": iteration_metrics
             }
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_outputs)[:200]
-                )
 
             self.store_result(state, _outputs, context_id)
 
@@ -141,6 +142,8 @@ class ForLoopNode(IterationNode):
 
         finally:
             end_time = datetime.now()
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+            self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
             return _outputs
@@ -182,7 +185,7 @@ if __name__ == "__main__":
 
         print(f"Input schema: {loop1.input_schema}")
         print(f"Output schema: {loop1.output_schema}")
-        schema.show_links()
+        schema.show()
 
         result = await loop1.run(state)
         print(f"Result: {result}")

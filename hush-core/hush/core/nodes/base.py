@@ -11,7 +11,7 @@ import uuid
 from hush.core.configs.node_config import NodeType
 from hush.core.utils.context import get_current, _current_graph
 from hush.core.utils.common import unique_name
-from hush.core.loggings import LOGGER
+from hush.core.loggings import LOGGER, format_log_data
 from hush.core.states.ref import Ref
 
 if TYPE_CHECKING:
@@ -89,6 +89,15 @@ class BaseNode(ABC):
         # Normalize inputs/outputs connections
         self.inputs = self._normalize_connections(inputs, self.input_schema)
         self.outputs = self._normalize_connections(outputs, self.output_schema)
+
+        # Warn if same key appears in both inputs and outputs
+        if self.inputs and self.outputs:
+            overlapping_keys = set(self.inputs.keys()) & set(self.outputs.keys())
+            if overlapping_keys:
+                LOGGER.warning(
+                    f"Node '{self.name}' has overlapping input/output keys: {overlapping_keys}. "
+                    "This may cause confusion in data flow."
+                )
 
     def _normalize_connections(
         self,
@@ -251,13 +260,19 @@ class BaseNode(ABC):
 
     # @lru_cache(maxsize=128)
     def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-        """Retrieve input values from state based on connection mappings."""
+        """Retrieve input values from state based on connection mappings.
+
+        Reads directly from referenced node's output location, bypassing schema links.
+        This is because schema links represent INPUT connections (for graph inputs),
+        but here we're reading OUTPUT values from other nodes.
+        """
         result = {}
 
         for var_name, ref in self.inputs.items():
             if isinstance(ref, Ref):
-                # Reference to another node's output
-                result[var_name] = state[ref.node, ref.var, context_id]
+                # Reference to another node's output - read directly from that location
+                # Don't use state[...] which would follow schema links meant for inputs
+                result[var_name] = state._get_value(ref.node, ref.var, context_id)
             else:
                 # Literal value
                 result[var_name] = ref
@@ -266,9 +281,12 @@ class BaseNode(ABC):
 
     # @lru_cache(maxsize=128)
     def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-        """Retrieve output values from state."""
+        """Retrieve output values from state.
+
+        Reads directly from this node's output location, bypassing schema links.
+        """
         return {
-            var_name: state[self.full_name, var_name, context_id]
+            var_name: state._get_value(self.full_name, var_name, context_id)
             for var_name in self.output_schema
         }
 
@@ -278,12 +296,35 @@ class BaseNode(ABC):
         result: Dict[str, Any],
         context_id: str
     ) -> None:
-        """Store result dict to state."""
+        """Store result dict to state.
+
+        Stores directly without following schema links.
+        Links are for reading (input connections), not writing.
+        """
         if not result:
             return
 
         for key, value in result.items():
-            state[self.full_name, key, context_id] = value
+            # Store directly without following links
+            state._set_value(self.full_name, key, context_id, value)
+
+    def _log(
+        self,
+        request_id: str,
+        context_id: Optional[str],
+        inputs: Dict[str, Any],
+        outputs: Dict[str, Any],
+        duration_ms: float
+    ) -> None:
+        """Log node execution summary with inputs, outputs and duration."""
+        if self.verbose:
+            _context_id = context_id or "main"
+            _request_id = request_id or "unknown"
+            LOGGER.info(
+                "%s - %s: %s\\[%s] (%.1fms) %s -> %s",
+                _request_id, str(self.type).upper(), self.full_name, _context_id,
+                duration_ms, format_log_data(inputs), format_log_data(outputs)
+            )
 
     async def run(
         self,
@@ -296,17 +337,11 @@ class BaseNode(ABC):
 
         request_id = state.request_id
         start_time = datetime.now()
+        _inputs = {}
         _outputs = {}
 
         try:
             _inputs = self.get_inputs(state, context_id)
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_inputs)[:200]
-                )
 
             if asyncio.iscoroutinefunction(self.core):
                 _outputs = await self.core(**_inputs)
@@ -314,13 +349,6 @@ class BaseNode(ABC):
                 _outputs = self.core(**_inputs)
 
             self.store_result(state, _outputs, context_id)
-
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_outputs)[:200]
-                )
 
         except Exception as e:
             error_msg = traceback.format_exc()
@@ -330,6 +358,8 @@ class BaseNode(ABC):
 
         finally:
             end_time = datetime.now()
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+            self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
             return _outputs
