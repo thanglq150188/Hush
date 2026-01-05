@@ -195,27 +195,25 @@ class BaseState(ABC):
             f"request_id='{self.request_id[:8]}...')"
         )
 
+    def __hash__(self) -> int:
+        return hash(self._request_id)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, BaseState):
+            return False
+        return self._request_id == other._request_id
+
     def show(self) -> None:
         """Debug display of current state values."""
         print(f"\n=== {self.__class__.__name__}: {self.name} ===")
 
-        # Group by (node, var)
-        grouped: Dict[Tuple[str, str], Dict[Optional[str], Any]] = {}
-        for key in self._iter_keys():
-            node, var, ctx = key
-            if (node, var) not in grouped:
-                grouped[(node, var)] = {}
-            grouped[(node, var)][ctx] = self._get_value(node, var, ctx)
+        for node, var, ctx in sorted(self._iter_keys()):
+            ref = self.schema.get_ref(node, var)
+            value = self._get_value(node, var, ctx)
+            value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
 
-        for (node, var), contexts in sorted(grouped.items()):
-            if len(contexts) == 1:
-                ctx, value = next(iter(contexts.items()))
-                value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
-                print(f"  {node}.{var}[{ctx}] = {value_str}")
+            ctx_str = f"[{ctx}]" if ctx else ""
+            if ref:
+                print(f"  {node}.{var}{ctx_str} -> {ref.node}.{ref.var} = {value_str}")
             else:
-                print(f"  {node}.{var}:")
-                for ctx, value in contexts.items():
-                    value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
-                    print(f"    [{ctx}] = {value_str}")
-
-        print(f"\nTotal keys: {sum(1 for _ in self._iter_keys())}")
+                print(f"  {node}.{var}{ctx_str} = {value_str}")

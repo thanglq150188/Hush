@@ -33,12 +33,14 @@ Example:
     state.show()
 """
 
+from hush.core.states.ref import Ref
 from hush.core.states.schema import StateSchema
 from hush.core.states.base import BaseState
 from hush.core.states.memory import MemoryState
 from hush.core.states.redis import RedisState
 
 __all__ = [
+    "Ref",
     "StateSchema",
     "BaseState",
     "MemoryState",

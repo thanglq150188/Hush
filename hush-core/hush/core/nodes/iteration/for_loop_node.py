@@ -154,7 +154,7 @@ class ForLoopNode(IterationNode):
 
 if __name__ == "__main__":
     from hush.core.states import StateSchema
-    from hush.core.nodes.base import START, END, INPUT, OUTPUT
+    from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import code_node
 
     async def main():
@@ -171,7 +171,7 @@ if __name__ == "__main__":
             name="double_loop",
             inputs={"batch_data": [{"value": 1}, {"value": 2}, {"value": 3}]}
         ) as loop1:
-            node = double(inputs={"value": INPUT["value"]}, outputs=OUTPUT)
+            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
 
         loop1.build()
@@ -200,7 +200,7 @@ if __name__ == "__main__":
             name="uppercase_loop",
             inputs={"batch_data": [{"text": "hello"}, {"text": "world"}, {"text": "test"}]}
         ) as loop2:
-            node = uppercase(inputs={"text": INPUT["text"]}, outputs=OUTPUT)
+            node = uppercase(inputs={"text": PARENT["text"]}, outputs=PARENT)
             START >> node >> END
 
         loop2.build()
@@ -228,7 +228,7 @@ if __name__ == "__main__":
                 {"a": 100, "b": 200}
             ]}
         ) as loop3:
-            node = add(inputs={"a": INPUT["a"], "b": INPUT["b"]}, outputs=OUTPUT)
+            node = add(inputs={"a": PARENT["a"], "b": PARENT["b"]}, outputs=PARENT)
             START >> node >> END
 
         loop3.build()
@@ -256,8 +256,8 @@ if __name__ == "__main__":
             name="chain_loop",
             inputs={"batch_data": [{"x": 1}, {"x": 2}, {"x": 3}]}
         ) as loop4:
-            n1 = add_one(inputs={"x": INPUT["x"]})
-            n2 = multiply_two(inputs={"y": n1["y"]}, outputs=OUTPUT)
+            n1 = add_one(inputs={"x": PARENT["x"]})
+            n2 = multiply_two(inputs={"y": n1["y"]}, outputs=PARENT)
             START >> n1 >> n2 >> END
 
         loop4.build()
@@ -283,7 +283,7 @@ if __name__ == "__main__":
             max_concurrency=2,
             inputs={"batch_data": [{"value": i} for i in range(5)]}
         ) as loop5:
-            node = slow_process(inputs={"value": INPUT["value"]}, outputs=OUTPUT)
+            node = slow_process(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
 
         loop5.build()
