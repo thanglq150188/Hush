@@ -115,22 +115,22 @@ class StreamNode(IterationNode):
 
         request_id = state.request_id
         start_time = datetime.now()
+        _inputs = {}
         _outputs = {}
 
         try:
             _inputs = self.get_inputs(state, context_id)
             _outputs = self.get_outputs(state, context_id=context_id)
 
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) inputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_inputs)[:200]
-                )
-
             input_stream: AsyncIterable = _inputs.get("input_stream")
             batch_condition: Optional[Callable[[List, Any], bool]] = _inputs.get("batch_condition")
             output_handler: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("output_handler")
+
+            # Warn if input_stream is None
+            if input_stream is None:
+                LOGGER.warning(
+                    f"StreamNode '{self.full_name}': input_stream is None. No data will be processed."
+                )
 
             # Create semaphore to limit concurrency
             semaphore = asyncio.Semaphore(self._max_concurrency)
@@ -257,7 +257,7 @@ class StreamNode(IterationNode):
             # Wait for consumer to finish
             await consumer_task
 
-            LOGGER.info(f"[{request_id}] StreamNode processed {chunk_id} chunks")
+            LOGGER.debug(f"[{request_id}] StreamNode processed {chunk_id} chunks")
 
             # Calculate iteration metrics
             iteration_metrics = self._calculate_iteration_metrics(all_latencies)
@@ -266,6 +266,24 @@ class StreamNode(IterationNode):
                 "success_count": success_count,
                 "error_count": error_count,
             })
+
+            # Warn if high error rate (>10%)
+            if chunk_id > 0:
+                error_rate = error_count / chunk_id
+                if error_rate > 0.1:
+                    LOGGER.warning(
+                        f"StreamNode '{self.full_name}': high error rate ({error_rate:.1%}). "
+                        f"{error_count}/{chunk_id} chunks failed."
+                    )
+
+            # Warn if high output_handler error rate (>5%)
+            if handler_latencies and len(handler_latencies) > 0:
+                handler_error_rate = handler_error_count / len(handler_latencies)
+                if handler_error_rate > 0.05:
+                    LOGGER.warning(
+                        f"StreamNode '{self.full_name}': high output_handler error rate ({handler_error_rate:.1%}). "
+                        f"{handler_error_count}/{len(handler_latencies)} handler calls failed."
+                    )
 
             # Calculate output_handler metrics if handler was used
             if handler_latencies:
@@ -283,13 +301,6 @@ class StreamNode(IterationNode):
 
             _outputs["iteration_metrics"] = iteration_metrics
 
-            if self.verbose:
-                LOGGER.info(
-                    "request[%s] - NODE: %s[%s] (%s) outputs=%s",
-                    request_id, self.name, context_id,
-                    str(self.type).upper(), str(_outputs)[:200]
-                )
-
             self.store_result(state, _outputs, context_id)
 
         except Exception as e:
@@ -300,6 +311,8 @@ class StreamNode(IterationNode):
 
         finally:
             end_time = datetime.now()
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+            self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
             return _outputs

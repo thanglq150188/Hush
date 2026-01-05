@@ -118,6 +118,10 @@ class IterationNode(BaseNode):
             state: The workflow state
             inputs: Dict of {var_name: value} to inject
             context_id: The context ID for this iteration
+
+        Note: Uses _set_value directly to store at exact location,
+        bypassing schema links. Inner node's get_inputs will read
+        from this exact location.
         """
         for var_name, value in inputs.items():
-            state[self._graph.full_name, var_name, context_id] = value
+            state._set_value(self._graph.full_name, var_name, context_id, value)
