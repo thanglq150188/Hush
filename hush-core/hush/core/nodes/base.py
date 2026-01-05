@@ -1,6 +1,7 @@
 """Base node class for all workflow nodes."""
 
 from abc import ABC
+from functools import lru_cache
 from typing import Dict, Any, Callable, Optional, List, TYPE_CHECKING
 from datetime import datetime
 import traceback
@@ -11,6 +12,7 @@ from hush.core.configs.node_config import NodeType
 from hush.core.utils.context import get_current, _current_graph
 from hush.core.utils.common import unique_name
 from hush.core.loggings import LOGGER
+from hush.core.states.ref import Ref
 
 if TYPE_CHECKING:
     from hush.core.states import BaseState
@@ -96,21 +98,22 @@ class BaseNode(ABC):
         """
         Normalize connection mappings to consistent format.
 
-        Transforms various input formats to: {var_name: {ref_node: ref_var}} or {var_name: literal}
+        Transforms various input formats to: {var_name: Ref} or {var_name: literal}
 
         Supported formats:
-            - inputs=some_node → {k: {some_node: k} for k in schema}
-            - inputs={"var": some_node} → {"var": {some_node: "var"}}
-            - inputs={"var": some_node["other"]} → {"var": {some_node: "other"}}
-            - inputs={("a", "b"): some_node} → {"a": {some_node: "a"}, "b": {some_node: "b"}}
-            - inputs={"var": INPUT["x"]} → {"var": {father: "x"}} (INPUT resolves to father node)
+            - inputs=some_node → {k: Ref(some_node, k) for k in schema}
+            - inputs={"var": some_node} → {"var": Ref(some_node, "var")}
+            - inputs={"var": some_node["other"]} → {"var": Ref(some_node, "other")}
+            - inputs={"var": Ref(node, "other")} → {"var": Ref(node, "other")}
+            - inputs={("a", "b"): some_node} → {"a": Ref(some_node, "a"), "b": Ref(some_node, "b")}
+            - inputs={"var": PARENT["x"]} → {"var": Ref(father, "x")} (PARENT resolves to father node)
         """
         if connections is None:
             return {}
 
         def resolve_node(node):
-            """Resolve INPUT/OUTPUT to father node."""
-            if node.name in ["__INPUT__", "__OUTPUT__"]:
+            """Resolve PARENT to father node."""
+            if hasattr(node, 'name') and node.name == "__PARENT__":
                 return self.father if self.father else node
             return node
 
@@ -118,36 +121,40 @@ class BaseNode(ABC):
         if hasattr(connections, "name"):
             resolved = resolve_node(connections)
             if schema:
-                result = {k: {resolved: k} for k in schema}
-                return result
+                return {k: Ref(resolved, k) for k in schema}
             return {}
 
         # Case: connections is a dict
         if isinstance(connections, dict):
             result = {}
             for key, value in connections.items():
-                # Handle dict value like {"var": node["other_var"]}
-                if isinstance(value, dict) and value:
+                # Handle Ref directly
+                if isinstance(value, Ref):
+                    resolved = resolve_node(value.raw_node)
+                    result[key] = Ref(resolved, value.var)
+                # Handle old dict format {"var": node["other_var"]} for backward compat
+                elif isinstance(value, dict) and value:
                     ref_node, ref_var = next(iter(value.items()))
                     resolved = resolve_node(ref_node)
-                    result[key] = {resolved: ref_var}
+                    result[key] = Ref(resolved, ref_var)
                 # Handle tuple keys: {("a", "b"): node} → expand to both
                 elif isinstance(key, tuple):
                     for k in key:
                         if hasattr(value, "name"):
                             resolved = resolve_node(value)
-                            result[k] = {resolved: k}
+                            result[k] = Ref(resolved, k)
                         else:
                             result[k] = value
                 else:
-                    # Single key: {"var": node} → {"var": {node: "var"}}
+                    # Single key: {"var": node} → {"var": Ref(node, "var")}
                     if hasattr(value, "name"):
                         resolved = resolve_node(value)
-                        result[key] = {resolved: key}
+                        result[key] = Ref(resolved, key)
                     else:
+                        # Literal value
                         result[key] = value
             return result
-        
+
         return {}
 
     @property
@@ -161,9 +168,9 @@ class BaseNode(ABC):
         """Full path with context_id."""
         return f"{self.full_name}[{context_id or 'main'}]"
 
-    def __getitem__(self, item: str):
+    def __getitem__(self, item: str) -> Ref:
         """Allow node["var"] syntax for referencing specific output."""
-        return {self: item}
+        return Ref(self, item)
 
     def __rshift__(self, other):
         """node >> other: connect this node to other."""
@@ -242,22 +249,22 @@ class BaseNode(ABC):
     def is_base_node(self) -> bool:
         return True
 
+    # @lru_cache(maxsize=128)
     def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve input values from state based on connection mappings."""
         result = {}
 
         for var_name, ref in self.inputs.items():
-            if isinstance(ref, dict) and ref:
-                # Reference to another node's output: {node: var}
-                ref_node, ref_var = next(iter(ref.items()))
-                ref_name = ref_node.full_name if hasattr(ref_node, 'full_name') else str(ref_node)
-                result[var_name] = state[ref_name, ref_var, context_id]
+            if isinstance(ref, Ref):
+                # Reference to another node's output
+                result[var_name] = state[ref.node, ref.var, context_id]
             else:
                 # Literal value
                 result[var_name] = ref
 
         return result
 
+    # @lru_cache(maxsize=128)
     def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve output values from state."""
         return {
@@ -342,10 +349,8 @@ class BaseNode(ABC):
     def metadata(self) -> Dict[str, Any]:
         """Generate metadata dictionary for the node."""
         def get_connect_key(value):
-            if isinstance(value, dict) and value:
-                node, var = next(iter(value.items()))
-                node_name = node.full_name if hasattr(node, 'full_name') else node
-                return {node_name: var}
+            if isinstance(value, Ref):
+                return {value.node: value.var}
             return value
 
         result = {
@@ -440,6 +445,4 @@ class DummyNode(BaseNode):
 # Global dummy nodes
 START = DummyNode("__START__")
 END = DummyNode("__END__")
-CONTINUE = DummyNode("__CONTINUE__")
-INPUT = DummyNode("__INPUT__")
-OUTPUT = DummyNode("__OUTPUT__")
+PARENT = DummyNode("__PARENT__")

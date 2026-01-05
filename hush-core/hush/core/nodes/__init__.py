@@ -6,9 +6,7 @@ from .base import (
     NodeType,
     START,
     END,
-    CONTINUE,
-    INPUT,
-    OUTPUT,
+    PARENT,
 )
 from .graph.graph_node import GraphNode
 from .flow.branch_node import BranchNode
@@ -26,9 +24,7 @@ __all__ = [
     # Markers
     "START",
     "END",
-    "CONTINUE",
-    "INPUT",
-    "OUTPUT",
+    "PARENT",
     # Graph
     "GraphNode",
     # Flow control

@@ -6,7 +6,7 @@ import traceback
 
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.iteration.base import IterationNode
-from hush.core.utils.common import Param
+from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -16,50 +16,87 @@ if TYPE_CHECKING:
 class WhileLoopNode(IterationNode):
     """A node that iterates while a condition is true.
 
-    The loop continues while `continue_loop=True`.
+    The loop continues while `stop_condition` evaluates to False.
+    When `stop_condition` becomes True, the loop stops.
 
     Example:
-        with WhileLoopNode(name="loop", inputs={"counter": 0}) as loop:
+        with WhileLoopNode(
+            name="loop",
+            inputs={"counter": 0},
+            stop_condition="counter >= 5"
+        ) as loop:
             node = process(
                 inputs={"counter": PARENT["counter"]},
                 outputs={"new_counter": PARENT["counter"]}
             )
-            check = BranchNode(
-                name="check",
-                cases={"new_counter < 5": "stop"},
-                default=END,
-                inputs={"new_counter": node["new_counter"]}
-            )
-            stop = stop_loop(outputs={"continue_loop": PARENT})
-            START >> node >> check >> [stop, END]
-            stop >> END
+            START >> node >> END
     """
 
     type: NodeType = "while"
 
-    __slots__ = ['_max_iterations']
+    __slots__ = ['_max_iterations', '_stop_condition', '_compiled_condition']
 
-    def __init__(self, max_iterations: int = 100, **kwargs):
+    def __init__(
+        self,
+        stop_condition: Optional[str] = None,
+        max_iterations: int = 100,
+        **kwargs
+    ):
         """Initialize a WhileLoopNode.
 
         Args:
+            stop_condition: A string expression that is evaluated each iteration.
+                When it evaluates to True, the loop stops.
+                Example: "counter >= 5" or "total > 100 and done"
             max_iterations: Maximum iterations to prevent infinite loops.
                 Defaults to 100.
         """
         super().__init__(**kwargs)
         self._max_iterations = max_iterations
+        self._stop_condition = stop_condition
+        self._compiled_condition = self._compile_condition(stop_condition) if stop_condition else None
+
+    def _compile_condition(self, condition: str):
+        """Compile the stop condition for performance."""
+        try:
+            compiled_code = compile(condition, f'<stop_condition: {condition}>', 'eval')
+            return compiled_code
+        except SyntaxError as e:
+            LOGGER.error(f"Invalid stop_condition syntax '{condition}': {e}")
+            raise ValueError(f"Invalid stop_condition syntax: {condition}")
+
+    def _evaluate_stop_condition(self, inputs: Dict[str, Any]) -> bool:
+        """Evaluate the stop condition against current inputs.
+
+        Returns:
+            True if the loop should stop, False to continue.
+        """
+        if self._compiled_condition is None:
+            return False  # No condition = never stop (rely on max_iterations)
+
+        try:
+            result = eval(self._compiled_condition, {"__builtins__": {}}, inputs)
+            return bool(result)
+        except Exception as e:
+            LOGGER.error(f"Error evaluating stop_condition '{self._stop_condition}': {e}")
+            return False  # On error, continue (let max_iterations be the safety)
 
     def _post_build(self):
         """Set input/output schema from inner graph after build."""
         self.input_schema = self._graph.input_schema.copy() if self._graph.input_schema else {}
         self.output_schema = self._graph.output_schema.copy() if self._graph.output_schema else {}
-        # self.output_schema["continue_loop"] = Param(type=bool, required=False, default=True)
-
 
         # Ensure inputs in self.inputs are in schema
         for key in self.inputs:
             if key not in self.input_schema:
                 self.input_schema[key] = Param(type=Any, required=True)
+
+        # Add variables from stop_condition to input schema
+        if self._stop_condition:
+            condition_vars = extract_condition_variables(self._stop_condition)
+            for var_name in condition_vars:
+                if var_name not in self.input_schema:
+                    self.input_schema[var_name] = Param(type=Any, required=False)
 
         # Add iteration_metrics to output schema
         if "iteration_metrics" not in self.output_schema:
@@ -70,7 +107,7 @@ class WhileLoopNode(IterationNode):
         state: 'BaseState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Execute the while loop until continue_loop is False."""
+        """Execute the while loop until stop_condition is True or max_iterations reached."""
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -88,7 +125,6 @@ class WhileLoopNode(IterationNode):
                     str(self.type).upper(), str(_inputs)[:200]
                 )
 
-            _continue = True
             step_count = 0
             step_inputs = _inputs
 
@@ -97,7 +133,10 @@ class WhileLoopNode(IterationNode):
             success_count = 0
             error_count = 0
 
-            while _continue and step_count < self._max_iterations:
+            # Check stop condition before first iteration
+            should_stop = self._evaluate_stop_condition(step_inputs)
+
+            while not should_stop and step_count < self._max_iterations:
                 step_name = f"while-{step_count}"
                 iter_start_time = datetime.now()
 
@@ -118,10 +157,14 @@ class WhileLoopNode(IterationNode):
                 step_inputs = self._graph.get_inputs(state, context_id=step_name)
                 step_count += 1
 
-                # Check continue_loop from graph outputs
-                _continue = _outputs.get("continue_loop", True)
-                if _continue is None:
-                    _continue = True  # Default to True if not set
+                # Check stop condition after iteration
+                should_stop = self._evaluate_stop_condition(step_inputs)
+
+                if self.verbose:
+                    LOGGER.info(
+                        "request[%s] - NODE: %s iteration %d, stop_condition='%s' => %s",
+                        request_id, self.name, step_count, self._stop_condition, should_stop
+                    )
 
             # Calculate iteration metrics
             iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
@@ -130,6 +173,7 @@ class WhileLoopNode(IterationNode):
                 "success_count": success_count,
                 "error_count": error_count,
                 "max_iterations_reached": step_count >= self._max_iterations,
+                "stopped_by_condition": should_stop,
             })
 
             # Add iteration_metrics to outputs
@@ -159,7 +203,8 @@ class WhileLoopNode(IterationNode):
     def specific_metadata(self) -> Dict[str, Any]:
         """Return subclass-specific metadata."""
         return {
-            "max_iterations": self._max_iterations
+            "max_iterations": self._max_iterations,
+            "stop_condition": self._stop_condition
         }
 
 
@@ -168,88 +213,68 @@ if __name__ == "__main__":
     from hush.core.states import StateSchema
     from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import code_node
-    from hush.core.nodes.flow.branch_node import BranchNode
 
     async def main():
         # Test 1: Simple counter loop (count to 5)
         print("=" * 50)
-        print("Test 1: Simple counter loop (count to 5)")
+        print("Test 1: Simple counter loop (stop when counter >= 5)")
         print("=" * 50)
 
         @code_node
         def increment(counter: int):
             new_counter = counter + 1
+            print(f"  counter: {counter} -> {new_counter}")
             return {"new_counter": new_counter}
-        
-        @code_node
-        def stop_loop():
-            return {
-                "continue_loop": False # (bool = True)
-            }
 
         with WhileLoopNode(
             name="counter_loop",
-            inputs={"counter": 0, "continue_loop": True}
+            inputs={"counter": 0},
+            stop_condition="counter >= 5"
         ) as loop1:
             node = increment(
                 inputs={"counter": PARENT["counter"]},
                 outputs={"new_counter": PARENT["counter"]}
             )
-            check = BranchNode(
-                name="check",
-                cases={"new_counter < 5": END},
-                default="stop_loop",
-                inputs={"new_counter": node["new_counter"]}
-            )
-
-            _stop = stop_loop(
-                outputs={"continue_loop": PARENT}
-            )
-
-            START >> node >> check >> [_stop, END]
-            _stop >> END
+            START >> node >> END
 
         loop1.build()
 
         schema1 = StateSchema(loop1)
-
         state1 = schema1.create_state()
 
         print(f"Input schema: {loop1._graph.input_schema}")
         print(f"Output schema: {loop1._graph.output_schema}")
-        schema1.show()
+        print(f"Stop condition: {loop1._stop_condition}")
 
         result = await loop1.run(state1)
 
-        # state1.show()
-        print(f"Result: {result}")
+        print(f"\nResult: {result}")
         print(f"Iterations: {result.get('iteration_metrics', {}).get('total_iterations')}")
+        print(f"Stopped by condition: {result.get('iteration_metrics', {}).get('stopped_by_condition')}")
+
+        state1.show()
 
         # # Test 2: Accumulator loop (sum until >= 100)
         # print("\n" + "=" * 50)
-        # print("Test 2: Accumulator loop (sum until >= 100)")
+        # print("Test 2: Accumulator loop (stop when total >= 100)")
         # print("=" * 50)
 
         # @code_node
         # def accumulate(total: int, step: int):
         #     new_total = total + step
-        #     return {"new_total": new_total, "new_step": step}
+        #     print(f"  total: {total} + {step} = {new_total}")
+        #     return {"new_total": new_total}
 
         # with WhileLoopNode(
         #     name="accumulator_loop",
-        #     inputs={"total": 0, "step": 15}
+        #     inputs={"total": 0, "step": 15},
+        #     stop_condition="total >= 100"
         # ) as loop2:
         #     node = accumulate(
-        #         inputs={"total": INPUT["total"], "step": INPUT["step"]},
-        #         outputs={"new_total": INPUT["total"], "new_step": INPUT["step"]}
+        #         inputs={"total": PARENT["total"], "step": PARENT["step"]},
+        #         outputs={"new_total": PARENT["total"]}
         #     )
-        #     check = BranchNode(
-        #         name="check",
-        #         cases={"new_total < 100": CONTINUE},
-        #         default=END,
-        #         inputs={"new_total": node["new_total"]}
-        #     )
-        #     START >> node >> check >> [CONTINUE, END]
+        #     START >> node >> END
 
         # loop2.build()
 
@@ -257,29 +282,31 @@ if __name__ == "__main__":
         # state2 = schema2.create_state()
 
         # result2 = await loop2.run(state2)
-        # print(f"Result: {result2}")
+        # print(f"\nResult: {result2}")
         # print(f"Iterations: {result2.get('iteration_metrics', {}).get('total_iterations')}")
 
-        # # Test 3: Max iterations safety (always continues, limited by max_iterations)
+        # # Test 3: Max iterations safety (no stop condition)
         # print("\n" + "=" * 50)
-        # print("Test 3: Max iterations safety (max_iterations=5)")
+        # print("Test 3: Max iterations safety (max_iterations=5, no stop_condition)")
         # print("=" * 50)
 
         # @code_node
         # def infinite_loop(value: int):
-        #     return {"new_value": value + 1}
+        #     new_value = value + 1
+        #     print(f"  value: {value} -> {new_value}")
+        #     return {"new_value": new_value}
 
         # with WhileLoopNode(
         #     name="safe_loop",
         #     max_iterations=5,
         #     inputs={"value": 0}
+        #     # No stop_condition - relies on max_iterations
         # ) as loop3:
         #     node = infinite_loop(
-        #         inputs={"value": INPUT["value"]},
-        #         outputs={"new_value": INPUT["value"]}
+        #         inputs={"value": PARENT["value"]},
+        #         outputs={"new_value": PARENT["value"]}
         #     )
-        #     # Always continue - max_iterations will stop it
-        #     START >> node >> CONTINUE
+        #     START >> node >> END
 
         # loop3.build()
 
@@ -287,38 +314,31 @@ if __name__ == "__main__":
         # state3 = schema3.create_state()
 
         # result3 = await loop3.run(state3)
-        # print(f"Result: {result3}")
+        # print(f"\nResult: {result3}")
         # print(f"Max iterations reached: {result3.get('iteration_metrics', {}).get('max_iterations_reached')}")
 
-        # # Test 4: Chain of nodes in loop (double until >= 1000)
+        # # Test 4: Complex condition with multiple variables
         # print("\n" + "=" * 50)
-        # print("Test 4: Chain of nodes in loop (double until >= 1000)")
+        # print("Test 4: Complex condition (stop when x >= 10 or done == True)")
         # print("=" * 50)
 
         # @code_node
-        # def double_value(x: int):
-        #     return {"doubled": x * 2}
-
-        # @code_node
-        # def update_x(doubled: int):
-        #     return {"new_x": doubled}
+        # def complex_step(x: int, done: bool):
+        #     new_x = x + 3
+        #     new_done = new_x > 8  # Set done=True when x > 8
+        #     print(f"  x: {x} -> {new_x}, done: {done} -> {new_done}")
+        #     return {"new_x": new_x, "new_done": new_done}
 
         # with WhileLoopNode(
-        #     name="chain_loop",
-        #     inputs={"x": 1}
+        #     name="complex_loop",
+        #     inputs={"x": 0, "done": False},
+        #     stop_condition="x >= 10 or done"
         # ) as loop4:
-        #     n1 = double_value(inputs={"x": INPUT["x"]})
-        #     n2 = update_x(
-        #         inputs={"doubled": n1["doubled"]},
-        #         outputs={"new_x": INPUT["x"]}
+        #     node = complex_step(
+        #         inputs={"x": PARENT["x"], "done": PARENT["done"]},
+        #         outputs={"new_x": PARENT["x"], "new_done": PARENT["done"]}
         #     )
-        #     check = BranchNode(
-        #         name="check",
-        #         cases={"new_x < 1000": CONTINUE},
-        #         default=END,
-        #         inputs={"new_x": n2["new_x"]}
-        #     )
-        #     START >> n1 >> n2 >> check >> [CONTINUE, END]
+        #     START >> node >> END
 
         # loop4.build()
 
@@ -326,7 +346,7 @@ if __name__ == "__main__":
         # state4 = schema4.create_state()
 
         # result4 = await loop4.run(state4)
-        # print(f"Result: {result4}")
+        # print(f"\nResult: {result4}")
         # print(f"Iterations: {result4.get('iteration_metrics', {}).get('total_iterations')}")
 
         # print("\n" + "=" * 50)

@@ -32,9 +32,7 @@ from hush.core.nodes import (
     ParserType,
     START,
     END,
-    CONTINUE,
-    INPUT,
-    OUTPUT,
+    PARENT,
 )
 from hush.core.states import (
     StateSchema,
@@ -87,9 +85,7 @@ __all__ = [
     # Markers
     "START",
     "END",
-    "CONTINUE",
-    "INPUT",
-    "OUTPUT",
+    "PARENT",
     # State
     "StateSchema",
     "BaseState",

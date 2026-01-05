@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, Iterator, Optional, Tuple, Type, TYPE_CHECKING
 
+from hush.core.states.ref import Ref
+
 if TYPE_CHECKING:
     from hush.core.states.base import BaseState
 
@@ -11,9 +13,9 @@ __all__ = ["StateSchema"]
 class StateSchema:
     """Defines workflow state structure. Built once, shared by all states.
 
-    Schema stores:
-    - links: variable connections (zero-copy redirects)
-    - defaults: default values for variables
+    Schema stores variable values in a single dict where each value is either:
+    - A direct value (any type except Ref)
+    - A Ref object pointing to another variable (zero-copy redirect)
 
     Example:
         # From graph node (recommended)
@@ -36,7 +38,7 @@ class StateSchema:
         schema.show()
     """
 
-    __slots__ = ("name", "links", "defaults")
+    __slots__ = ("name", "values")
 
     def __init__(self, node=None, name: str = None):
         """Initialize schema.
@@ -52,8 +54,7 @@ class StateSchema:
             StateSchema("my_workflow")   # Just name, no node (backward compat)
             StateSchema()                # name = "unnamed"
         """
-        self.links: Dict[Tuple[str, str], Tuple[str, str]] = {}
-        self.defaults: Dict[Tuple[str, str], Any] = {}
+        self.values: Dict[Tuple[str, str], Any] = {}
 
         # Handle backward compatibility: StateSchema("name")
         if isinstance(node, str):
@@ -88,7 +89,7 @@ class StateSchema:
         Returns:
             Self for chaining
         """
-        self.links[(node, var)] = (source_node, source_var or var)
+        self.values[(node, var)] = Ref(source_node, source_var or var)
         return self
 
     def set(self, node: str, var: str, value: Any) -> "StateSchema":
@@ -102,7 +103,7 @@ class StateSchema:
         Returns:
             Self for chaining
         """
-        self.defaults[(node, var)] = value
+        self.values[(node, var)] = value
         return self
 
     def get(self, node: str, var: str) -> Any:
@@ -113,12 +114,27 @@ class StateSchema:
             var: Variable name
 
         Returns:
-            Default value or None if not set
+            Default value or None if not set.
+            Returns None for Ref values (use resolve() for those).
         """
-        return self.defaults.get((node, var))
+        value = self.values.get((node, var))
+        if isinstance(value, Ref):
+            return None
+        return value
+
+    def is_ref(self, node: str, var: str) -> bool:
+        """Check if a variable is a reference."""
+        return isinstance(self.values.get((node, var)), Ref)
+
+    def get_ref(self, node: str, var: str) -> Optional[Ref]:
+        """Get the Ref object if variable is a reference, else None."""
+        value = self.values.get((node, var))
+        if isinstance(value, Ref):
+            return value
+        return None
 
     def resolve(self, node: str, var: str) -> Tuple[str, str]:
-        """Resolve a variable to its source (follow links).
+        """Resolve a variable to its source (follow ref chain).
 
         Args:
             node: Node name
@@ -127,15 +143,27 @@ class StateSchema:
         Returns:
             (resolved_node, resolved_var) tuple
         """
-        return self.links.get((node, var), (node, var))
+        seen = set()
+        while True:
+            key = (node, var)
+            if key in seen:
+                # Circular reference, return current
+                return key
+            seen.add(key)
+
+            value = self.values.get(key)
+            if isinstance(value, Ref):
+                node, var = value.node, value.var
+            else:
+                return key
 
     def load_from(self, node) -> "StateSchema":
         """Load input/output connections from a node and its children as links.
 
         Uses duck typing - works with any object that has:
         - full_name (str): The node's full hierarchical name
-        - inputs (dict): Input connections {var: {source_node: source_var} or literal}
-        - outputs (dict): Output connections {var: {target_node: target_var} or literal}
+        - inputs (dict): Input connections {var: Ref or literal}
+        - outputs (dict): Output connections {var: Ref or literal}
         - input_schema (dict, optional): Schema with Param defaults
         - output_schema (dict, optional): Schema with Param defaults
         - _nodes (dict, optional): Child nodes for recursive loading
@@ -156,14 +184,12 @@ class StateSchema:
         output_schema = getattr(node, 'output_schema', {}) or {}
 
         # Load this node's input connections as links or defaults
-        # inputs={"x": other_node["y"]} means: node.x -> other_node.y (link)
+        # inputs={"x": Ref(other_node, "y")} means: node.x -> other_node.y (link)
         # inputs={"x": 0.7} means: node.x = 0.7 (default)
         for var_name, ref in inputs.items():
-            if isinstance(ref, dict) and ref:
+            if isinstance(ref, Ref):
                 # Reference to another node's output
-                ref_node, ref_var = next(iter(ref.items()))
-                if hasattr(ref_node, 'full_name'):
-                    self.link(node_name, var_name, ref_node.full_name, ref_var)
+                self.link(node_name, var_name, ref.node, ref.var)
             else:
                 # Literal value - store as default
                 self.set(node_name, var_name, ref)
@@ -179,13 +205,11 @@ class StateSchema:
                 self.set(node_name, var_name, param.default)
 
         # Load this node's output connections as links
-        # outputs={"result": father["result"]} means: father.result -> node.result
+        # outputs={"result": Ref(father, "result")} means: father.result -> node.result
         for var_name, ref in (node.outputs or {}).items():
-            if isinstance(ref, dict) and ref:
-                ref_node, ref_var = next(iter(ref.items()))
-                if hasattr(ref_node, 'full_name'):
-                    # Output connection: graph.var -> node.var
-                    self.link(ref_node.full_name, ref_var, node_name, var_name)
+            if isinstance(ref, Ref):
+                # Output connection: ref.node.ref.var -> node.var
+                self.link(ref.node, ref.var, node_name, var_name)
 
         # Recursively load children (for graph nodes)
         if hasattr(node, '_nodes') and node._nodes:
@@ -243,27 +267,20 @@ class StateSchema:
 
     def __iter__(self) -> Iterator[Tuple[str, str]]:
         """Iterate over all (node, var) pairs."""
-        seen = set()
-        for key in self.links:
-            if key not in seen:
-                seen.add(key)
-                yield key
-        for key in self.defaults:
-            if key not in seen:
-                seen.add(key)
-                yield key
+        return iter(self.values.keys())
 
     def __contains__(self, key: Tuple[str, str]) -> bool:
         """Check if (node, var) is registered."""
-        return key in self.links or key in self.defaults
+        return key in self.values
 
     def __len__(self) -> int:
         """Number of registered variables."""
-        all_vars = set(self.links.keys()) | set(self.defaults.keys())
-        return len(all_vars)
+        return len(self.values)
 
     def __repr__(self) -> str:
-        return f"StateSchema(name='{self.name}', links={len(self.links)}, defaults={len(self.defaults)})"
+        refs = sum(1 for v in self.values.values() if isinstance(v, Ref))
+        defaults = len(self.values) - refs
+        return f"StateSchema(name='{self.name}', refs={refs}, defaults={defaults})"
 
     # =========================================================================
     # Debug Methods
@@ -277,42 +294,24 @@ class StateSchema:
         """
         print(f"\n=== StateSchema: {self.name} ===")
 
-        # Collect all unique variables
-        all_vars = set(self.links.keys()) | set(self.defaults.keys())
+        # Collect all unique variables (including ref targets)
+        all_vars = set(self.values.keys())
+        for v in self.values.values():
+            if isinstance(v, Ref):
+                all_vars.add((v.node, v.var))
 
-        # Also include link targets
-        for source_node, source_var in self.links.values():
-            all_vars.add((source_node, source_var))
-
+        ref_count = 0
         for node, var in sorted(all_vars):
             parts = [f"{node}.{var}"]
 
-            # Check if this is a link source
-            if (node, var) in self.links:
-                target = self.links[(node, var)]
-                parts.append(f"-> {target[0]}.{target[1]}")
-
-            # Check if has default
-            if (node, var) in self.defaults:
-                default = self.defaults[(node, var)]
-                default_str = repr(default)[:50] + "..." if len(repr(default)) > 50 else repr(default)
-                parts.append(f"= {default_str}")
+            value = self.values.get((node, var))
+            if isinstance(value, Ref):
+                parts.append(f"-> {value.node}.{value.var}")
+                ref_count += 1
+            elif value is not None:
+                value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
+                parts.append(f"= {value_str}")
 
             print("  " + " ".join(parts))
 
-        print(f"\nTotal: {len(all_vars)} variables, {len(self.links)} links")
-
-    def show_links(self) -> None:
-        """Show only link mappings."""
-        print(f"\n=== Links in {self.name} ===")
-        for (node, var), (src_node, src_var) in self.links.items():
-            print(f"  {node}.{var} -> {src_node}.{src_var}")
-        print(f"Total: {len(self.links)} links")
-
-    def show_defaults(self) -> None:
-        """Show only default values."""
-        print(f"\n=== Defaults in {self.name} ===")
-        for (node, var), value in self.defaults.items():
-            value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
-            print(f"  {node}.{var} = {value_str}")
-        print(f"Total: {len(self.defaults)} defaults")
+        print(f"\nTotal: {len(all_vars)} variables, {ref_count} refs")

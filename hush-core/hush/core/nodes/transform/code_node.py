@@ -20,7 +20,7 @@ def code_node(func):
         def my_function(arg1, arg2):
             return {"result": value}
 
-        node = my_function(inputs={"arg1": INPUT, "arg2": "value"})
+        node = my_function(inputs={"arg1": PARENT, "arg2": "value"})
     """
     @wraps(func)
     def wrapper(inputs=None, name=None, **kwargs):
@@ -292,38 +292,57 @@ if __name__ == "__main__":
             "total": count * 2,  # (int) doubled count
             "status": "success",  # just a description, type defaults to Any
         }
+    
+    @code_node
+    def increment(x: int):
+        return {"x": x + 1}
 
     async def main():
-        # Test 1: Single-line return with type hint in comment
-        node = add_numbers(inputs={"a": 5, "b": 3})
-        print(f"Name: {node.name}")
-        print(f"Input schema: {node.input_schema}")
-        print(f"Output schema: {node.output_schema}")
+        # Test 0: increment function
+        inc = increment(inputs={"x": 5})
+        print(f"Name: {inc.name}")
+        print(f"Input schema: {inc.input_schema}")
+        print(f"Output schema: {inc.output_schema}")
 
-        schema = StateSchema("test")
+        schema = StateSchema("test0")
         state = schema.create_state()
-        result = await node.run(state)
-        print(f"Result: {result}")
+        result = await inc.run(state)
+        print(f"Increment Result: {result}")
 
-        # Test 2: Multi-line return with type hints and descriptions
-        proc = process_data(inputs={"name": "World", "count": 5})
-        print(f"\nProcess node output schema:")
-        for key, param in proc.output_schema.items():
-            print(f"  {key}: type={param.type}, desc='{param.description}'")
-        result2 = await proc.run(state)
-        print(f"Process result: {result2}")
+        print(inc.get_inputs(state, None))
+        print(inc.get_outputs(state, None))
+        state.show()
+        
+        # # Test 1: Single-line return with type hint in comment
+        # node = add_numbers(inputs={"a": 5, "b": 3})
+        # print(f"Name: {node.name}")
+        # print(f"Input schema: {node.input_schema}")
+        # print(f"Output schema: {node.output_schema}")
 
-        # Test 3: Quick test using __call__
-        print("\n" + "=" * 50)
-        print("Test 3: Quick test using __call__")
-        print("=" * 50)
+        # schema = StateSchema("test")
+        # state = schema.create_state()
+        # result = await node.run(state)
+        # print(f"Result: {result}")
 
-        node3 = add_numbers()
-        result3 = node3(a=10, b=20)
-        print(f"node3(a=10, b=20) = {result3}")
+        # # Test 2: Multi-line return with type hints and descriptions
+        # proc = process_data(inputs={"name": "World", "count": 5})
+        # print(f"\nProcess node output schema:")
+        # for key, param in proc.output_schema.items():
+        #     print(f"  {key}: type={param.type}, desc='{param.description}'")
+        # result2 = await proc.run(state)
+        # print(f"Process result: {result2}")
 
-        node4 = process_data()
-        result4 = node4(name="Alice", count=3)
-        print(f"node4(name='Alice', count=3) = {result4}")
+        # # Test 3: Quick test using __call__
+        # print("\n" + "=" * 50)
+        # print("Test 3: Quick test using __call__")
+        # print("=" * 50)
+
+        # node3 = add_numbers()
+        # result3 = node3(a=10, b=20)
+        # print(f"node3(a=10, b=20) = {result3}")
+
+        # node4 = process_data()
+        # result4 = node4(name="Alice", count=3)
+        # print(f"node4(name='Alice', count=3) = {result4}")
 
     asyncio.run(main())

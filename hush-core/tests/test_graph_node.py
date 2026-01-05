@@ -12,7 +12,7 @@ from hush.core import (
     GraphNode,
     CodeNode,
     code_node,
-    START, END, INPUT, OUTPUT,
+    START, END, PARENT,
     StateSchema,
 )
 
@@ -31,8 +31,8 @@ class TestSingleNodeGraph:
             node = CodeNode(
                 name="double",
                 code_fn=lambda x: {"result": x * 2},
-                inputs={"x": INPUT["x"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -52,7 +52,7 @@ class TestSingleNodeGraph:
             return {"result": x * 3}
 
         with GraphNode(name="decorator_graph") as graph:
-            node = triple(inputs={"x": INPUT["x"]}, outputs=OUTPUT)
+            node = triple(inputs={"x": PARENT["x"]}, outputs=PARENT)
             START >> node >> END
 
         graph.build()
@@ -70,7 +70,7 @@ class TestSingleNodeGraph:
             node = CodeNode(
                 name="compute",
                 code_fn=lambda x: {"result": x + 100},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             START >> node >> END
 
@@ -98,13 +98,13 @@ class TestLinearGraph:
             node_a = CodeNode(
                 name="add_10",
                 code_fn=lambda x: {"result": x + 10},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             node_b = CodeNode(
                 name="multiply_2",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": node_a["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
             START >> node_a >> node_b >> END
 
@@ -124,7 +124,7 @@ class TestLinearGraph:
             node_a = CodeNode(
                 name="add_10",
                 code_fn=lambda x: {"result": x + 10},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             node_b = CodeNode(
                 name="multiply_2",
@@ -135,7 +135,7 @@ class TestLinearGraph:
                 name="subtract_5",
                 code_fn=lambda x: {"result": x - 5},
                 inputs={"x": node_b["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
             START >> node_a >> node_b >> node_c >> END
 
@@ -152,11 +152,11 @@ class TestLinearGraph:
     async def test_long_chain(self):
         """Five nodes in a chain."""
         with GraphNode(name="long_chain") as graph:
-            n1 = CodeNode(name="n1", code_fn=lambda x: {"v": x + 1}, inputs={"x": INPUT["x"]})
+            n1 = CodeNode(name="n1", code_fn=lambda x: {"v": x + 1}, inputs={"x": PARENT["x"]})
             n2 = CodeNode(name="n2", code_fn=lambda x: {"v": x + 2}, inputs={"x": n1["v"]})
             n3 = CodeNode(name="n3", code_fn=lambda x: {"v": x + 3}, inputs={"x": n2["v"]})
             n4 = CodeNode(name="n4", code_fn=lambda x: {"v": x + 4}, inputs={"x": n3["v"]})
-            n5 = CodeNode(name="n5", code_fn=lambda x: {"v": x + 5}, inputs={"x": n4["v"]}, outputs=OUTPUT)
+            n5 = CodeNode(name="n5", code_fn=lambda x: {"v": x + 5}, inputs={"x": n4["v"]}, outputs=PARENT)
 
             START >> n1 >> n2 >> n3 >> n4 >> n5 >> END
 
@@ -184,7 +184,7 @@ class TestParallelGraph:
             start = CodeNode(
                 name="start",
                 code_fn=lambda x: {"value": x},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             branch_a = CodeNode(
                 name="branch_a",
@@ -200,7 +200,7 @@ class TestParallelGraph:
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
                 inputs={"a": branch_a["result"], "b": branch_b["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> start >> [branch_a, branch_b] >> merge >> END
@@ -221,7 +221,7 @@ class TestParallelGraph:
             start = CodeNode(
                 name="start",
                 code_fn=lambda x: {"value": x},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             b1 = CodeNode(name="b1", code_fn=lambda x: {"r": x * 2}, inputs={"x": start["value"]})
             b2 = CodeNode(name="b2", code_fn=lambda x: {"r": x * 3}, inputs={"x": start["value"]})
@@ -231,7 +231,7 @@ class TestParallelGraph:
                 name="merge",
                 code_fn=lambda a, b, c: {"total": a + b + c},
                 inputs={"a": b1["r"], "b": b2["r"], "c": b3["r"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> start >> [b1, b2, b3] >> merge >> END
@@ -249,14 +249,14 @@ class TestParallelGraph:
     async def test_diamond_pattern(self):
         """Diamond: A -> [B, C] -> D (classic DAG pattern)."""
         with GraphNode(name="diamond") as graph:
-            a = CodeNode(name="a", code_fn=lambda x: {"out": x}, inputs={"x": INPUT["x"]})
+            a = CodeNode(name="a", code_fn=lambda x: {"out": x}, inputs={"x": PARENT["x"]})
             b = CodeNode(name="b", code_fn=lambda x: {"out": x + 100}, inputs={"x": a["out"]})
             c = CodeNode(name="c", code_fn=lambda x: {"out": x + 200}, inputs={"x": a["out"]})
             d = CodeNode(
                 name="d",
                 code_fn=lambda x, y: {"result": x + y},
                 inputs={"x": b["out"], "y": c["out"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> a >> [b, c] >> d >> END
@@ -278,18 +278,18 @@ class TestParallelGraph:
             branch_a = CodeNode(
                 name="branch_a",
                 code_fn=lambda x: {"result": x * 10},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             branch_b = CodeNode(
                 name="branch_b",
                 code_fn=lambda y: {"result": y + 5},
-                inputs={"y": INPUT["y"]}
+                inputs={"y": PARENT["y"]}
             )
             merge = CodeNode(
                 name="merge",
                 code_fn=lambda a, b: {"sum": a + b},
                 inputs={"a": branch_a["result"], "b": branch_b["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> [branch_a, branch_b] >> merge >> END
@@ -318,8 +318,8 @@ class TestMultipleIO:
             node = CodeNode(
                 name="add",
                 code_fn=lambda a, b, c: {"sum": a + b + c},
-                inputs={"a": INPUT["a"], "b": INPUT["b"], "c": INPUT["c"]},
-                outputs=OUTPUT
+                inputs={"a": PARENT["a"], "b": PARENT["b"], "c": PARENT["c"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -338,8 +338,8 @@ class TestMultipleIO:
             node = CodeNode(
                 name="split",
                 code_fn=lambda x: {"double": x * 2, "triple": x * 3, "quad": x * 4},
-                inputs={"x": INPUT["x"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -360,8 +360,8 @@ class TestMultipleIO:
             node = CodeNode(
                 name="compute",
                 code_fn=lambda x: {"a": x + 1, "b": x + 2, "c": x + 3},
-                inputs={"x": INPUT["x"]},
-                outputs={"a": OUTPUT["result_a"], "c": OUTPUT["result_c"]}
+                inputs={"x": PARENT["x"]},
+                outputs={"a": PARENT["result_a"], "c": PARENT["result_c"]}
             )
             START >> node >> END
 
@@ -394,8 +394,8 @@ class TestComplexDataTypes:
                     "values": list(data.values()),
                     "count": len(data)
                 },
-                inputs={"data": INPUT["data"]},
-                outputs=OUTPUT
+                inputs={"data": PARENT["data"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -416,13 +416,13 @@ class TestComplexDataTypes:
             double = CodeNode(
                 name="double",
                 code_fn=lambda items: {"result": [x * 2 for x in items]},
-                inputs={"items": INPUT["items"]}
+                inputs={"items": PARENT["items"]}
             )
             sum_all = CodeNode(
                 name="sum",
                 code_fn=lambda items: {"total": sum(items)},
                 inputs={"items": double["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
             START >> double >> sum_all >> END
 
@@ -442,13 +442,13 @@ class TestComplexDataTypes:
             upper = CodeNode(
                 name="upper",
                 code_fn=lambda text: {"result": text.upper()},
-                inputs={"text": INPUT["text"]}
+                inputs={"text": PARENT["text"]}
             )
             reverse = CodeNode(
                 name="reverse",
                 code_fn=lambda text: {"result": text[::-1]},
                 inputs={"text": upper["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
             START >> upper >> reverse >> END
 
@@ -482,8 +482,8 @@ class TestAsyncOperations:
                 name="double",
                 code_fn=async_double,
                 return_keys=["result"],
-                inputs={"x": INPUT["x"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -511,14 +511,14 @@ class TestAsyncOperations:
                 name="add",
                 code_fn=async_add,
                 return_keys=["result"],
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             mult = CodeNode(
                 name="multiply",
                 code_fn=async_multiply,
                 return_keys=["result"],
                 inputs={"x": add["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
             START >> add >> mult >> END
 
@@ -552,7 +552,7 @@ class TestAsyncOperations:
             start = CodeNode(
                 name="start",
                 code_fn=lambda x: {"value": x},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             a = CodeNode(name="a", code_fn=slow_a, inputs={"x": start["value"]})
             b = CodeNode(name="b", code_fn=slow_b, inputs={"x": start["value"]})
@@ -560,7 +560,7 @@ class TestAsyncOperations:
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
                 inputs={"a": a["result"], "b": b["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> start >> [a, b] >> merge >> END
@@ -594,8 +594,8 @@ class TestErrorHandling:
             node = CodeNode(
                 name="failing",
                 code_fn=failing_fn,
-                inputs={"x": INPUT["x"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -616,7 +616,7 @@ class TestErrorHandling:
             first = CodeNode(
                 name="first",
                 code_fn=lambda x: {"result": x + 10},
-                inputs={"x": INPUT["x"]}
+                inputs={"x": PARENT["x"]}
             )
             failing = CodeNode(
                 name="failing",
@@ -627,7 +627,7 @@ class TestErrorHandling:
                 name="last",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": failing["result"]},
-                outputs=OUTPUT
+                outputs=PARENT
             )
 
             START >> first >> failing >> last >> END
@@ -660,8 +660,8 @@ class TestEdgeCases:
             node = CodeNode(
                 name="handle_empty",
                 code_fn=lambda x: {"result": x if x else "default"},
-                inputs={"x": INPUT["x"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -680,8 +680,8 @@ class TestEdgeCases:
             node = CodeNode(
                 name="process",
                 code_fn=lambda data: {"count": len(data), "sum": sum(data)},
-                inputs={"data": INPUT["data"]},
-                outputs=OUTPUT
+                inputs={"data": PARENT["data"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -702,8 +702,8 @@ class TestEdgeCases:
             node = CodeNode(
                 name="process",
                 code_fn=lambda text: {"result": f"Processed: {text}"},
-                inputs={"text": INPUT["text"]},
-                outputs=OUTPUT
+                inputs={"text": PARENT["text"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -722,8 +722,8 @@ class TestEdgeCases:
             node = CodeNode(
                 name="compute",
                 code_fn=lambda x, y: {"sum": x + y, "product": x * y},
-                inputs={"x": INPUT["x"], "y": INPUT["y"]},
-                outputs=OUTPUT
+                inputs={"x": PARENT["x"], "y": PARENT["y"]},
+                outputs=PARENT
             )
             START >> node >> END
 
@@ -752,7 +752,7 @@ class TestCodeNodeDecorator:
             return {"result": x + 1}
 
         with GraphNode(name="decorator_basic") as graph:
-            node = add_one(inputs={"x": INPUT["x"]}, outputs=OUTPUT)
+            node = add_one(inputs={"x": PARENT["x"]}, outputs=PARENT)
             START >> node >> END
 
         graph.build()
@@ -771,7 +771,7 @@ class TestCodeNodeDecorator:
             return {"result": x + amount}
 
         with GraphNode(name="decorator_defaults") as graph:
-            node = add(inputs={"x": INPUT["x"]}, outputs=OUTPUT)
+            node = add(inputs={"x": PARENT["x"]}, outputs=PARENT)
             START >> node >> END
 
         graph.build()
@@ -799,9 +799,9 @@ class TestCodeNodeDecorator:
             return {"result": x ** 2}
 
         with GraphNode(name="decorator_pipeline") as graph:
-            n1 = step1(inputs={"x": INPUT["x"]})
+            n1 = step1(inputs={"x": PARENT["x"]})
             n2 = step2(inputs={"x": n1["value"]})
-            n3 = step3(inputs={"x": n2["value"]}, outputs=OUTPUT)
+            n3 = step3(inputs={"x": n2["value"]}, outputs=PARENT)
 
             START >> n1 >> n2 >> n3 >> END
 

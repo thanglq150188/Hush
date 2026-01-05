@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, Optional, Tuple
 
+from hush.core.states.ref import Ref
 from hush.core.states.schema import StateSchema
 from hush.core.states.base import BaseState
 
@@ -33,10 +34,11 @@ class MemoryState(BaseState):
         session_id: str = None,
         request_id: str = None,
     ) -> None:
-        # Copy defaults from schema - each state has its own values
+        # Copy defaults from schema - each state has its own values (skip Refs)
         self._data: Dict[Tuple[str, str, str], Any] = {
             (node, var, "main"): value
-            for (node, var), value in schema.defaults.items()
+            for (node, var), value in schema.values.items()
+            if not isinstance(value, Ref)
         }
         super().__init__(schema, inputs, user_id=user_id, session_id=session_id, request_id=request_id)
 

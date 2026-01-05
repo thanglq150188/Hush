@@ -313,7 +313,7 @@ class StreamNode(IterationNode):
 
 if __name__ == "__main__":
     from hush.core.states import StateSchema
-    from hush.core.nodes.base import START, END, INPUT, OUTPUT
+    from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import code_node
 
     async def main():
@@ -347,7 +347,7 @@ if __name__ == "__main__":
             inputs={"input_stream": simple_source()},
             outputs={"output_handler": collect_results}
         ) as stream_node:
-            processor = process_chunk(inputs=INPUT, outputs=OUTPUT)
+            processor = process_chunk(inputs=PARENT, outputs=PARENT)
             START >> processor >> END
 
         stream_node.build()
@@ -401,7 +401,7 @@ if __name__ == "__main__":
             },
             outputs={"output_handler": collect_batches}
         ) as stream_node2:
-            processor = process_batch(inputs=INPUT, outputs=OUTPUT)
+            processor = process_batch(inputs=PARENT, outputs=PARENT)
             START >> processor >> END
 
         stream_node2.build()
