@@ -1,9 +1,9 @@
 """Base node class for all workflow nodes."""
 
 from abc import ABC
-from functools import lru_cache
 from typing import Dict, Any, Callable, Optional, List, TYPE_CHECKING
 from datetime import datetime
+from time import perf_counter
 import traceback
 import asyncio
 import uuid
@@ -137,10 +137,11 @@ class BaseNode(ABC):
         if isinstance(connections, dict):
             result = {}
             for key, value in connections.items():
-                # Handle Ref directly
+                # Handle Ref directly - preserve operations!
                 if isinstance(value, Ref):
                     resolved = resolve_node(value.raw_node)
-                    result[key] = Ref(resolved, value.var)
+                    # Preserve the _ops when creating new Ref with resolved node
+                    result[key] = Ref(resolved, value.var, value.ops)
                 # Handle old dict format {"var": node["other_var"]} for backward compat
                 elif isinstance(value, dict) and value:
                     ref_node, ref_var = next(iter(value.items()))
@@ -258,13 +259,15 @@ class BaseNode(ABC):
     def is_base_node(self) -> bool:
         return True
 
-    # @lru_cache(maxsize=128)
     def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve input values from state based on connection mappings.
 
         Reads directly from referenced node's output location, bypassing schema links.
         This is because schema links represent INPUT connections (for graph inputs),
         but here we're reading OUTPUT values from other nodes.
+
+        If the Ref has operations recorded (e.g., ref['key'].apply(len)),
+        those operations are executed on the retrieved value.
         """
         result = {}
 
@@ -272,14 +275,17 @@ class BaseNode(ABC):
             if isinstance(ref, Ref):
                 # Reference to another node's output - read directly from that location
                 # Don't use state[...] which would follow schema links meant for inputs
-                result[var_name] = state._get_value(ref.node, ref.var, context_id)
+                value = state._get_value(ref.node, ref.var, context_id)
+                # Execute any recorded operations on the value
+                if ref.has_ops:
+                    value = ref.execute(value)
+                result[var_name] = value
             else:
                 # Literal value
                 result[var_name] = ref
 
         return result
 
-    # @lru_cache(maxsize=128)
     def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve output values from state.
 
@@ -337,6 +343,7 @@ class BaseNode(ABC):
 
         request_id = state.request_id
         start_time = datetime.now()
+        perf_start = perf_counter()
         _inputs = {}
         _outputs = {}
 
@@ -358,7 +365,7 @@ class BaseNode(ABC):
 
         finally:
             end_time = datetime.now()
-            duration_ms = (end_time - start_time).total_seconds() * 1000
+            duration_ms = (perf_counter() - perf_start) * 1000
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time

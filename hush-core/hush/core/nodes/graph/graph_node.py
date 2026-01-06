@@ -1,16 +1,19 @@
 """Graph node for managing subgraphs of workflow nodes."""
 
 from datetime import datetime
+from time import perf_counter
 from typing import Dict, List, Literal, Any, Optional
 from collections import defaultdict
 import asyncio
+import traceback
 
 from hush.core.configs.edge_config import EdgeConfig, EdgeType
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.base import BaseNode, END
+from hush.core.nodes.base import BaseNode, START, END, PARENT
 from hush.core.states import BaseState, StateSchema, Ref
 from hush.core.utils.context import _current_graph
 from hush.core.utils.bimap import BiMap
+from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
 
 
@@ -83,8 +86,6 @@ class GraphNode(BaseNode):
 
     def _setup_schema(self):
         """Initialize input/output schema and inputs dictionary."""
-        from hush.core.utils.common import Param
-
         LOGGER.debug(f"Graph '{self.name}': creating schema...")
         input_schema = {}
         output_schema = {}
@@ -157,8 +158,8 @@ class GraphNode(BaseNode):
             prev_count = len(self.prevs[name])
             next_count = len(self.nexts[name])
 
-            # Check for orphan nodes (not start/end and no connections)
-            if prev_count == 0 and next_count == 0 and not node.start and not node.end:
+            # Check for orphan nodes (not start/end, not inner graph, and no connections)
+            if prev_count == 0 and next_count == 0 and not node.start and not node.end and name != BaseNode.INNER_PROCESS:
                 orphan_nodes.append(name)
 
             flow_type: NodeFlowType = "OTHER"
@@ -183,7 +184,7 @@ class GraphNode(BaseNode):
         # Warn about orphan nodes
         if orphan_nodes:
             LOGGER.warning(
-                f"Graph '{self.name}': orphan nodes detected (no edges): {orphan_nodes}. "
+                f"Graph '{self.full_name}': orphan nodes detected (no edges): {orphan_nodes}. "
                 "These nodes will never be executed."
             )
 
@@ -213,8 +214,6 @@ class GraphNode(BaseNode):
 
     def add_node(self, node: BaseNode) -> BaseNode:
         """Add a node to the graph."""
-        from hush.core.nodes.base import START, END
-
         if not self._is_building:
             raise RuntimeError("Cannot add nodes after graph has been built")
 
@@ -241,8 +240,6 @@ class GraphNode(BaseNode):
 
     def add_edge(self, source: str, target: str, type: EdgeType = "normal"):
         """Add an edge between two nodes."""
-        from hush.core.nodes.base import START, END, PARENT
-
         if not self._is_building:
             raise RuntimeError("Cannot add edges after graph has been built!")
 
@@ -310,6 +307,7 @@ class GraphNode(BaseNode):
 
         request_id = state.request_id
         start_time = datetime.now()
+        perf_start = perf_counter()
         _inputs = {}
         _outputs = {}
 
@@ -367,16 +365,14 @@ class GraphNode(BaseNode):
             _outputs = self.get_outputs(state, context_id=context_id)
 
         except Exception as e:
-            import traceback
             error_msg = traceback.format_exc()
             LOGGER.error(f"Error in node {self.name}: {str(e)}")
             LOGGER.error(error_msg)
-
             state[self.full_name, "error", context_id] = error_msg
 
         finally:
             end_time = datetime.now()
-            duration_ms = (end_time - start_time).total_seconds() * 1000
+            duration_ms = (perf_counter() - perf_start) * 1000
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
@@ -384,7 +380,6 @@ class GraphNode(BaseNode):
 
 
 if __name__ == "__main__":
-    from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import CodeNode
 
     async def main():
@@ -429,6 +424,197 @@ if __name__ == "__main__":
         print(f"Result: {result}")
 
         state.show()
+
+        # =================================================================
+        # Test 2: Ref with operations (new Ref feature)
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 2: Ref with operations (getitem, apply)")
+        print("=" * 60)
+
+        with GraphNode(name="ref_ops_graph") as graph2:
+            # Node A returns a dict with nested data
+            node_a = CodeNode(
+                name="data_source",
+                code_fn=lambda: {"data": {"items": [1, 2, 3, 4, 5], "name": "test"}},
+                inputs={}
+            )
+
+            # Node B uses Ref with getitem to extract nested value
+            node_b = CodeNode(
+                name="extract_items",
+                code_fn=lambda items: {"count": len(items), "sum": sum(items)},
+                inputs={"items": node_a["data"]["items"]}  # Ref with chained getitem
+            )
+
+            # Node C uses Ref with apply to transform data
+            node_c = CodeNode(
+                name="transform_name",
+                code_fn=lambda name: {"upper_name": name},
+                inputs={"name": node_a["data"]["name"].upper()}  # Ref with method call
+            )
+
+            # Node D merges results
+            node_d = CodeNode(
+                name="merge_results",
+                code_fn=lambda count, total, name: {"result": f"{name}: {count} items, sum={total}"},
+                inputs={
+                    "count": node_b["count"],
+                    "total": node_b["sum"],
+                    "name": node_c["upper_name"]
+                },
+                outputs={"result": PARENT["result"]}
+            )
+
+            START >> node_a >> [node_b, node_c] >> node_d >> END
+
+        graph2.build()
+
+        schema2 = StateSchema(graph2)
+        state2 = schema2.create_state()
+
+        result2 = await graph2.run(state2)
+        print(f"Result: {result2}")
+        print(f"Expected: {{'result': 'TEST: 5 items, sum=15'}}")
+        assert result2["result"] == "TEST: 5 items, sum=15", f"Got: {result2}"
+
+        # =================================================================
+        # Test 3: Ref with apply() for function application
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 3: Ref with apply() for function application")
+        print("=" * 60)
+
+        with GraphNode(name="ref_apply_graph") as graph3:
+            # Node A returns a list
+            node_a = CodeNode(
+                name="list_source",
+                code_fn=lambda: {"numbers": [5, 2, 8, 1, 9, 3]},
+                inputs={}
+            )
+
+            # Node B uses Ref.apply(len) to get length
+            node_b = CodeNode(
+                name="get_length",
+                code_fn=lambda length: {"length": length},
+                inputs={"length": node_a["numbers"].apply(len)}
+            )
+
+            # Node C uses Ref.apply(sorted) to sort
+            node_c = CodeNode(
+                name="sort_numbers",
+                code_fn=lambda sorted_nums: {"sorted": sorted_nums},
+                inputs={"sorted_nums": node_a["numbers"].apply(sorted)}
+            )
+
+            # Node D uses Ref.apply(sum) to get sum
+            node_d = CodeNode(
+                name="sum_numbers",
+                code_fn=lambda total: {"total": total},
+                inputs={"total": node_a["numbers"].apply(sum)}
+            )
+
+            # Node E merges all results
+            node_e = CodeNode(
+                name="merge_all",
+                code_fn=lambda length, sorted_nums, total: {
+                    "length": length,
+                    "sorted": sorted_nums,
+                    "total": total
+                },
+                inputs={
+                    "length": node_b["length"],
+                    "sorted_nums": node_c["sorted"],
+                    "total": node_d["total"]
+                },
+                outputs=PARENT
+            )
+
+            START >> node_a >> [node_b, node_c, node_d] >> node_e >> END
+
+        graph3.build()
+
+        schema3 = StateSchema(graph3)
+        state3 = schema3.create_state()
+
+        result3 = await graph3.run(state3)
+        print(f"Result: {result3}")
+        print(f"Expected length: 6, sorted: [1, 2, 3, 5, 8, 9], total: 28")
+        assert result3["length"] == 6
+        assert result3["sorted"] == [1, 2, 3, 5, 8, 9]
+        assert result3["total"] == 28
+
+        # =================================================================
+        # Test 4: Ref with chained operations
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 4: Ref with chained operations")
+        print("=" * 60)
+
+        with GraphNode(name="ref_chain_graph") as graph4:
+            node_a = CodeNode(
+                name="data_source",
+                code_fn=lambda: {"data": {"users": [{"name": "alice"}, {"name": "bob"}]}},
+                inputs={}
+            )
+
+            # Chain: data["users"][0]["name"].upper()
+            node_b = CodeNode(
+                name="get_first_user_upper",
+                code_fn=lambda name: {"first_user": name},
+                inputs={"name": node_a["data"]["users"][0]["name"].upper()},
+                outputs=PARENT
+            )
+
+            START >> node_a >> node_b >> END
+
+        graph4.build()
+
+        schema4 = StateSchema(graph4)
+        state4 = schema4.create_state()
+
+        result4 = await graph4.run(state4)
+        print(f"Result: {result4}")
+        print(f"Expected: {{'first_user': 'ALICE'}}")
+        assert result4["first_user"] == "ALICE"
+
+        # =================================================================
+        # Test 5: Ref with arithmetic operations
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 5: Ref with arithmetic operations")
+        print("=" * 60)
+
+        with GraphNode(name="ref_arithmetic_graph") as graph5:
+            node_a = CodeNode(
+                name="number_source",
+                code_fn=lambda: {"value": 10},
+                inputs={}
+            )
+
+            # Use arithmetic: (value + 5) * 2
+            node_b = CodeNode(
+                name="compute",
+                code_fn=lambda result: {"result": result},
+                inputs={"result": (node_a["value"] + 5) * 2},
+                outputs=PARENT
+            )
+
+            START >> node_a >> node_b >> END
+
+        graph5.build()
+
+        schema5 = StateSchema(graph5)
+        state5 = schema5.create_state()
+
+        result5 = await graph5.run(state5)
+        print(f"Result: {result5}")
+        print(f"Expected: {{'result': 30}}  # (10 + 5) * 2")
+        assert result5["result"] == 30
+
+        print("\n" + "=" * 60)
+        print("All Ref operation tests passed!")
+        print("=" * 60)
 
         # print("\n" + "=" * 60)
         # print("Test 2: Parallel graph (A -> [B, C] -> D)")
