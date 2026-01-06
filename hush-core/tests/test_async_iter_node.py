@@ -1,13 +1,13 @@
-"""Test StreamNode with WorkflowEngine"""
+"""Test AsyncIterNode with WorkflowEngine"""
 import asyncio
 import uuid
 import logging
-from hush.core import WorkflowEngine, StreamNode, CodeNode, START, END, INPUT, OUTPUT, STREAM_SERVICE
+from hush.core import WorkflowEngine, AsyncIterNode, CodeNode, START, END, INPUT, OUTPUT, STREAM_SERVICE
 
 # Enable logging (set to WARNING to reduce noise)
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-# Only show StreamNode logs
-logging.getLogger('hush.core.nodes.flow.stream_node').setLevel(logging.INFO)
+# Only show AsyncIterNode logs
+logging.getLogger('hush.core.nodes.iteration.async_iter_node').setLevel(logging.INFO)
 
 
 def process_chunk(content: str, timestamp: float) -> dict:
@@ -43,8 +43,8 @@ async def main():
         description="Real-time streaming data processing workflow"
     ) as workflow:
 
-        # StreamNode with inner graph
-        with StreamNode(
+        # AsyncIterNode with inner graph
+        with AsyncIterNode(
             name="stream_processor",
             description="Process chunks as they stream",
             inputs={

@@ -17,7 +17,7 @@ class IterationNode(BaseNode):
     Provides common functionality for:
     - ForLoopNode: Iterates over a collection concurrently
     - WhileLoopNode: Iterates while a condition is true
-    - StreamNode: Processes streaming data with ordered output
+    - AsyncIterNode: Processes streaming data with ordered output
 
     All iteration nodes share:
     - An inner GraphNode that holds the loop body
