@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
+from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
@@ -59,11 +60,10 @@ class WhileLoopNode(IterationNode):
     def _compile_condition(self, condition: str):
         """Compile the stop condition for performance."""
         try:
-            compiled_code = compile(condition, f'<stop_condition: {condition}>', 'eval')
-            return compiled_code
+            return compile(condition, f'<stop_condition: {condition}>', 'eval')
         except SyntaxError as e:
             LOGGER.error(f"Invalid stop_condition syntax '{condition}': {e}")
-            raise ValueError(f"Invalid stop_condition syntax: {condition}")
+            raise ValueError(f"Invalid stop_condition syntax: {condition}") from e
 
     def _evaluate_stop_condition(self, inputs: Dict[str, Any]) -> bool:
         """Evaluate the stop condition against current inputs.
@@ -83,8 +83,8 @@ class WhileLoopNode(IterationNode):
 
     def _post_build(self):
         """Set input/output schema from inner graph after build."""
-        self.input_schema = self._graph.input_schema.copy() if self._graph.input_schema else {}
-        self.output_schema = self._graph.output_schema.copy() if self._graph.output_schema else {}
+        self.input_schema = (self._graph.input_schema or {}).copy()
+        self.output_schema = (self._graph.output_schema or {}).copy()
 
         # Ensure inputs in self.inputs are in schema
         for key in self.inputs:
@@ -93,14 +93,12 @@ class WhileLoopNode(IterationNode):
 
         # Add variables from stop_condition to input schema
         if self._stop_condition:
-            condition_vars = extract_condition_variables(self._stop_condition)
-            for var_name in condition_vars:
+            for var_name in extract_condition_variables(self._stop_condition):
                 if var_name not in self.input_schema:
                     self.input_schema[var_name] = Param(type=Any, required=False)
 
         # Add iteration_metrics to output schema
-        if "iteration_metrics" not in self.output_schema:
-            self.output_schema["iteration_metrics"] = Param(type=Dict, required=False)
+        self.output_schema.setdefault("iteration_metrics", Param(type=Dict, required=False))
 
     async def run(
         self,
@@ -118,39 +116,24 @@ class WhileLoopNode(IterationNode):
 
         try:
             _inputs = self.get_inputs(state, context_id)
-            step_count = 0
             step_inputs = _inputs
-
-            # Track latencies for metrics
             latencies_ms: List[float] = []
-            success_count = 0
-            error_count = 0
+            step_count = 0
 
             # Check stop condition before first iteration
             should_stop = self._evaluate_stop_condition(step_inputs)
 
             while not should_stop and step_count < self._max_iterations:
                 step_name = f"while-{step_count}"
-                iter_start_time = datetime.now()
+                iter_start = perf_counter()
 
                 self.inject_inputs(state, step_inputs, step_name)
+                _outputs = await self._graph.run(state, context_id=step_name)
 
-                try:
-                    _outputs = await self._graph.run(state, context_id=step_name)
-                    success_count += 1
-                except Exception as e:
-                    error_count += 1
-                    raise e
-                finally:
-                    iter_end_time = datetime.now()
-                    latency = (iter_end_time - iter_start_time).total_seconds() * 1000
-                    latencies_ms.append(latency)
+                latencies_ms.append((perf_counter() - iter_start) * 1000)
 
-                # Get updated outputs for next iteration
                 # Merge outputs with previous inputs to preserve unchanged variables
-                # (e.g., if 'step' is an input but not in outputs, keep its value)
-                graph_outputs = self._graph.get_outputs(state, context_id=step_name)
-                step_inputs = {**step_inputs, **graph_outputs}
+                step_inputs = {**step_inputs, **self._graph.get_outputs(state, context_id=step_name)}
                 step_count += 1
 
                 # Check stop condition after iteration
@@ -164,12 +147,12 @@ class WhileLoopNode(IterationNode):
                     "This may indicate an infinite loop or incorrect stop condition."
                 )
 
-            # Calculate iteration metrics
+            # Calculate iteration metrics (all completed iterations succeeded, errors propagate)
             iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
             iteration_metrics.update({
                 "total_iterations": step_count,
-                "success_count": success_count,
-                "error_count": error_count,
+                "success_count": step_count,
+                "error_count": 0,
                 "max_iterations_reached": step_count >= self._max_iterations,
                 "stopped_by_condition": should_stop,
             })
@@ -338,6 +321,173 @@ if __name__ == "__main__":
         result4 = await loop4.run(state4)
         print(f"\nResult: {result4}")
         print(f"Iterations: {result4.get('iteration_metrics', {}).get('total_iterations')}")
+
+        # =================================================================
+        # Test 5: Ref with operations (nested access)
+        # =================================================================
+        print("\n" + "=" * 50)
+        print("Test 5: Ref with operations (nested access in initial inputs)")
+        print("=" * 50)
+
+        from hush.core.nodes.graph.graph_node import GraphNode
+
+        @code_node
+        def get_config():
+            return {
+                "config": {
+                    "settings": {
+                        "start_value": 0,
+                        "increment": 3,
+                        "limit": 10
+                    }
+                }
+            }
+
+        @code_node
+        def increment_by(counter: int, step: int):
+            new_counter = counter + step
+            return {"new_counter": new_counter}
+
+        with GraphNode(name="ref_while_graph") as graph5:
+            config_node = get_config()
+
+            # Use Ref operations to extract nested config values
+            with WhileLoopNode(
+                name="ref_loop",
+                inputs={
+                    "counter": config_node["config"]["settings"]["start_value"],
+                    "step": config_node["config"]["settings"]["increment"]
+                },
+                stop_condition="counter >= 10"
+            ) as loop5:
+                node = increment_by(
+                    inputs={"counter": PARENT["counter"], "step": PARENT["step"]},
+                    outputs={"new_counter": PARENT["counter"]}
+                )
+                START >> node >> END
+
+            START >> config_node >> loop5 >> END
+
+        graph5.build()
+
+        schema5 = StateSchema(graph5)
+        state5 = schema5.create_state()
+
+        await graph5.run(state5)
+
+        # Get results directly from state since WhileLoopNode output propagation
+        # to parent GraphNode is a separate concern from Ref operations
+        loop_result = state5._get_value(loop5.full_name, "iteration_metrics", None)
+        iterations5 = loop_result.get('total_iterations', 0) if loop_result else 0
+        print(f"Iterations: {iterations5}")
+        print(f"Expected: 4 iterations (0->3->6->9->12, stops when >=10)")
+        assert iterations5 == 4
+        print("Test 5 passed - Ref operations extracted nested config correctly!")
+
+        # =================================================================
+        # Test 6: Ref with nested access for counter
+        # =================================================================
+        print("\n" + "=" * 50)
+        print("Test 6: Ref with nested access for counter value")
+        print("=" * 50)
+
+        @code_node
+        def get_nested_counter():
+            return {"data": {"counters": {"current": 0, "target": 5}}}
+
+        @code_node
+        def increment_counter(counter: int):
+            return {"new_counter": counter + 1}
+
+        with GraphNode(name="nested_counter_graph") as graph6:
+            data_node = get_nested_counter()
+
+            # Use Ref with nested access to extract initial counter
+            with WhileLoopNode(
+                name="nested_loop",
+                inputs={
+                    "counter": data_node["data"]["counters"]["current"],
+                    "target": data_node["data"]["counters"]["target"]
+                },
+                stop_condition="counter >= target"
+            ) as loop6:
+                node = increment_counter(
+                    inputs={"counter": PARENT["counter"]},
+                    outputs={"new_counter": PARENT["counter"]}
+                )
+                START >> node >> END
+
+            START >> data_node >> loop6 >> END
+
+        graph6.build()
+
+        schema6 = StateSchema(graph6)
+        state6 = schema6.create_state()
+
+        await graph6.run(state6)
+
+        # Get results directly from state
+        loop_result6 = state6._get_value(loop6.full_name, "iteration_metrics", None)
+        iterations6 = loop_result6.get('total_iterations', 0) if loop_result6 else 0
+        print(f"Iterations: {iterations6}")
+        print(f"Expected: 5 iterations (counting from 0 to 5)")
+        assert iterations6 == 5
+        print("Test 6 passed - Ref with nested counter access works!")
+
+        # =================================================================
+        # Test 7: Ref with chained operations for string processing
+        # =================================================================
+        print("\n" + "=" * 50)
+        print("Test 7: Ref with chained operations for string processing")
+        print("=" * 50)
+
+        @code_node
+        def get_text_config():
+            return {
+                "text_config": {
+                    "initial": "HELLO",
+                    "chars_to_add": 3
+                }
+            }
+
+        @code_node
+        def append_char(text: str, count: int):
+            new_text = text + "x"
+            new_count = count - 1
+            return {"new_text": new_text, "new_count": new_count}
+
+        with GraphNode(name="string_while_graph") as graph7:
+            text_node = get_text_config()
+
+            with WhileLoopNode(
+                name="string_loop",
+                inputs={
+                    "text": text_node["text_config"]["initial"],
+                    "count": text_node["text_config"]["chars_to_add"]
+                },
+                stop_condition="count <= 0"
+            ) as loop7:
+                node = append_char(
+                    inputs={"text": PARENT["text"], "count": PARENT["count"]},
+                    outputs={"new_text": PARENT["text"], "new_count": PARENT["count"]}
+                )
+                START >> node >> END
+
+            START >> text_node >> loop7 >> END
+
+        graph7.build()
+
+        schema7 = StateSchema(graph7)
+        state7 = schema7.create_state()
+
+        await graph7.run(state7)
+
+        # Get results directly from state
+        final_text = state7._get_value(loop7.full_name, "text", None)
+        print(f"Final text: {final_text}")
+        print(f"Expected: 'HELLOxxx' (3 x's added)")
+        assert final_text == 'HELLOxxx'
+        print("Test 7 passed - Ref with chained string operations works!")
 
         print("\n" + "=" * 50)
         print("All tests passed!")
