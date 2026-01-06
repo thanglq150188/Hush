@@ -21,7 +21,7 @@ def batch_by_size(n: int) -> Callable[[List, Any], bool]:
     return lambda batch, _: len(batch) >= n
 
 
-class StreamNode(IterationNode):
+class AsyncIterNode(IterationNode):
     """
     A streaming node that processes async data with optional dynamic batching.
 
@@ -41,7 +41,7 @@ class StreamNode(IterationNode):
     __slots__ = ['_max_concurrency']
 
     def __init__(self, max_concurrency: Optional[int] = None, **kwargs):
-        """Initialize a StreamNode.
+        """Initialize a AsyncIterNode.
 
         Args:
             max_concurrency: Maximum number of concurrent chunk processing tasks.
@@ -108,7 +108,7 @@ class StreamNode(IterationNode):
             callback: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("callback")
 
             if source is None:
-                LOGGER.warning(f"StreamNode '{self.full_name}': source is None. No data will be processed.")
+                LOGGER.warning(f"AsyncIterNode '{self.full_name}': source is None. No data will be processed.")
 
             semaphore = asyncio.Semaphore(self._max_concurrency)
             result_queue: asyncio.Queue = asyncio.Queue()
@@ -205,7 +205,7 @@ class StreamNode(IterationNode):
             # Warn if high error rate (>10%)
             if total_chunks > 0 and error_count / total_chunks > 0.1:
                 LOGGER.warning(
-                    f"StreamNode '{self.full_name}': high error rate ({error_count / total_chunks:.1%}). "
+                    f"AsyncIterNode '{self.full_name}': high error rate ({error_count / total_chunks:.1%}). "
                     f"{error_count}/{total_chunks} chunks failed."
                 )
 
@@ -219,7 +219,7 @@ class StreamNode(IterationNode):
                 }
                 if handler_error_count / len(handler_latencies) > 0.05:
                     LOGGER.warning(
-                        f"StreamNode '{self.full_name}': high handler error rate ({handler_error_count / len(handler_latencies):.1%})."
+                        f"AsyncIterNode '{self.full_name}': high handler error rate ({handler_error_count / len(handler_latencies):.1%})."
                     )
 
             _outputs["iteration_metrics"] = iteration_metrics
@@ -278,7 +278,7 @@ if __name__ == "__main__":
 
         schema = StateSchema("test_stream")
 
-        with StreamNode(
+        with AsyncIterNode(
             name="processor",
             inputs={"source": simple_source()},
             outputs={"callback": collect_results}
@@ -325,7 +325,7 @@ if __name__ == "__main__":
 
         schema2 = StateSchema("test_batch_stream")
 
-        with StreamNode(
+        with AsyncIterNode(
             name="batch_processor",
             inputs={
                 "source": batch_source(),
@@ -348,7 +348,7 @@ if __name__ == "__main__":
             print(f"  Batch total: {r.get('batch_total')}, size: {r.get('batch_size')}")
 
         # =================================================================
-        # Test 3: Ref operations with StreamNode inputs
+        # Test 3: Ref operations with AsyncIterNode inputs
         # =================================================================
         print("\n" + "=" * 50)
         print("Test 3: Ref operations extract nested batch_fn")
@@ -381,8 +381,8 @@ if __name__ == "__main__":
         with GraphNode(name="ref_stream_graph") as graph3:
             config_node = get_stream_config()
 
-            # StreamNode uses Ref with nested access for batch_fn
-            with StreamNode(
+            # AsyncIterNode uses Ref with nested access for batch_fn
+            with AsyncIterNode(
                 name="ref_processor",
                 inputs={
                     "source": config_source(),
@@ -412,7 +412,7 @@ if __name__ == "__main__":
         # Test 4: Verify Ref chained operations in inputs
         # =================================================================
         print("\n" + "=" * 50)
-        print("Test 4: Ref chained operations in StreamNode inputs")
+        print("Test 4: Ref chained operations in AsyncIterNode inputs")
         print("=" * 50)
 
         @code_node
@@ -439,7 +439,7 @@ if __name__ == "__main__":
         with GraphNode(name="chain_stream_graph") as graph4:
             config_node4 = get_complex_config()
 
-            with StreamNode(
+            with AsyncIterNode(
                 name="chain_processor",
                 inputs={
                     "source": simple_stream(),
