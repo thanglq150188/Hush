@@ -1,6 +1,6 @@
 """Stream node for processing async streaming data."""
 
-from typing import Dict, Any, Optional, AsyncIterable, Callable, Awaitable, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, AsyncIterable, Callable, Awaitable, TYPE_CHECKING, List
 from datetime import datetime
 from time import perf_counter
 import asyncio
@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from hush.core.states import BaseState
 
 
+def batch_by_size(n: int) -> Callable[[List, Any], bool]:
+    """Create a batch condition that flushes when batch reaches n items."""
+    return lambda batch, _: len(batch) >= n
+
+
 class StreamNode(IterationNode):
     """
     A streaming node that processes async data with optional dynamic batching.
@@ -26,7 +31,7 @@ class StreamNode(IterationNode):
 
     Features:
     - Concurrent processing with ordered output emission
-    - Optional batching before processing (batch_condition)
+    - Optional batching before processing (batch_fn)
     - Optional output handler for processed results
     - Semaphore-limited concurrency
     """
@@ -44,12 +49,11 @@ class StreamNode(IterationNode):
                 Uses a semaphore to limit concurrency and prevent CPU contention.
         """
         input_schema = {
-            "input_stream": Param(type=AsyncIterable, required=True),
-            "batch_size": Param(type=int, required=False),  # Simple fixed-size batching
-            "batch_condition": Param(type=Callable, required=False),  # (batch, new_item) -> should_flush
+            "source": Param(type=AsyncIterable, required=True),
+            "batch_fn": Param(type=Callable, required=False),  # (batch, new_item) -> should_flush
         }
         output_schema = {
-            "output_handler": Param(type=Callable, required=False),  # async (data) -> None
+            "callback": Param(type=Callable, required=False),  # async (data) -> None
             "iteration_metrics": Param(type=Dict, required=False),
         }
 
@@ -99,17 +103,12 @@ class StreamNode(IterationNode):
             _inputs = self.get_inputs(state, context_id)
             _outputs = self.get_outputs(state, context_id=context_id)
 
-            input_stream: AsyncIterable = _inputs.get("input_stream")
-            batch_condition: Optional[Callable[[List, Any], bool]] = _inputs.get("batch_condition")
-            batch_size: Optional[int] = _inputs.get("batch_size")
-            output_handler: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("output_handler")
+            source: AsyncIterable = _inputs.get("source")
+            batch_fn: Optional[Callable[[List, Any], bool]] = _inputs.get("batch_fn")
+            callback: Optional[Callable[[Any], Awaitable[None]]] = _outputs.get("callback")
 
-            if input_stream is None:
-                LOGGER.warning(f"StreamNode '{self.full_name}': input_stream is None. No data will be processed.")
-
-            # Use batch_size as simple batch_condition if provided
-            if batch_size and not batch_condition:
-                batch_condition = lambda batch, _: len(batch) >= batch_size
+            if source is None:
+                LOGGER.warning(f"StreamNode '{self.full_name}': source is None. No data will be processed.")
 
             semaphore = asyncio.Semaphore(self._max_concurrency)
             result_queue: asyncio.Queue = asyncio.Queue()
@@ -133,9 +132,9 @@ class StreamNode(IterationNode):
                 current_batch: List = []
                 tasks = []
 
-                async for chunk in input_stream:
-                    if batch_condition:
-                        if current_batch and batch_condition(current_batch, chunk):
+                async for chunk in source:
+                    if batch_fn:
+                        if current_batch and batch_fn(current_batch, chunk):
                             tasks.append(asyncio.create_task(
                                 process_with_semaphore({"batch": current_batch, "batch_size": len(current_batch)}, total_chunks)
                             ))
@@ -147,7 +146,7 @@ class StreamNode(IterationNode):
                         total_chunks += 1
 
                 # Flush remaining batch
-                if batch_condition and current_batch:
+                if batch_fn and current_batch:
                     tasks.append(asyncio.create_task(
                         process_with_semaphore({"batch": current_batch, "batch_size": len(current_batch)}, total_chunks)
                     ))
@@ -180,10 +179,10 @@ class StreamNode(IterationNode):
 
                     if result.get("success"):
                         success_count += 1
-                        if output_handler:
+                        if callback:
                             handler_start = perf_counter()
                             try:
-                                await output_handler(result["result"])
+                                await callback(result["result"])
                             except Exception as e:
                                 handler_error_count += 1
                                 LOGGER.error(f"[{request_id}] Output handler error: {e}")
@@ -213,7 +212,7 @@ class StreamNode(IterationNode):
             # Add handler metrics if used
             if handler_latencies:
                 handler_metrics = self._calculate_iteration_metrics(handler_latencies)
-                iteration_metrics["output_handler"] = {
+                iteration_metrics["callback"] = {
                     **handler_metrics,
                     "call_count": len(handler_latencies),
                     "error_count": handler_error_count,
@@ -281,17 +280,17 @@ if __name__ == "__main__":
 
         with StreamNode(
             name="processor",
-            inputs={"input_stream": simple_source()},
-            outputs={"output_handler": collect_results}
+            inputs={"source": simple_source()},
+            outputs={"callback": collect_results}
         ) as stream_node:
             processor = process_chunk(inputs=PARENT, outputs=PARENT)
             START >> processor >> END
 
         stream_node.build()
 
-        # Need to set output_handler in state
+        # Need to set callback in state
         state = schema.create_state()
-        state[stream_node.full_name, "output_handler", None] = collect_results
+        state[stream_node.full_name, "callback", None] = collect_results
 
         await stream_node.run(state)
 
@@ -324,19 +323,15 @@ if __name__ == "__main__":
                 "batch_size": batch_size
             }
 
-        def should_flush(batch: list, new_item: dict) -> bool:
-            """Flush when batch has 5 items"""
-            return len(batch) >= 5
-
         schema2 = StateSchema("test_batch_stream")
 
         with StreamNode(
             name="batch_processor",
             inputs={
-                "input_stream": batch_source(),
-                "batch_condition": should_flush
+                "source": batch_source(),
+                "batch_fn": batch_by_size(5)
             },
-            outputs={"output_handler": collect_batches}
+            outputs={"callback": collect_batches}
         ) as stream_node2:
             processor = process_batch(inputs=PARENT, outputs=PARENT)
             START >> processor >> END
@@ -344,7 +339,7 @@ if __name__ == "__main__":
         stream_node2.build()
 
         state2 = schema2.create_state()
-        state2[stream_node2.full_name, "output_handler", None] = collect_batches
+        state2[stream_node2.full_name, "callback", None] = collect_batches
 
         await stream_node2.run(state2)
 
@@ -356,7 +351,7 @@ if __name__ == "__main__":
         # Test 3: Ref operations with StreamNode inputs
         # =================================================================
         print("\n" + "=" * 50)
-        print("Test 3: Ref operations extract nested batch_size")
+        print("Test 3: Ref operations extract nested batch_fn")
         print("=" * 50)
 
         from hush.core.nodes.graph.graph_node import GraphNode
@@ -366,7 +361,7 @@ if __name__ == "__main__":
             return {
                 "stream_config": {
                     "settings": {
-                        "batch_size": 3
+                        "batch_fn": batch_by_size(3)
                     }
                 }
             }
@@ -378,21 +373,23 @@ if __name__ == "__main__":
                 await asyncio.sleep(0.005)
 
         @code_node
-        def process_data(data: int):
-            return {"result": data + 1}
+        def process_data_batch(batch: list, batch_size: int):
+            # Process batch: sum all data values
+            total = sum(item["data"] for item in batch)
+            return {"batch_total": total, "batch_size": batch_size}
 
         with GraphNode(name="ref_stream_graph") as graph3:
             config_node = get_stream_config()
 
-            # StreamNode uses Ref with nested access for batch_size
+            # StreamNode uses Ref with nested access for batch_fn
             with StreamNode(
                 name="ref_processor",
                 inputs={
-                    "input_stream": config_source(),
-                    "batch_size": config_node["stream_config"]["settings"]["batch_size"]
+                    "source": config_source(),
+                    "batch_fn": config_node["stream_config"]["settings"]["batch_fn"]
                 }
             ) as stream_node3:
-                processor = process_data(inputs={"data": PARENT["data"]}, outputs=PARENT)
+                processor = process_data_batch(inputs=PARENT, outputs=PARENT)
                 START >> processor >> END
 
             START >> config_node >> stream_node3 >> END
@@ -405,15 +402,11 @@ if __name__ == "__main__":
         await graph3.run(state3)
 
         # Verify Ref operation worked by checking iteration_metrics
-        # The batch_size from Ref should result in 3 batches (9 items / 3 per batch)
         metrics3 = state3._get_value(stream_node3.full_name, "iteration_metrics", None)
         if metrics3:
             print(f"Total iterations: {metrics3.get('total_iterations')}")
-            print(f"Expected: 3 batches (batch_size=3 from nested config)")
-            # Note: due to batching semantics, exact count may vary
-            print("Test 3 passed - Ref operation extracted batch_size from nested config!")
-        else:
-            print("Test 3: No metrics available (stream may have issues)")
+            print(f"Expected: 3 batches (batch_by_size(3) from nested config)")
+            print("Test 3 passed - Ref operation extracted batch_fn from nested config!")
 
         # =================================================================
         # Test 4: Verify Ref chained operations in inputs
@@ -427,7 +420,7 @@ if __name__ == "__main__":
             return {
                 "data": {
                     "stream_params": {
-                        "items_per_batch": 2
+                        "batch_fn": batch_by_size(2)
                     }
                 }
             }
@@ -438,8 +431,10 @@ if __name__ == "__main__":
                 await asyncio.sleep(0.003)
 
         @code_node
-        def square_num(num: int):
-            return {"squared": num * num}
+        def sum_batch_nums(batch: list, batch_size: int):
+            # Process batch: sum of squares of all nums
+            total = sum(item["num"] ** 2 for item in batch)
+            return {"sum_of_squares": total, "batch_size": batch_size}
 
         with GraphNode(name="chain_stream_graph") as graph4:
             config_node4 = get_complex_config()
@@ -447,11 +442,11 @@ if __name__ == "__main__":
             with StreamNode(
                 name="chain_processor",
                 inputs={
-                    "input_stream": simple_stream(),
-                    "batch_size": config_node4["data"]["stream_params"]["items_per_batch"]
+                    "source": simple_stream(),
+                    "batch_fn": config_node4["data"]["stream_params"]["batch_fn"]
                 }
             ) as stream_node4:
-                proc = square_num(inputs={"num": PARENT["num"]}, outputs=PARENT)
+                proc = sum_batch_nums(inputs=PARENT, outputs=PARENT)
                 START >> proc >> END
 
             START >> config_node4 >> stream_node4 >> END
@@ -466,8 +461,8 @@ if __name__ == "__main__":
         metrics4 = state4._get_value(stream_node4.full_name, "iteration_metrics", None)
         if metrics4:
             print(f"Total iterations: {metrics4.get('total_iterations')}")
-            print(f"Expected: 3 batches (batch_size=2 from nested config, 6 items)")
-            print("Test 4 passed - Ref chained operations extracted items_per_batch!")
+            print(f"Expected: 3 batches (batch_by_size(2) from nested config, 6 items)")
+            print("Test 4 passed - Ref chained operations extracted batch_fn!")
 
         print("\n" + "=" * 50)
         print("All tests passed!")
