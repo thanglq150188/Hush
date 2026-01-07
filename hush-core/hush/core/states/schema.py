@@ -23,7 +23,7 @@ class StateSchema:
     - _idx_to_key: {idx: (node, var)} - canonical key for each index
     """
 
-    __slots__ = ("name", "_indexer", "_defaults", "_ops", "_idx_to_key", "_next_idx", "_building", "_build_values")
+    __slots__ = ("name", "_indexer", "_defaults", "_ops", "_idx_to_key", "_next_idx", "_building", "_build_values", "_output_vars", "_source_idx")
 
     def __init__(self, node=None, name: str = None):
         """Initialize schema.
@@ -42,6 +42,8 @@ class StateSchema:
         # Temporary during building
         self._building: bool = True
         self._build_values: Dict[Tuple[str, str], Any] = {}  # temp storage during build
+        self._output_vars: set = set()  # variables that are outputs (nodes write to them)
+        self._source_idx: Dict[Tuple[str, str], int] = {}  # for vars with ops: source index to read from
 
         # Handle backward compatibility: StateSchema("name")
         if isinstance(node, str):
@@ -62,7 +64,11 @@ class StateSchema:
     # =========================================================================
 
     def _build_index(self) -> None:
-        """Build index mappings by flattening all reference chains."""
+        """Build index mappings by flattening all reference chains.
+
+        Variables that reference others (via Ref) share the same storage index.
+        If a Ref has ops, they are stored and applied at read time.
+        """
         # Collect all unique variables
         all_vars = set(self._build_values.keys())
         for v in self._build_values.values():
@@ -71,58 +77,96 @@ class StateSchema:
 
         # Process each variable to assign index
         for node, var in all_vars:
-            if (node, var) in self._indexer:
-                continue
+            self._process_var(node, var, all_vars)
 
-            # Resolve to find the canonical storage location and accumulated ops
-            canonical, ops = self._resolve_chain(node, var)
+    def _process_var(self, node: str, var: str, all_vars: set) -> None:
+        """Process a single variable, recursively processing dependencies first."""
+        if (node, var) in self._indexer:
+            return
 
-            # Assign or reuse index for canonical location
-            if canonical not in self._indexer:
-                idx = self._next_idx
-                self._next_idx += 1
-                self._indexer[canonical] = idx
-                self._idx_to_key[idx] = canonical
+        # Resolve to find the canonical storage location and accumulated ops
+        canonical, ops = self._resolve_chain(node, var)
 
-                # Get default value for canonical location
-                default_value = self._build_values.get(canonical)
-                if isinstance(default_value, Ref):
-                    default_value = None  # Refs don't have defaults
-                self._defaults.append(default_value)
+        # Recursively process canonical first (if different and in all_vars)
+        if canonical != (node, var) and canonical in all_vars:
+            self._process_var(canonical[0], canonical[1], all_vars)
 
+        # Assign or reuse index for canonical location
+        if canonical not in self._indexer:
+            idx = self._next_idx
+            self._next_idx += 1
+            self._indexer[canonical] = idx
+            self._idx_to_key[idx] = canonical
+
+            # Get default value for canonical location
+            default_value = self._build_values.get(canonical)
+            if isinstance(default_value, Ref):
+                default_value = None  # Refs don't have defaults
+            self._defaults.append(default_value)
+
+        # If there are ops, this variable needs its own index for writing
+        # but reads from the canonical (source) index with ops applied
+        if ops:
+            # Store source index for reading
+            source_idx = self._indexer[canonical]
+            self._source_idx[(node, var)] = source_idx
+
+            # Create own index for writing
+            idx = self._next_idx
+            self._next_idx += 1
+            self._indexer[(node, var)] = idx
+            self._idx_to_key[idx] = (node, var)
+            self._defaults.append(None)
+            self._ops[(node, var)] = ops
+        else:
+            # No ops - share the canonical index (true alias)
             idx = self._indexer[canonical]
-
-            # Map this var to the same index if different from canonical
             if (node, var) != canonical:
                 self._indexer[(node, var)] = idx
-
-            # Store ops for vars that have accumulated ops
-            if ops:
-                self._ops[(node, var)] = ops
 
     def _resolve_chain(self, node: str, var: str) -> Tuple[Tuple[str, str], List]:
         """Resolve a variable following the reference chain to find canonical storage.
 
         Returns:
             (canonical_key, accumulated_ops)
+
+        For the starting variable:
+        - If it has ops, accumulate them and resolve to source (for reading)
+        - The starting variable itself will get its own index for writing
+
+        For intermediate variables:
+        - If target is an output variable, stop there (it has its own storage)
+        - Otherwise follow the reference
         """
         accumulated_ops = []
         visited = set()
         current = (node, var)
+        first_iteration = True
 
         while current not in visited:
             visited.add(current)
             value = self._build_values.get(current)
 
             if isinstance(value, Ref):
-                # Accumulate ops from this Ref
-                if value.has_ops:
+                target = (value.node, value.var)
+
+                # Only accumulate ops from the starting variable
+                if first_iteration and value.has_ops:
                     accumulated_ops.extend(value.ops)
+
+                # Check if target is an output variable (has its own storage)
+                # This includes variables with ops (they get their own index)
+                if target in self._output_vars:
+                    current = target
+                    break
+
                 # Follow the reference
-                current = (value.node, value.var)
+                current = target
             else:
-                # Reached terminal
+                # Reached terminal (non-Ref value)
                 break
+
+            first_iteration = False
 
         return current, accumulated_ops
 
@@ -152,13 +196,21 @@ class StateSchema:
         return node, var
 
     def resolve_with_ops(self, node: str, var: str) -> Tuple[int, Optional[List]]:
-        """Resolve variable and return index and ops.
+        """Resolve variable and return index for READING and ops.
+
+        For variables with ops, returns the SOURCE index (where to read from)
+        plus the ops to apply. For variables without ops, returns their index.
 
         Returns:
             (idx, ops_list_or_none) - idx is -1 if not found
         """
-        idx = self._indexer.get((node, var), -1)
         ops = self._ops.get((node, var))
+        if ops:
+            # Has ops - return source index for reading
+            idx = self._source_idx.get((node, var), -1)
+        else:
+            # No ops - return own index
+            idx = self._indexer.get((node, var), -1)
         return idx, ops
 
     @property
@@ -241,10 +293,15 @@ class StateSchema:
             if var_name not in inputs and hasattr(param, 'default') and param.default is not None:
                 self._build_values[(node_name, var_name)] = param.default
 
-        # Load defaults from output_schema
+        # Register output_schema variables as outputs (nodes write to them)
+        # These are terminals - downstream references should read written values,
+        # not follow any input chain
         for var_name, param in output_schema.items():
-            if hasattr(param, 'default') and param.default is not None:
-                self._build_values[(node_name, var_name)] = param.default
+            self._output_vars.add((node_name, var_name))
+            # Set default if not already set
+            if (node_name, var_name) not in self._build_values:
+                default = param.default if hasattr(param, 'default') else None
+                self._build_values[(node_name, var_name)] = default
 
         # Load output connections as links
         for var_name, ref in (node.outputs or {}).items():
