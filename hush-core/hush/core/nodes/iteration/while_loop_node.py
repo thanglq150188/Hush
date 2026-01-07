@@ -6,7 +6,7 @@ from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import IterationNode
+from hush.core.nodes.iteration.base import BaseIterationNode
 from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from hush.core.states import BaseState
 
 
-class WhileLoopNode(IterationNode):
+class WhileLoopNode(BaseIterationNode):
     """A node that iterates while a condition is true.
 
     The loop continues while `stop_condition` evaluates to False.

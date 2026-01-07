@@ -222,6 +222,44 @@ class BaseNode(ABC):
         self.__rshift__(other)
         return self
 
+    def __gt__(self, other):
+        """node > other: soft edge (doesn't count toward ready_count).
+
+        Use for branch outputs where only one branch will execute.
+        Example: case_a > merge_node (merge waits for any ONE predecessor)
+        """
+        edge_type = "condition" if self.type == "branch" else "normal"
+
+        if isinstance(other, list):
+            for node in other:
+                if hasattr(self.father, "add_edge"):
+                    self.father.add_edge(self.name, node.name, edge_type, soft=True)
+            return other
+        elif hasattr(other, 'name'):
+            if hasattr(self.father, "add_edge"):
+                self.father.add_edge(self.name, other.name, edge_type, soft=True)
+            return other
+        return NotImplemented
+
+    def __lt__(self, other):
+        """node < other: reverse soft edge.
+
+        Use for branch outputs where only one branch will execute.
+        Example: merge_node < case_a (merge waits for any ONE predecessor)
+        """
+        edge_type = "condition" if self.type == "branch" else "normal"
+
+        if isinstance(other, list):
+            for node in other:
+                if hasattr(self.father, "add_edge"):
+                    self.father.add_edge(node.name, self.name, edge_type, soft=True)
+            return other
+        elif hasattr(other, 'name'):
+            if hasattr(self.father, "add_edge"):
+                self.father.add_edge(other.name, self.name, edge_type, soft=True)
+            return self
+        return NotImplemented
+
     def __call__(self, **kwargs) -> Dict[str, Any]:
         """
         Quick test: call node directly with inputs.
@@ -262,23 +300,25 @@ class BaseNode(ABC):
     def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve input values from state based on connection mappings.
 
-        Reads directly from referenced node's output location, bypassing schema links.
-        This is because schema links represent INPUT connections (for graph inputs),
-        but here we're reading OUTPUT values from other nodes.
+        Uses state[node, var, ctx] which:
+        1. Resolves to canonical storage location via index
+        2. Automatically applies any Ref operations (like ['key'].apply(len))
 
-        If the Ref has operations recorded (e.g., ref['key'].apply(len)),
-        those operations are executed on the retrieved value.
+        This unified approach handles both direct refs and chained refs with ops.
         """
         result = {}
 
         for var_name, ref in self.inputs.items():
             if isinstance(ref, Ref):
-                # Reference to another node's output - read directly from that location
-                # Don't use state[...] which would follow schema links meant for inputs
-                value = state._get_value(ref.node, ref.var, context_id)
-                # Execute any recorded operations on the value
+                # Use state[...] which handles index resolution and ops application
+                value = state[ref.node, ref.var, context_id]
+                # If ref has additional ops not captured in schema, apply them
                 if ref.has_ops:
-                    value = ref.execute(value)
+                    # Check if these ops are already in schema
+                    schema_ops = state.schema.get_ops(ref.node, ref.var)
+                    if not schema_ops:
+                        # Ops not in schema, apply them now
+                        value = ref.execute(value)
                 result[var_name] = value
             else:
                 # Literal value
@@ -289,12 +329,32 @@ class BaseNode(ABC):
     def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve output values from state.
 
-        Reads directly from this node's output location, bypassing schema links.
+        For nodes with output connections (outputs={...}), follows the Refs
+        to read from the actual source location. Otherwise reads directly
+        from this node's output variables.
+
+        Uses state[...] for index-based O(1) lookup with automatic ops application.
         """
-        return {
-            var_name: state._get_value(self.full_name, var_name, context_id)
-            for var_name in self.output_schema
-        }
+        result = {}
+
+        for var_name in self.output_schema:
+            # Check if this output has a connection (Ref to another node)
+            if self.outputs and var_name in self.outputs:
+                ref = self.outputs[var_name]
+                if isinstance(ref, Ref):
+                    # Read from the referenced node's output
+                    value = state[ref.node, ref.var, context_id]
+                    if ref.has_ops:
+                        schema_ops = state.schema.get_ops(ref.node, ref.var)
+                        if not schema_ops:
+                            value = ref.execute(value)
+                    result[var_name] = value
+                    continue
+
+            # No connection - read directly from this node
+            result[var_name] = state[self.full_name, var_name, context_id]
+
+        return result
 
     def store_result(
         self,
@@ -304,15 +364,13 @@ class BaseNode(ABC):
     ) -> None:
         """Store result dict to state.
 
-        Stores directly without following schema links.
-        Links are for reading (input connections), not writing.
+        Uses state[node, var, ctx] = value for index-based O(1) storage.
         """
         if not result:
             return
 
         for key, value in result.items():
-            # Store directly without following links
-            state._set_value(self.full_name, key, context_id, value)
+            state[self.full_name, key, context_id] = value
 
     def _log(
         self,
@@ -476,6 +534,33 @@ class DummyNode(BaseNode):
                 elif hasattr(other, 'name'):
                     current_graph.add_edge(other.name, self.name)
                     return self
+        return self
+
+    def __gt__(self, other):
+        """START > node or node > END (soft edge)"""
+        if self == START:
+            current_graph = get_current()
+            if current_graph and hasattr(current_graph, 'add_edge'):
+                if isinstance(other, list):
+                    for node in other:
+                        current_graph.add_edge(self.name, node.name, soft=True)
+                    return other
+                elif hasattr(other, 'name'):
+                    current_graph.add_edge(self.name, other.name, soft=True)
+                    return other
+        return super().__gt__(other)
+
+    def __rgt__(self, other):
+        """[nodes] > END (soft edge)"""
+        current_graph = get_current()
+        if current_graph and hasattr(current_graph, 'add_edge'):
+            if self == END:
+                if isinstance(other, list):
+                    for node in other:
+                        current_graph.add_edge(node.name, self.name, soft=True)
+                elif hasattr(other, 'name'):
+                    current_graph.add_edge(other.name, self.name, soft=True)
+                return self
         return self
 
 

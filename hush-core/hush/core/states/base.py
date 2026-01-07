@@ -1,10 +1,11 @@
-"""Abstract base class for workflow state."""
+"""Abstract base class for workflow state with index-based resolution."""
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from hush.core.states.schema import StateSchema
+from hush.core.states.ref import Ref
 
 __all__ = ["BaseState"]
 
@@ -13,25 +14,28 @@ _uuid4 = uuid.uuid4
 
 
 class BaseState(ABC):
-    """Abstract base class for workflow state storage.
+    """Abstract base class for workflow state storage with index-based O(1) access.
 
-    All state backends (Memory, Redis, etc.) inherit from this class.
-    Uses StateSchema for variable redirects (zero-copy linking).
+    Uses StateSchema's index mapping for O(1) lookups regardless of reference depth.
+    Ref operations (like ['key'].apply(len)) are applied automatically on read.
 
-    Subclasses only need to implement 3 methods:
-    - _get_value(node, var, ctx) -> Any
-    - _set_value(node, var, ctx, value) -> None
-    - _iter_keys() -> Iterator
+    The state maintains a values list where each index corresponds to a unique
+    storage location. Multiple (node, var) keys can map to the same index (aliasing).
+
+    Subclasses only need to implement storage for the values list:
+    - _get_value_by_idx(idx, ctx) -> Any
+    - _set_value_by_idx(idx, ctx, value) -> None
+    - _iter_stored() -> Iterator[(idx, ctx)]
 
     Example:
         class MyCustomState(BaseState):
-            def _get_value(self, node, var, ctx):
-                return self.storage.get((node, var, ctx))
+            def _get_value_by_idx(self, idx, ctx):
+                return self.storage.get((idx, ctx))
 
-            def _set_value(self, node, var, ctx, value):
-                self.storage[(node, var, ctx)] = value
+            def _set_value_by_idx(self, idx, ctx, value):
+                self.storage[(idx, ctx)] = value
 
-            def _iter_keys(self):
+            def _iter_stored(self):
                 return iter(self.storage.keys())
     """
 
@@ -48,7 +52,7 @@ class BaseState(ABC):
         """Initialize state with schema.
 
         Args:
-            schema: StateSchema defining structure and redirects
+            schema: StateSchema defining structure and index mappings
             inputs: Initial input values {var_name: value}
             user_id: User identifier (auto-generated if None)
             session_id: Session identifier (auto-generated if None)
@@ -65,70 +69,123 @@ class BaseState(ABC):
         # Apply inputs (override defaults)
         if inputs:
             name = schema.name
-            _set = self._set_value
             for var, value in inputs.items():
-                _set(name, var, None, value)
+                idx = schema.get_index(name, var)
+                if idx >= 0:
+                    self._set_value_by_idx(idx, None, value)
 
     # =========================================================================
-    # Abstract Methods - Subclasses implement these
+    # Abstract Methods - Subclasses implement these (index-based)
     # =========================================================================
 
     @abstractmethod
-    def _get_value(self, node: str, var: str, ctx: Optional[str]) -> Any:
-        """Get value from storage. Returns None if not exists."""
+    def _get_value_by_idx(self, idx: int, ctx: Optional[str]) -> Any:
+        """Get value from storage by index. Returns None if not exists."""
         pass
 
     @abstractmethod
-    def _set_value(self, node: str, var: str, ctx: Optional[str], value: Any) -> None:
-        """Set value in storage."""
+    def _set_value_by_idx(self, idx: int, ctx: Optional[str], value: Any) -> None:
+        """Set value in storage by index."""
         pass
 
     @abstractmethod
-    def _iter_keys(self):
-        """Iterate over (node, var, ctx) keys in storage."""
+    def _iter_stored(self):
+        """Iterate over (idx, ctx) keys in storage."""
         pass
 
     # =========================================================================
-    # Core Access (with schema redirect)
+    # Core Access (with index resolution and ops application)
     # =========================================================================
 
     def __setitem__(self, key: Tuple[str, str, Optional[str]], value: Any) -> None:
-        """Set value with schema redirect: state[node, var, context] = value"""
+        """Set value: state[node, var, context] = value
+
+        Resolves to canonical index and stores directly.
+        """
         if len(key) != 3:
             raise ValueError("Key must be (node, var, context)")
 
         node, var, ctx = key
-        real_node, real_var = self.schema.resolve(node, var)
-        self._set_value(real_node, real_var, ctx, value)
+        idx = self.schema.get_index(node, var)
+        if idx < 0:
+            # Variable not in schema - create dynamic index
+            # For now, raise error (strict mode)
+            raise KeyError(f"Variable ({node}, {var}) not in schema")
+
+        self._set_value_by_idx(idx, ctx, value)
 
     def __getitem__(self, key: Tuple[str, str, Optional[str]]) -> Any:
-        """Get value with schema redirect: state[node, var, context]"""
+        """Get value: state[node, var, context]
+
+        Resolves to canonical index, gets value, and applies any ops.
+        """
         if len(key) != 3:
             raise ValueError("Key must be (node, var, context)")
 
         node, var, ctx = key
-        real_node, real_var = self.schema.resolve(node, var)
-        return self._get_value(real_node, real_var, ctx)
+        idx, ops = self.schema.resolve_with_ops(node, var)
+        if idx < 0:
+            return None
+
+        value = self._get_value_by_idx(idx, ctx)
+
+        # Apply ops if any
+        if ops and value is not None:
+            value = self._apply_ops(value, ops)
+
+        return value
+
+    def _apply_ops(self, value: Any, ops: List) -> Any:
+        """Apply recorded operations to a value."""
+        # Create a temporary Ref to use its execute logic
+        temp_ref = Ref("", "", ops)
+        return temp_ref.execute(value)
 
     def get(self, node: str, var: str, ctx: Optional[str] = None) -> Any:
         """Get value with explicit parameters."""
-        real_node, real_var = self.schema.resolve(node, var)
-        return self._get_value(real_node, real_var, ctx)
+        return self[node, var, ctx]
 
     def __contains__(self, key: Tuple[str, str]) -> bool:
         """Check if (node, var) has any value."""
         if len(key) != 2:
             return False
         node, var = key
-        real_node, real_var = self.schema.resolve(node, var)
-        for k in self._iter_keys():
-            if k[0] == real_node and k[1] == real_var:
+        idx = self.schema.get_index(node, var)
+        if idx < 0:
+            return False
+        for stored_idx, _ in self._iter_stored():
+            if stored_idx == idx:
                 return True
         return False
 
     def __iter__(self):
         """Iterate over (node, var, ctx) keys."""
-        return self._iter_keys()
+        # Convert stored (idx, ctx) back to (node, var, ctx)
+        for idx, ctx in self._iter_stored():
+            canonical = self.schema._idx_to_key.get(idx)
+            if canonical:
+                yield (canonical[0], canonical[1], ctx)
+
+    # =========================================================================
+    # Legacy methods for backward compatibility
+    # =========================================================================
+
+    def _get_value(self, node: str, var: str, ctx: Optional[str]) -> Any:
+        """Legacy: Get value directly without ops. Use __getitem__ instead."""
+        idx = self.schema.get_index(node, var)
+        if idx < 0:
+            return None
+        return self._get_value_by_idx(idx, ctx)
+
+    def _set_value(self, node: str, var: str, ctx: Optional[str], value: Any) -> None:
+        """Legacy: Set value directly. Use __setitem__ instead."""
+        idx = self.schema.get_index(node, var)
+        if idx >= 0:
+            self._set_value_by_idx(idx, ctx, value)
+
+    def _iter_keys(self):
+        """Legacy: Iterate over (node, var, ctx) keys."""
+        return iter(self)
 
     # =========================================================================
     # Execution Tracking
@@ -204,39 +261,43 @@ class BaseState(ABC):
         return self._request_id == other._request_id
 
     def show(self) -> None:
-        """Debug display of current state values.
-
-        Shows all stored values AND all schema references with their resolved values.
-        """
+        """Debug display of current state values."""
         print(f"\n=== {self.__class__.__name__}: {self.name} ===")
 
-        # Collect all keys from storage
-        stored_keys = set(self._iter_keys())
+        # Collect all stored (idx, ctx) pairs
+        stored = list(self._iter_stored())
 
-        # Collect all schema refs to show resolved values
-        schema_refs = set()
-        for (node, var), value in self.schema.values.items():
-            from hush.core.states.ref import Ref
-            if isinstance(value, Ref):
-                # Add all contexts for this ref
-                for n, v, ctx in stored_keys:
-                    if n == value.node and v == value.var:
-                        schema_refs.add((node, var, ctx))
+        # Group by idx for display
+        by_idx: Dict[int, List[str]] = {}
+        for idx, ctx in stored:
+            by_idx.setdefault(idx, []).append(ctx)
 
-        # Combine and sort all keys
-        all_keys = stored_keys | schema_refs
+        for idx in sorted(by_idx.keys()):
+            canonical = self.schema._idx_to_key.get(idx)
+            if not canonical:
+                continue
 
-        for node, var, ctx in sorted(all_keys):
-            ref = self.schema.get_ref(node, var)
-            ctx_str = f"[{ctx}]" if ctx else ""
+            # Find all vars that map to this idx
+            aliases = [k for k, v in self.schema._indexer.items() if v == idx and k != canonical]
 
-            if ref:
-                # This is a reference - show both the ref and resolved value
-                resolved_value = self._get_value(ref.node, ref.var, ctx)
-                value_str = repr(resolved_value)[:50] + "..." if len(repr(resolved_value)) > 50 else repr(resolved_value)
-                print(f"  {node}.{var}{ctx_str} -> {ref.node}.{ref.var} = {value_str}")
-            else:
-                # Direct value
-                value = self._get_value(node, var, ctx)
+            for ctx in by_idx[idx]:
+                ctx_str = f"[{ctx}]" if ctx else "[main]"
+                value = self._get_value_by_idx(idx, ctx)
                 value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
-                print(f"  {node}.{var}{ctx_str} = {value_str}")
+
+                # Show canonical location
+                print(f"  {canonical[0]}.{canonical[1]}{ctx_str} = {value_str}")
+
+                # Show aliases with their ops
+                for alias in aliases:
+                    ops = self.schema._ops.get(alias)
+                    if ops:
+                        # Show what value would be after ops
+                        try:
+                            resolved_value = self._apply_ops(value, ops)
+                            resolved_str = repr(resolved_value)[:30] + "..." if len(repr(resolved_value)) > 30 else repr(resolved_value)
+                            print(f"    -> {alias[0]}.{alias[1]} (via ops) = {resolved_str}")
+                        except:
+                            print(f"    -> {alias[0]}.{alias[1]} (ops: {len(ops)} operations)")
+                    else:
+                        print(f"    -> {alias[0]}.{alias[1]}")

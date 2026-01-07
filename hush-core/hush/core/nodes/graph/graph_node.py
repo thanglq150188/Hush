@@ -2,7 +2,9 @@
 
 from datetime import datetime
 from time import perf_counter
-from typing import Dict, List, Literal, Any, Optional
+from typing import Dict, Literal, Any, Optional
+
+from hush.core.utils.common import Param
 from collections import defaultdict
 import asyncio
 import traceback
@@ -13,14 +15,11 @@ from hush.core.nodes.base import BaseNode, START, END, PARENT
 from hush.core.states import BaseState, StateSchema, Ref
 from hush.core.utils.context import _current_graph
 from hush.core.utils.bimap import BiMap
-from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
 
 
 NodeFlowType = Literal["MERGE", "FORK", "BLOOM", "BRANCH", "NORMAL", "OTHER"]
 
-
-# TODO: fix the case when we have two branch nodes pointing to the same target
 
 class GraphNode(BaseNode):
     """
@@ -123,30 +122,29 @@ class GraphNode(BaseNode):
 
         self.input_schema = input_schema
         self.output_schema = output_schema
-        # Graph inputs are direct values from caller, not references
-        self.inputs = {}
 
-    def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-        """Get graph inputs directly from state.
+    # def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
+    #     """Get graph inputs directly from state.
 
-        Unlike regular nodes that read from referenced nodes, graph inputs
-        are stored directly at (graph.full_name, var_name, context_id).
-        """
-        return {
-            var_name: state._get_value(self.full_name, var_name, context_id)
-            for var_name in self.input_schema
-        }
+    #     Unlike regular nodes that read from referenced nodes, graph inputs
+    #     are stored directly at (graph.full_name, var_name, context_id).
+    #     """
 
-    def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-        """Get graph outputs using schema links.
+    #     return {
+    #         var_name: state._get_value(self.full_name, var_name, context_id)
+    #         for var_name in self.input_schema
+    #     }
 
-        Graph outputs are aliases to inner node outputs (e.g., graph.result -> inner_node.result).
-        We MUST follow schema links here to read from the inner node's output location.
-        """
-        return {
-            var_name: state[self.full_name, var_name, context_id]
-            for var_name in self.output_schema
-        }
+    # def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
+    #     """Get graph outputs using schema links.
+
+    #     Graph outputs are aliases to inner node outputs (e.g., graph.result -> inner_node.result).
+    #     We MUST follow schema links here to read from the inner node's output location.
+    #     """
+    #     return {
+    #         var_name: state[self.full_name, var_name, context_id]
+    #         for var_name in self.output_schema
+    #     }
 
     def _build_flow_type(self):
         """Determine flow type of each node based on connection pattern."""
@@ -200,9 +198,20 @@ class GraphNode(BaseNode):
         self._build_flow_type()
         self._setup_endpoints()
 
-        self.ready_count = {
-            name: len(preds) for name, preds in self.prevs.items()
-        }
+        # Calculate ready_count - only count hard edges (not soft)
+        # Soft edges (created with >) don't count toward ready_count
+        # This allows branch outputs to merge without deadlock
+        self.ready_count = {}
+        for name in self._nodes:
+            hard_pred_count = 0
+            for pred in self.prevs[name]:
+                edge = self._edges_lookup.get((pred, name))
+                if edge and not edge.soft:
+                    hard_pred_count += 1
+                elif edge is None:
+                    # Edge not found in lookup (shouldn't happen, but count it)
+                    hard_pred_count += 1
+            self.ready_count[name] = hard_pred_count
 
         self._is_building = False
 
@@ -240,8 +249,17 @@ class GraphNode(BaseNode):
 
         return node
 
-    def add_edge(self, source: str, target: str, type: EdgeType = "normal"):
-        """Add an edge between two nodes."""
+    def add_edge(self, source: str, target: str, type: EdgeType = "normal", soft: bool = False):
+        """Add an edge between two nodes.
+
+        Args:
+            source: Source node name
+            target: Target node name
+            type: Edge type (normal, lookback, condition)
+            soft: If True, edge doesn't count toward ready_count.
+                  Use for branch outputs where only one branch executes.
+                  Created with > operator: case_a > merge_node
+        """
         if not self._is_building:
             raise RuntimeError("Cannot add edges after graph has been built!")
 
@@ -277,7 +295,7 @@ class GraphNode(BaseNode):
         if target not in self._nodes:
             raise ValueError(f"Target node '{target}' not found")
 
-        new_edge = EdgeConfig(from_node=source, to_node=target, type=type)
+        new_edge = EdgeConfig(from_node=source, to_node=target, type=type, soft=soft)
         if (source, target) not in self._edges_lookup:
             self._edges.append(new_edge)
             self._edges_lookup[source, target] = new_edge
@@ -291,7 +309,9 @@ class GraphNode(BaseNode):
         print(f"{prefix}Nodes:", list(self._nodes.keys()))
         print(f"{prefix}Edges:")
         for edge in self._edges:
-            print(f"{prefix}  {edge.from_node} -> {edge.to_node}: {edge.type}")
+            soft_marker = " (soft)" if edge.soft else ""
+            print(f"{prefix}  {edge.from_node} -> {edge.to_node}: {edge.type}{soft_marker}")
+        print(f"{prefix}Ready count:", dict(self.ready_count))
 
         for node in self._nodes.values():
             if isinstance(node, GraphNode):
@@ -395,7 +415,7 @@ if __name__ == "__main__":
                 code_fn=lambda x: {"result": x + 10},
                 inputs={"x": PARENT["x"]}
             )
-
+            
             node_b = CodeNode(
                 name="node_b",
                 code_fn=lambda x: {"result": x * 2},
@@ -412,11 +432,9 @@ if __name__ == "__main__":
             START >> node_a >> node_b >> node_c >> END
 
         graph.build()
-        graph.show()
 
         # Create schema from graph (simple!)
         schema = StateSchema(graph)
-        schema.show()
 
         # Create state and run
         state = schema.create_state(inputs={"x": 5})
@@ -424,8 +442,6 @@ if __name__ == "__main__":
         print(f"\nInput: x=5")
         print(f"Expected: ((5 + 10) * 2) - 5 = 25")
         print(f"Result: {result}")
-
-        state.show()
 
         # =================================================================
         # Test 2: Ref with operations (new Ref feature)
@@ -618,4 +634,189 @@ if __name__ == "__main__":
         print("All Ref operation tests passed!")
         print("=" * 60)
 
+        # =================================================================
+        # Test 6: Soft edges for branch merging
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 6: Soft edges (> operator) for branch merging")
+        print("=" * 60)
+
+        # Simulate: branch -> [case_a, case_b] > merge
+        # Without soft edges, merge.ready_count = 2 (deadlock!)
+        # With soft edges, merge.ready_count = 1 (correct!)
+
+        with GraphNode(name="soft_edge_graph") as graph6:
+            # Simulated branch: just pick one path based on input
+            branch_node = CodeNode(
+                name="branch",
+                code_fn=lambda choice: {"selected": choice},
+                inputs={"choice": PARENT["choice"]}
+            )
+
+            case_a = CodeNode(
+                name="case_a",
+                code_fn=lambda: {"value": "A"},
+                inputs={}
+            )
+
+            case_b = CodeNode(
+                name="case_b",
+                code_fn=lambda: {"value": "B"},
+                inputs={}
+            )
+
+            merge = CodeNode(
+                name="merge",
+                code_fn=lambda value: {"result": f"Merged: {value}"},
+                inputs={"value": case_a["value"]},  # Will be overwritten by whichever runs
+                outputs={"result": PARENT["result"]}
+            )
+
+            # branch >> [case_a, case_b] with hard edges
+            # [case_a, case_b] > merge with soft edges (> operator)
+            START >> branch_node >> [case_a, case_b]
+            case_a > merge  # soft edge
+            case_b > merge  # soft edge
+            merge >> END
+
+        graph6.build()
+        print("\nGraph structure:")
+        graph6.show()
+
+        print(f"\nMerge node ready_count: {graph6.ready_count['merge']}")
+        print(f"Expected: 0 (soft edges don't count)")
+        assert graph6.ready_count['merge'] == 0, f"Got: {graph6.ready_count['merge']}"
+
+        # To actually test execution, we need a proper branch node
+        # For now, just verify the ready_count is correct
+
+        # =================================================================
+        # Test 7: Mixed hard and soft edges
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 7: Mixed hard and soft edges")
+        print("=" * 60)
+
+        with GraphNode(name="mixed_edge_graph") as graph7:
+            node_a = CodeNode(
+                name="node_a",
+                code_fn=lambda: {"x": 1},
+                inputs={}
+            )
+
+            node_b = CodeNode(
+                name="node_b",
+                code_fn=lambda: {"y": 2},
+                inputs={}
+            )
+
+            node_c = CodeNode(
+                name="node_c",
+                code_fn=lambda: {"z": 3},
+                inputs={}
+            )
+
+            merge = CodeNode(
+                name="merge",
+                code_fn=lambda x: {"result": x},
+                inputs={"x": node_a["x"]},
+                outputs={"result": PARENT["result"]}
+            )
+
+            START >> node_a >> merge  # hard edge: ready_count += 1
+            START >> node_b
+            START >> node_c
+            node_b > merge  # soft edge: ready_count += 0
+            node_c > merge  # soft edge: ready_count += 0
+            merge >> END
+
+        graph7.build()
+        print("\nGraph structure:")
+        graph7.show()
+
+        print(f"\nMerge node ready_count: {graph7.ready_count['merge']}")
+        print(f"Expected: 1 (only hard edge from node_a counts)")
+        assert graph7.ready_count['merge'] == 1, f"Got: {graph7.ready_count['merge']}"
+
+        # Run it - should work because node_a provides the hard dependency
+        schema7 = StateSchema(graph7)
+        state7 = schema7.create_state()
+        result7 = await graph7.run(state7)
+        print(f"Result: {result7}")
+        assert result7["result"] == 1
+
+        print("\n" + "=" * 60)
+        print("All soft edge tests passed!")
+        print("=" * 60)
+
+        # =================================================================
+        # Test 8: Nested graph receiving inputs from another node
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 8: Nested graph receiving inputs from another node")
+        print("=" * 60)
+
+        with GraphNode(name="outer_graph") as outer:
+            # Data source node provides configuration
+            data_source = CodeNode(
+                name="data_source",
+                code_fn=lambda: {"config": {"value": 5, "multiplier": 3}},
+                inputs={}
+            )
+
+            # Nested graph defined inside outer graph context
+            with GraphNode(
+                name="inner_processor",
+                inputs={"x": data_source["config"]["value"]},
+                outputs={"result": PARENT["inner_result"]}
+            ) as inner_graph:
+                double_node = CodeNode(
+                    name="double",
+                    code_fn=lambda x: {"doubled": x * 2},
+                    inputs={"x": PARENT["x"]}
+                )
+                add_ten = CodeNode(
+                    name="add_ten",
+                    code_fn=lambda val: {"result": val + 10},
+                    inputs={"val": double_node["doubled"]},
+                    outputs={"result": PARENT["result"]}
+                )
+                START >> double_node >> add_ten >> END
+
+            # Final node uses result from inner graph
+            final_node = CodeNode(
+                name="final",
+                code_fn=lambda inner_val, mult: {"final_result": inner_val * mult},
+                inputs={
+                    "inner_val": inner_graph["result"],
+                    "mult": data_source["config"]["multiplier"]
+                },
+                outputs={"final_result": PARENT["final_result"]}
+            )
+
+            START >> data_source >> inner_graph >> final_node >> END
+
+        outer.build()
+
+        print("\nOuter graph structure:")
+        outer.show()
+
+        schema8 = StateSchema(outer)
+        state8 = schema8.create_state()
+        result8 = await outer.run(state8)
+
+        print(f"\nResult: {result8}")
+        print(f"Expected: inner_result = (5 * 2) + 10 = 20")
+        print(f"          final_result = 20 * 3 = 60")
+        assert result8.get("inner_result") == 20, f"Got inner_result: {result8.get('inner_result')}"
+        assert result8.get("final_result") == 60, f"Got final_result: {result8.get('final_result')}"
+
+        print("\n" + "=" * 60)
+        print("Nested graph test passed!")
+        print("=" * 60)
+
     asyncio.run(main())
+
+
+# Simple alias for cleaner syntax
+graph = GraphNode
