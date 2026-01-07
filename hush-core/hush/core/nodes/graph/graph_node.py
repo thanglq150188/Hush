@@ -20,6 +20,8 @@ from hush.core.loggings import LOGGER
 NodeFlowType = Literal["MERGE", "FORK", "BLOOM", "BRANCH", "NORMAL", "OTHER"]
 
 
+# TODO: fix the case when we have two branch nodes pointing to the same target
+
 class GraphNode(BaseNode):
     """
     Node that contains and manages a subgraph of nodes.
@@ -615,54 +617,5 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("All Ref operation tests passed!")
         print("=" * 60)
-
-        # print("\n" + "=" * 60)
-        # print("Test 2: Parallel graph (A -> [B, C] -> D)")
-        # print("=" * 60)
-
-        # with GraphNode(name="parallel_graph") as graph2:
-        #     node_a = CodeNode(
-        #         name="start_node",
-        #         code_fn=lambda x: {"value": x},
-        #         inputs={"x": PARENT["x"]}
-        #     )
-
-        #     node_b = CodeNode(
-        #         name="branch_1",
-        #         code_fn=lambda x: {"result": x * 2},
-        #         inputs={"x": node_a["value"]}
-        #     )
-
-        #     node_c = CodeNode(
-        #         name="branch_2",
-        #         code_fn=lambda x: {"result": x * 3},
-        #         inputs={"x": node_a["value"]}
-        #     )
-
-        #     node_d = CodeNode(
-        #         name="merge_node",
-        #         code_fn=lambda a, b: {"final": a + b},
-        #         inputs={"a": node_b["result"], "b": node_c["result"]},
-        #         outputs=PARENT  # graph output = node output
-        #     )
-
-        #     START >> node_a >> [node_b, node_c] >> node_d >> END
-
-        # graph2.build()
-        # graph2.show()
-
-        # schema2 = StateSchema(graph2)
-        # schema2.show()
-
-        # state2 = schema2.create_state(inputs={"x": 10})
-        
-        # result2 = await graph2.run(state2)
-        # print(f"\nInput: x=10")
-        # print(f"Expected: (10*2) + (10*3) = 50")
-        # print(f"Result: {result2}")
-
-        # print("\n" + "=" * 60)
-        # print("All tests passed!")
-        # print("=" * 60)
 
     asyncio.run(main())

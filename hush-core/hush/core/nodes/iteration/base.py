@@ -10,6 +10,44 @@ if TYPE_CHECKING:
     from hush.core.states import BaseState
 
 
+class Each:
+    """Marker wrapper for iteration sources in unified inputs.
+
+    Use this to mark which input should be iterated over (one value per iteration),
+    as opposed to broadcast inputs (same value for all iterations).
+
+    Example:
+        with ForLoopNode(
+            inputs={
+                "item": Each(items_node["items"]),  # iterate over this
+                "multiplier": PARENT["multiplier"]   # broadcast to all iterations
+            }
+        ) as loop:
+            ...
+
+        with AsyncIterNode(
+            inputs={
+                "chunk": Each(stream_source["stream"]),  # iterate over async iterable
+                "prefix": config_node["prefix"]          # broadcast
+            }
+        ) as stream:
+            ...
+    """
+
+    __slots__ = ['source']
+
+    def __init__(self, source: Any):
+        """Initialize Each wrapper.
+
+        Args:
+            source: The iterable source (list, Ref to list, async iterable, etc.)
+        """
+        self.source = source
+
+    def __repr__(self) -> str:
+        return f"Each({self.source!r})"
+
+
 class IterationNode(BaseNode):
     """
     Base class for iteration nodes that contain an inner graph.
