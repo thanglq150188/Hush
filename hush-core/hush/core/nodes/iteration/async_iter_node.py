@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import IterationNode, Each
+from hush.core.nodes.iteration.base import BaseIterationNode, Each
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -22,7 +22,7 @@ def batch_by_size(n: int) -> Callable[[List, Any], bool]:
     return lambda batch, _: len(batch) >= n
 
 
-class AsyncIterNode(IterationNode):
+class AsyncIterNode(BaseIterationNode):
     """
     A streaming node that processes async iterable data with optional batching.
 

@@ -48,9 +48,9 @@ class Each:
         return f"Each({self.source!r})"
 
 
-class IterationNode(BaseNode):
+class BaseIterationNode(BaseNode):
     """
-    Base class for iteration nodes that contain an inner graph.
+    Abstract base class for iteration nodes that contain an inner graph.
 
     Provides common functionality for:
     - ForLoopNode: Iterates over a collection concurrently
@@ -69,7 +69,7 @@ class IterationNode(BaseNode):
     __slots__ = ['_graph', '_token']
 
     def __init__(self, **kwargs):
-        """Initialize an IterationNode with an inner graph."""
+        """Initialize a BaseIterationNode with an inner graph."""
         super().__init__(**kwargs)
         self._graph: GraphNode = GraphNode(name=BaseNode.INNER_PROCESS)
         self._graph.father = self

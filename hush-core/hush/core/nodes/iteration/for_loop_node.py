@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import IterationNode, Each
+from hush.core.nodes.iteration.base import BaseIterationNode, Each
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from hush.core.states import BaseState
 
 
-class ForLoopNode(IterationNode):
+class ForLoopNode(BaseIterationNode):
     """A node that iterates over collections with support for broadcast variables.
 
     API (unified inputs with Each wrapper):
