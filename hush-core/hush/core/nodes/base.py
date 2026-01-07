@@ -300,25 +300,19 @@ class BaseNode(ABC):
     def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
         """Retrieve input values from state based on connection mappings.
 
-        Uses state[node, var, ctx] which:
-        1. Resolves to canonical storage location via index
+        Uses state[this_node, var_name, ctx] which:
+        1. Resolves to canonical storage location via schema index
         2. Automatically applies any Ref operations (like ['key'].apply(len))
 
-        This unified approach handles both direct refs and chained refs with ops.
+        The schema already resolved the Ref chain at build time, so we read
+        from this node's own variable name - the index and ops are pre-computed.
         """
         result = {}
 
         for var_name, ref in self.inputs.items():
             if isinstance(ref, Ref):
-                # Use state[...] which handles index resolution and ops application
-                value = state[ref.node, ref.var, context_id]
-                # If ref has additional ops not captured in schema, apply them
-                if ref.has_ops:
-                    # Check if these ops are already in schema
-                    schema_ops = state.schema.get_ops(ref.node, ref.var)
-                    if not schema_ops:
-                        # Ops not in schema, apply them now
-                        value = ref.execute(value)
+                # Read from this node's variable - schema handles index resolution and ops
+                value = state[self.full_name, var_name, context_id]
                 result[var_name] = value
             else:
                 # Literal value
