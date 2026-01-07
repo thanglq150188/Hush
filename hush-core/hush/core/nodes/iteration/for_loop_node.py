@@ -1,4 +1,4 @@
-"""For loop node v2 with improved API using `each` and `inputs` parameters."""
+"""For loop node with unified inputs API using Each wrapper for iteration sources."""
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import IterationNode
+from hush.core.nodes.iteration.base import IterationNode, Each
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -20,15 +20,19 @@ if TYPE_CHECKING:
 class ForLoopNode(IterationNode):
     """A node that iterates over collections with support for broadcast variables.
 
-    API:
-        - `each`: Dict of variables to iterate over (different value per iteration)
-        - `inputs`: Dict of variables to broadcast (same value for all iterations)
+    API (unified inputs with Each wrapper):
+        - `inputs`: Dict of all variables. Use Each() wrapper for iteration sources.
+          - Each(source): Variable iterated over (different value per iteration)
+          - Regular values: Broadcast to all iterations (same value)
 
     Example:
         with ForLoopNode(
             name="process_loop",
-            each={"x": [1, 2, 3], "y": [10, 20, 30]},  # iterate (zip)
-            inputs={"multiplier": 10}                   # broadcast
+            inputs={
+                "x": Each([1, 2, 3]),           # iterate
+                "y": Each([10, 20, 30]),        # iterate (zipped with x)
+                "multiplier": 10                 # broadcast
+            }
         ) as loop:
             node = calc(inputs={"x": PARENT["x"], "y": PARENT["y"], "multiplier": PARENT["multiplier"]})
             START >> node >> END
@@ -44,11 +48,10 @@ class ForLoopNode(IterationNode):
 
     type: NodeType = "for"
 
-    __slots__ = ['_max_concurrency', '_each', '_broadcast_inputs', '_raw_outputs']
+    __slots__ = ['_max_concurrency', '_each', '_broadcast_inputs', '_raw_outputs', '_raw_inputs']
 
     def __init__(
         self,
-        each: Optional[Dict[str, Any]] = None,
         inputs: Optional[Dict[str, Any]] = None,
         max_concurrency: Optional[int] = None,
         **kwargs
@@ -56,32 +59,42 @@ class ForLoopNode(IterationNode):
         """Initialize a ForLoopNode.
 
         Args:
-            each: Dict mapping variable names to lists (or Refs to lists).
-                  These variables will be iterated over (zipped together).
-            inputs: Dict mapping variable names to values (or Refs to values).
-                    These variables will be broadcast to all iterations.
+            inputs: Dict mapping variable names to values or Each(source).
+                    - Each(source): Iterated over (zipped if multiple)
+                    - Other values: Broadcast to all iterations
+                    Values can be literals or Refs to upstream nodes.
             max_concurrency: Maximum number of concurrent tasks to run.
                 Defaults to the number of CPU cores if not specified.
         """
-        # Store raw outputs before super().__init__ normalizes it
+        # Store raw outputs and inputs before super().__init__ normalizes them
         self._raw_outputs = kwargs.get('outputs')
+        self._raw_inputs = inputs or {}
 
         # Don't pass inputs to parent - we handle it ourselves
         super().__init__(**kwargs)
 
-        self._each = each or {}
-        self._broadcast_inputs = inputs or {}
+        # Separate Each() sources from broadcast inputs
+        self._each = {}
+        self._broadcast_inputs = {}
+
+        for var_name, value in self._raw_inputs.items():
+            if isinstance(value, Each):
+                self._each[var_name] = value.source
+            else:
+                self._broadcast_inputs[var_name] = value
+
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
-        # Validate no overlap between each and inputs
-        overlap = set(self._each.keys()) & set(self._broadcast_inputs.keys())
-        if overlap:
-            raise ValueError(
-                f"ForLoopNode '{self.full_name}': variables cannot be in both 'each' and 'inputs': {overlap}"
-            )
-
     def _post_build(self):
-        """Set input/output schema after inner graph is built."""
+        """Set input/output schema after inner graph is built.
+
+        IMPORTANT: This method normalizes _each and _broadcast_inputs using
+        _normalize_connections to resolve PARENT refs to self.father.
+        """
+        # Normalize each and broadcast inputs (resolves PARENT refs)
+        self._each = self._normalize_connections(self._each, {})
+        self._broadcast_inputs = self._normalize_connections(self._broadcast_inputs, {})
+
         # Input schema: all variables from each (List type) + broadcast inputs (Any type)
         self.input_schema = {
             var_name: Param(type=List, required=isinstance(value, Ref))
@@ -289,10 +302,10 @@ if __name__ == "__main__":
 
     async def main():
         # =================================================================
-        # Test 1: Simple iteration with `each`
+        # Test 1: Simple iteration with Each()
         # =================================================================
         print("=" * 60)
-        print("Test 1: Simple iteration with `each`")
+        print("Test 1: Simple iteration with Each()")
         print("=" * 60)
 
         @code_node
@@ -301,7 +314,7 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="double_loop",
-            each={"value": [1, 2, 3, 4, 5]}
+            inputs={"value": Each([1, 2, 3, 4, 5])}
         ) as loop1:
             node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
@@ -332,8 +345,10 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="multiply_loop",
-            each={"value": [1, 2, 3]},
-            inputs={"multiplier": 10}
+            inputs={
+                "value": Each([1, 2, 3]),
+                "multiplier": 10  # broadcast
+            }
         ) as loop2:
             node = multiply(
                 inputs={"value": PARENT["value"], "multiplier": PARENT["multiplier"]},
@@ -352,10 +367,10 @@ if __name__ == "__main__":
         assert result2['result'] == [10, 20, 30]
 
         # =================================================================
-        # Test 3: Multiple `each` variables (zip)
+        # Test 3: Multiple Each() variables (zip)
         # =================================================================
         print("\n" + "=" * 60)
-        print("Test 3: Multiple `each` variables (zip)")
+        print("Test 3: Multiple Each() variables (zip)")
         print("=" * 60)
 
         @code_node
@@ -364,9 +379,9 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="add_loop",
-            each={
-                "x": [1, 2, 3],
-                "y": [10, 20, 30]
+            inputs={
+                "x": Each([1, 2, 3]),
+                "y": Each([10, 20, 30])
             }
         ) as loop3:
             node = add(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs=PARENT)
@@ -383,10 +398,10 @@ if __name__ == "__main__":
         assert result3['sum'] == [11, 22, 33]
 
         # =================================================================
-        # Test 4: Multiple `each` + broadcast
+        # Test 4: Multiple Each() + broadcast
         # =================================================================
         print("\n" + "=" * 60)
-        print("Test 4: Multiple `each` + broadcast")
+        print("Test 4: Multiple Each() + broadcast")
         print("=" * 60)
 
         @code_node
@@ -395,11 +410,11 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="compute_loop",
-            each={
-                "x": [1, 2, 3],
-                "y": [10, 20, 30]
-            },
-            inputs={"factor": 2}
+            inputs={
+                "x": Each([1, 2, 3]),
+                "y": Each([10, 20, 30]),
+                "factor": 2  # broadcast
+            }
         ) as loop4:
             node = compute(
                 inputs={"x": PARENT["x"], "y": PARENT["y"], "factor": PARENT["factor"]},
@@ -430,8 +445,10 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="greeting_loop",
-            each={"name": ["Alice", "Bob", "Charlie"]},
-            inputs={"greeting": "Hello"}
+            inputs={
+                "name": Each(["Alice", "Bob", "Charlie"]),
+                "greeting": "Hello"  # broadcast
+            }
         ) as loop5:
             node = format_greeting(
                 inputs={"name": PARENT["name"], "greeting": PARENT["greeting"]},
@@ -466,7 +483,7 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="chain_loop",
-            each={"x": [1, 2, 3]}
+            inputs={"x": Each([1, 2, 3])}
         ) as loop6:
             n1 = add_one(inputs={"x": PARENT["x"]})
             n2 = multiply_two(inputs={"y": n1["y"]}, outputs=PARENT)
@@ -496,7 +513,7 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="concurrent_loop",
-            each={"value": [1, 2, 3, 4, 5]},
+            inputs={"value": Each([1, 2, 3, 4, 5])},
             max_concurrency=2
         ) as loop7:
             node = slow_process(inputs={"value": PARENT["value"]}, outputs=PARENT)
@@ -532,8 +549,10 @@ if __name__ == "__main__":
 
             with ForLoopNode(
                 name="ref_loop",
-                each={"item": gen_node["numbers"]},
-                inputs={"factor": gen_node["factor"]},
+                inputs={
+                    "item": Each(gen_node["numbers"]),
+                    "factor": gen_node["factor"]  # broadcast Ref
+                },
                 outputs=PARENT
             ) as loop8:
                 proc_node = process_item(
@@ -568,12 +587,12 @@ if __name__ == "__main__":
         # Simpler nested structure: outer loop processes, each returns a list
         with ForLoopNode(
             name="outer_loop",
-            each={"a": [1, 2, 3]}
+            inputs={"a": Each([1, 2, 3])}
         ) as outer_loop9:
             # Each outer iteration creates inner loop data
             with ForLoopNode(
                 name="inner_loop",
-                each={"x": [10, 20]},
+                inputs={"x": Each([10, 20])},
                 outputs=PARENT
             ) as inner_loop9:
                 inner_node = inner_double(inputs={"x": PARENT["x"]}, outputs=PARENT)
@@ -600,7 +619,7 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="empty_loop",
-            each={"value": []}
+            inputs={"value": Each([])}
         ) as loop10:
             node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
@@ -628,9 +647,9 @@ if __name__ == "__main__":
 
         with ForLoopNode(
             name="mismatch_loop",
-            each={
-                "x": [1, 2, 3],
-                "y": [10, 20]  # Different length!
+            inputs={
+                "x": Each([1, 2, 3]),
+                "y": Each([10, 20])  # Different length!
             }
         ) as loop11:
             node = dummy(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs=PARENT)
@@ -651,7 +670,7 @@ if __name__ == "__main__":
         # Test 12: Ref with operations in ForLoopNode
         # =================================================================
         print("\n" + "=" * 60)
-        print("Test 12: Ref with operations (each uses Ref['key'])")
+        print("Test 12: Ref with operations (Each uses Ref['key'])")
         print("=" * 60)
 
         @code_node
@@ -670,12 +689,14 @@ if __name__ == "__main__":
         with GraphNode(name="ref_ops_for_graph") as graph12:
             data_node = get_complex_data()
 
-            # Use Ref operations: each uses data["dataset"]["items"]
-            # inputs uses data["dataset"]["multiplier"]
+            # Use Ref operations: Each uses data["dataset"]["items"]
+            # broadcast uses data["dataset"]["multiplier"]
             with ForLoopNode(
                 name="ref_ops_loop",
-                each={"item": data_node["dataset"]["items"]},
-                inputs={"factor": data_node["dataset"]["multiplier"]},
+                inputs={
+                    "item": Each(data_node["dataset"]["items"]),
+                    "factor": data_node["dataset"]["multiplier"]  # broadcast
+                },
                 outputs=PARENT
             ) as loop12:
                 proc = process_with_factor(
@@ -714,10 +735,10 @@ if __name__ == "__main__":
         with GraphNode(name="ref_apply_for_graph") as graph13:
             data_node = get_nested_lists()
 
-            # each uses Ref with nested access
+            # Each uses Ref with nested access
             with ForLoopNode(
                 name="apply_loop",
-                each={"numbers": data_node["data"]["lists"]},
+                inputs={"numbers": Each(data_node["data"]["lists"])},
                 outputs=PARENT
             ) as loop13:
                 sum_node = sum_list(inputs={"numbers": PARENT["numbers"]}, outputs=PARENT)
@@ -758,7 +779,7 @@ if __name__ == "__main__":
             # Then we iterate over it
             with ForLoopNode(
                 name="score_loop",
-                each={"user": users_node["response"]["users"]},
+                inputs={"user": Each(users_node["response"]["users"])},
                 outputs=PARENT
             ) as loop14:
                 # Inside the loop, we access user["score"]
@@ -780,6 +801,51 @@ if __name__ == "__main__":
         print(f"Result: {result14}")
         print(f"Expected: [20, 40, 60]")
         assert result14["result"] == [20, 40, 60]
+
+        # =================================================================
+        # Test 15: ForLoopNode with PARENT broadcast inside GraphNode
+        # =================================================================
+        print("\n" + "=" * 60)
+        print("Test 15: ForLoopNode with PARENT broadcast inside GraphNode")
+        print("=" * 60)
+
+        @code_node
+        def get_items():
+            return {"items": [1, 2, 3, 4, 5]}
+
+        @code_node
+        def multiply_item(item: int, multiplier: int):
+            return {"result": item * multiplier}
+
+        with GraphNode(name="parent_broadcast_graph") as graph15:
+            items_node = get_items()
+
+            # ForLoopNode uses PARENT["multiplier"] as broadcast - should resolve to graph15
+            with ForLoopNode(
+                name="multiply_loop",
+                inputs={
+                    "item": Each(items_node["items"]),
+                    "multiplier": PARENT["multiplier"]  # <-- PARENT = graph15
+                },
+                outputs=PARENT
+            ) as loop15:
+                proc = multiply_item(
+                    inputs={"item": PARENT["item"], "multiplier": PARENT["multiplier"]},
+                    outputs=PARENT
+                )
+                START >> proc >> END
+
+            START >> items_node >> loop15 >> END
+
+        graph15.build()
+
+        schema15 = StateSchema(graph15)
+        state15 = schema15.create_state(inputs={"multiplier": 10})
+
+        result15 = await graph15.run(state15)
+        print(f"Result: {result15}")
+        print(f"Expected: [10, 20, 30, 40, 50]  # [1*10, 2*10, 3*10, 4*10, 5*10]")
+        assert result15["result"] == [10, 20, 30, 40, 50]
 
         # =================================================================
         print("\n" + "=" * 60)
