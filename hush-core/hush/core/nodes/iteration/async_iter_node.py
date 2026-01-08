@@ -14,7 +14,7 @@ from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
-    from hush.core.states import BaseState
+    from hush.core.states import MemoryState
 
 
 def batch_by_size(n: int) -> Callable[[List, Any], bool]:
@@ -154,7 +154,7 @@ class AsyncIterNode(BaseIterationNode):
 
     def _resolve_broadcast_values(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         context_id: Optional[str]
     ) -> Dict[str, Any]:
         """Resolve broadcast input values, dereferencing any Refs."""
@@ -169,7 +169,7 @@ class AsyncIterNode(BaseIterationNode):
                 result[var_name] = value
         return result
 
-    def _get_source(self, state: 'BaseState', context_id: Optional[str]) -> AsyncIterable:
+    def _get_source(self, state: 'MemoryState', context_id: Optional[str]) -> AsyncIterable:
         """Get the async iterable source, resolving Ref if needed."""
         iter_var_name = list(self._each.keys())[0]
         source = self._each[iter_var_name]
@@ -185,7 +185,7 @@ class AsyncIterNode(BaseIterationNode):
         self,
         chunk_data: Dict[str, Any],
         chunk_id: int,
-        state: 'BaseState',
+        state: 'MemoryState',
         request_id: str
     ) -> Dict[str, Any]:
         """Process a single chunk through the inner graph."""
@@ -213,7 +213,7 @@ class AsyncIterNode(BaseIterationNode):
 
     async def run(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Process streaming data with concurrent processing but ordered output."""

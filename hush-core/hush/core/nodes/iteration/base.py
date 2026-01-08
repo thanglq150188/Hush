@@ -7,7 +7,7 @@ from hush.core.nodes.graph.graph_node import GraphNode
 from hush.core.utils.context import _current_graph
 
 if TYPE_CHECKING:
-    from hush.core.states import BaseState
+    from hush.core.states import MemoryState
 
 
 class Each:
@@ -146,7 +146,7 @@ class BaseIterationNode(BaseNode):
 
     def inject_inputs(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         inputs: Dict[str, Any],
         context_id: str
     ) -> None:
@@ -157,12 +157,9 @@ class BaseIterationNode(BaseNode):
             inputs: Dict of {var_name: value} to inject
             context_id: The context ID for this iteration
 
-        Note: Stores at BOTH the iteration node's location (for PARENT refs)
-        AND the inner graph's location (for direct graph input refs).
-        This allows inner nodes using PARENT["var"] to find the values.
+        Note: Values are stored at the iteration node's location.
+        The schema links inner_graph.var -> iteration_node.var so
+        PARENT["var"] in inner nodes resolves correctly via refs.
         """
         for var_name, value in inputs.items():
-            # Store at iteration node's location (for PARENT["var"] access)
-            state._set_value(self.full_name, var_name, context_id, value)
-            # Also store at inner graph's location (for backward compatibility)
-            state._set_value(self._graph.full_name, var_name, context_id, value)
+            state[self.full_name, var_name, context_id] = value

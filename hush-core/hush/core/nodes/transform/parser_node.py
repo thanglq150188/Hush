@@ -206,37 +206,55 @@ class ParserNode(BaseNode):
 
 if __name__ == "__main__":
     import asyncio
-    from hush.core.states import StateSchema
+    from hush.core.states import StateSchema, MemoryState
+    from hush.core.nodes import GraphNode, START, END, PARENT
+
+    def test(name: str, condition: bool):
+        status = "PASS" if condition else "FAIL"
+        print(f"  [{status}] {name}")
+        if not condition:
+            raise AssertionError(f"Test failed: {name}")
 
     async def main():
-        schema = StateSchema("test")
-        state = schema.create_state()
-
-        # Test 1: JSON parser
+        # =====================================================================
+        # Test 1: JSON parser in a graph with state
+        # =====================================================================
+        print("\n" + "=" * 50)
+        print("Test 1: JSON Parser in graph with state")
         print("=" * 50)
-        print("Test 1: JSON Parser")
-        print("=" * 50)
 
-        json_parser = ParserNode(
-            name="json_parser",
-            format="json",
-            extract_schema=[
-                "user.name",
-                "user.age",
-                "status",
-            ],
-            inputs={"text": '{"user": {"name": "John", "age": 30}, "status": "active"}'}
-        )
+        with GraphNode(name="json_workflow") as graph:
+            json_parser = ParserNode(
+                name="json_parser",
+                format="json",
+                extract_schema=[
+                    "user.name",
+                    "user.age",
+                    "status",
+                ],
+                inputs={"text": PARENT["text"]}
+            )
+            START >> json_parser >> END
 
-        print(f"Input schema: {json_parser.input_schema}")
-        print(f"Output schema: {json_parser.output_schema}")
+        graph.build()
+        schema = StateSchema(graph)
+
+        json_text = '{"user": {"name": "John", "age": 30}, "status": "active"}'
+        state = MemoryState(schema, inputs={"text": json_text})
 
         result = await json_parser.run(state)
-        print(f"Result: {result}")
+        test("JSON: name extracted", result["name"] == "John")
+        test("JSON: age extracted", result["age"] == 30)
+        test("JSON: status extracted", result["status"] == "active")
 
-        # Test 2: XML parser
+        # Verify state was updated
+        test("state has name", state["json_workflow.json_parser", "name", None] == "John")
+
+        # =====================================================================
+        # Test 2: XML parser in graph with state
+        # =====================================================================
         print("\n" + "=" * 50)
-        print("Test 2: XML Parser")
+        print("Test 2: XML Parser in graph with state")
         print("=" * 50)
 
         xml_text = """
@@ -249,63 +267,103 @@ if __name__ == "__main__":
         </response>
         """
 
-        xml_parser = ParserNode(
-            name="xml_parser",
-            format="xml",
-            extract_schema=[
-                "response.user.name",
-                "response.user.email",
-                "response.code",
-            ],
-            inputs={"text": xml_text}
-        )
+        with GraphNode(name="xml_workflow") as graph2:
+            xml_parser = ParserNode(
+                name="xml_parser",
+                format="xml",
+                extract_schema=[
+                    "response.user.name",
+                    "response.user.email",
+                    "response.code",
+                ],
+                inputs={"text": PARENT["text"]}
+            )
+            START >> xml_parser >> END
 
-        result2 = await xml_parser.run(state)
-        print(f"Result: {result2}")
+        graph2.build()
+        schema2 = StateSchema(graph2)
+        state2 = MemoryState(schema2, inputs={"text": xml_text})
 
-        # Test 3: Key-Value parser
+        result2 = await xml_parser.run(state2)
+        test("XML: name extracted", result2["name"] == "Alice")
+        test("XML: email extracted", result2["email"] == "alice@example.com")
+        test("XML: code extracted", result2["code"] == "200")
+
+        # =====================================================================
+        # Test 3: Key-Value parser in graph with state
+        # =====================================================================
         print("\n" + "=" * 50)
-        print("Test 3: Key-Value Parser")
+        print("Test 3: Key-Value Parser in graph with state")
         print("=" * 50)
 
-        kv_text = """
-        name=Bob
-        age=25
-        city=New York
-        """
+        kv_text = """name=Bob
+age=25
+city=New York"""
 
-        kv_parser = ParserNode(
-            name="kv_parser",
-            format="key_value",
-            separator="=",
-            extract_schema=["name", "age", "city"],
-            inputs={"text": kv_text}
-        )
+        with GraphNode(name="kv_workflow") as graph3:
+            kv_parser = ParserNode(
+                name="kv_parser",
+                format="key_value",
+                separator="=",
+                extract_schema=["name", "age", "city"],
+                inputs={"text": PARENT["text"]}
+            )
+            START >> kv_parser >> END
 
-        result3 = await kv_parser.run(state)
-        print(f"Result: {result3}")
+        graph3.build()
+        schema3 = StateSchema(graph3)
+        state3 = MemoryState(schema3, inputs={"text": kv_text})
 
-        # Test 4: Regex parser
+        result3 = await kv_parser.run(state3)
+        test("KV: name extracted", result3["name"] == "Bob")
+        test("KV: age extracted", result3["age"] == "25")
+        test("KV: city extracted", result3["city"] == "New York")
+
+        # =====================================================================
+        # Test 4: Regex parser in graph with state
+        # =====================================================================
         print("\n" + "=" * 50)
-        print("Test 4: Regex Parser")
+        print("Test 4: Regex Parser in graph with state")
         print("=" * 50)
 
         regex_text = "User: john_doe, Email: john@example.com, Score: 95"
 
-        regex_parser = ParserNode(
-            name="regex_parser",
-            format="regex",
-            pattern=r"User: (?P<username>\w+), Email: (?P<email>[\w@.]+), Score: (?P<score>\d+)",
-            extract_schema=["username", "email", "score"],
-            inputs={"text": regex_text}
-        )
+        with GraphNode(name="regex_workflow") as graph4:
+            regex_parser = ParserNode(
+                name="regex_parser",
+                format="regex",
+                pattern=r"User: (?P<username>\w+), Email: (?P<email>[\w@.]+), Score: (?P<score>\d+)",
+                extract_schema=["username", "email", "score"],
+                inputs={"text": PARENT["text"]}
+            )
+            START >> regex_parser >> END
 
-        result4 = await regex_parser.run(state)
-        print(f"Result: {result4}")
+        graph4.build()
+        schema4 = StateSchema(graph4)
+        state4 = MemoryState(schema4, inputs={"text": regex_text})
 
-        # Test 5: Quick test using __call__
+        result4 = await regex_parser.run(state4)
+        test("Regex: username extracted", result4["username"] == "john_doe")
+        test("Regex: email extracted", result4["email"] == "john@example.com")
+        test("Regex: score extracted", result4["score"] == "95")
+
+        # =====================================================================
+        # Test 5: Schema extraction
+        # =====================================================================
         print("\n" + "=" * 50)
-        print("Test 5: Quick test using __call__")
+        print("Test 5: Schema extraction")
+        print("=" * 50)
+
+        test("json_parser has 'text' in input_schema", "text" in json_parser.input_schema)
+        test("json_parser has 'name' in output_schema", "name" in json_parser.output_schema)
+        test("json_parser has 'age' in output_schema", "age" in json_parser.output_schema)
+        test("json_parser has 'status' in output_schema", "status" in json_parser.output_schema)
+
+        # =====================================================================
+        # Test 6: Quick __call__ test
+        # =====================================================================
+        print("\n" + "=" * 50)
+        print("Test 6: Quick __call__ test")
         print("=" * 50)
 
         quick_parser = ParserNode(
@@ -314,10 +372,14 @@ if __name__ == "__main__":
             extract_schema=["name", "age"]
         )
         result5 = quick_parser(text='{"name": "Bob", "age": 25}')
-        print(f"quick_parser(text=...) = {result5}")
+        test("quick call: name", result5["name"] == "Bob")
+        test("quick call: age", result5["age"] == 25)
 
+        # =====================================================================
+        # Summary
+        # =====================================================================
         print("\n" + "=" * 50)
-        print("All tests passed!")
+        print("All ParserNode tests passed!")
         print("=" * 50)
 
     asyncio.run(main())

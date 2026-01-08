@@ -15,7 +15,7 @@ from hush.core.loggings import LOGGER, format_log_data
 from hush.core.states.ref import Ref
 
 if TYPE_CHECKING:
-    from hush.core.states import BaseState
+    from hush.core.states import MemoryState
 
 
 class BaseNode(ABC):
@@ -273,14 +273,14 @@ class BaseNode(ABC):
         Returns:
             Dict of outputs from the node execution.
         """
-        from hush.core.states import StateSchema
-
-        # Create temporary state with schema
-        schema = StateSchema(f"test_{self.name}")
-        state = schema.create_state()
+        from hush.core.states import StateSchema, MemoryState
 
         # Store kwargs as direct inputs (bypass connection resolution)
         self.inputs = kwargs
+
+        # Create schema from this node (registers inputs, outputs, metadata)
+        schema = StateSchema(node=self)
+        state = MemoryState(schema)
 
         # Run synchronously
         loop = asyncio.get_event_loop()
@@ -297,7 +297,7 @@ class BaseNode(ABC):
     def is_base_node(self) -> bool:
         return True
 
-    def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
+    def get_inputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
         """Retrieve input values from state based on connection mappings.
 
         Uses state[this_node, var_name, ctx] which:
@@ -320,39 +320,21 @@ class BaseNode(ABC):
 
         return result
 
-    def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
+    def get_outputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
         """Retrieve output values from state.
 
-        For nodes with output connections (outputs={...}), follows the Refs
-        to read from the actual source location. Otherwise reads directly
-        from this node's output variables.
-
-        Uses state[...] for index-based O(1) lookup with automatic ops application.
+        Reads directly from this node's output variables. Output connections
+        (outputs={...}) are already resolved by the schema at build time -
+        they create refs in the target location, not in this node.
         """
         result = {}
-
         for var_name in self.output_schema:
-            # Check if this output has a connection (Ref to another node)
-            if self.outputs and var_name in self.outputs:
-                ref = self.outputs[var_name]
-                if isinstance(ref, Ref):
-                    # Read from the referenced node's output
-                    value = state[ref.node, ref.var, context_id]
-                    if ref.has_ops:
-                        schema_ops = state.schema.get_ops(ref.node, ref.var)
-                        if not schema_ops:
-                            value = ref.execute(value)
-                    result[var_name] = value
-                    continue
-
-            # No connection - read directly from this node
             result[var_name] = state[self.full_name, var_name, context_id]
-
         return result
 
     def store_result(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         result: Dict[str, Any],
         context_id: str
     ) -> None:
@@ -386,7 +368,7 @@ class BaseNode(ABC):
 
     async def run(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Run the node."""

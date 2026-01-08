@@ -12,7 +12,7 @@ import traceback
 from hush.core.configs.edge_config import EdgeConfig, EdgeType
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.base import BaseNode, START, END, PARENT
-from hush.core.states import BaseState, StateSchema, Ref
+from hush.core.states import MemoryState, StateSchema, Ref
 from hush.core.utils.context import _current_graph
 from hush.core.utils.bimap import BiMap
 from hush.core.loggings import LOGGER
@@ -122,29 +122,6 @@ class GraphNode(BaseNode):
 
         self.input_schema = input_schema
         self.output_schema = output_schema
-
-    # def get_inputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-    #     """Get graph inputs directly from state.
-
-    #     Unlike regular nodes that read from referenced nodes, graph inputs
-    #     are stored directly at (graph.full_name, var_name, context_id).
-    #     """
-
-    #     return {
-    #         var_name: state._get_value(self.full_name, var_name, context_id)
-    #         for var_name in self.input_schema
-    #     }
-
-    # def get_outputs(self, state: 'BaseState', context_id: str) -> Dict[str, Any]:
-    #     """Get graph outputs using schema links.
-
-    #     Graph outputs are aliases to inner node outputs (e.g., graph.result -> inner_node.result).
-    #     We MUST follow schema links here to read from the inner node's output location.
-    #     """
-    #     return {
-    #         var_name: state[self.full_name, var_name, context_id]
-    #         for var_name in self.output_schema
-    #     }
 
     def _build_flow_type(self):
         """Determine flow type of each node based on connection pattern."""
@@ -319,7 +296,7 @@ class GraphNode(BaseNode):
 
     async def run(
         self,
-        state: BaseState,
+        state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute graph by running all nodes in dependency order."""
@@ -404,8 +381,17 @@ class GraphNode(BaseNode):
 if __name__ == "__main__":
     from hush.core.nodes.transform.code_node import CodeNode
 
+    def test(name: str, condition: bool):
+        status = "PASS" if condition else "FAIL"
+        print(f"  [{status}] {name}")
+        if not condition:
+            raise AssertionError(f"Test failed: {name}")
+
     async def main():
-        print("=" * 60)
+        # =====================================================================
+        # Test 1: Simple linear graph (A -> B -> C)
+        # =====================================================================
+        print("\n" + "=" * 60)
         print("Test 1: Simple linear graph (A -> B -> C)")
         print("=" * 60)
 
@@ -415,7 +401,7 @@ if __name__ == "__main__":
                 code_fn=lambda x: {"result": x + 10},
                 inputs={"x": PARENT["x"]}
             )
-            
+
             node_b = CodeNode(
                 name="node_b",
                 code_fn=lambda x: {"result": x * 2},
@@ -426,53 +412,47 @@ if __name__ == "__main__":
                 name="node_c",
                 code_fn=lambda x: {"result": x - 5},
                 inputs={"x": node_b["result"]},
-                outputs={"result": PARENT["result"]}  # graph output = node output
+                outputs={"result": PARENT["result"]}
             )
 
             START >> node_a >> node_b >> node_c >> END
 
         graph.build()
-
-        # Create schema from graph (simple!)
         schema = StateSchema(graph)
+        state = MemoryState(schema, inputs={"x": 5})
 
-        # Create state and run
-        state = schema.create_state(inputs={"x": 5})
         result = await graph.run(state)
-        print(f"\nInput: x=5")
-        print(f"Expected: ((5 + 10) * 2) - 5 = 25")
-        print(f"Result: {result}")
+        test("linear graph result = 25", result["result"] == 25)
+        test("state has graph result", state["linear_graph", "result", None] == 25)
+        test("state has node_a result", state["linear_graph.node_a", "result", None] == 15)
+        test("state has node_b result", state["linear_graph.node_b", "result", None] == 30)
 
-        # =================================================================
-        # Test 2: Ref with operations (new Ref feature)
-        # =================================================================
+        # =====================================================================
+        # Test 2: Ref with operations (getitem, method calls)
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 2: Ref with operations (getitem, apply)")
         print("=" * 60)
 
         with GraphNode(name="ref_ops_graph") as graph2:
-            # Node A returns a dict with nested data
             node_a = CodeNode(
                 name="data_source",
                 code_fn=lambda: {"data": {"items": [1, 2, 3, 4, 5], "name": "test"}},
                 inputs={}
             )
 
-            # Node B uses Ref with getitem to extract nested value
             node_b = CodeNode(
                 name="extract_items",
                 code_fn=lambda items: {"count": len(items), "sum": sum(items)},
-                inputs={"items": node_a["data"]["items"]}  # Ref with chained getitem
+                inputs={"items": node_a["data"]["items"]}
             )
 
-            # Node C uses Ref with apply to transform data
             node_c = CodeNode(
                 name="transform_name",
                 code_fn=lambda name: {"upper_name": name},
-                inputs={"name": node_a["data"]["name"].upper()}  # Ref with method call
+                inputs={"name": node_a["data"]["name"].upper()}
             )
 
-            # Node D merges results
             node_d = CodeNode(
                 name="merge_results",
                 code_fn=lambda count, total, name: {"result": f"{name}: {count} items, sum={total}"},
@@ -487,52 +467,44 @@ if __name__ == "__main__":
             START >> node_a >> [node_b, node_c] >> node_d >> END
 
         graph2.build()
-
         schema2 = StateSchema(graph2)
-        state2 = schema2.create_state()
+        state2 = MemoryState(schema2)
 
         result2 = await graph2.run(state2)
-        print(f"Result: {result2}")
-        print(f"Expected: {{'result': 'TEST: 5 items, sum=15'}}")
-        assert result2["result"] == "TEST: 5 items, sum=15", f"Got: {result2}"
+        test("ref ops result", result2["result"] == "TEST: 5 items, sum=15")
 
-        # =================================================================
+        # =====================================================================
         # Test 3: Ref with apply() for function application
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 3: Ref with apply() for function application")
         print("=" * 60)
 
         with GraphNode(name="ref_apply_graph") as graph3:
-            # Node A returns a list
             node_a = CodeNode(
                 name="list_source",
                 code_fn=lambda: {"numbers": [5, 2, 8, 1, 9, 3]},
                 inputs={}
             )
 
-            # Node B uses Ref.apply(len) to get length
             node_b = CodeNode(
                 name="get_length",
                 code_fn=lambda length: {"length": length},
                 inputs={"length": node_a["numbers"].apply(len)}
             )
 
-            # Node C uses Ref.apply(sorted) to sort
             node_c = CodeNode(
                 name="sort_numbers",
                 code_fn=lambda sorted_nums: {"sorted": sorted_nums},
                 inputs={"sorted_nums": node_a["numbers"].apply(sorted)}
             )
 
-            # Node D uses Ref.apply(sum) to get sum
             node_d = CodeNode(
                 name="sum_numbers",
                 code_fn=lambda total: {"total": total},
                 inputs={"total": node_a["numbers"].apply(sum)}
             )
 
-            # Node E merges all results
             node_e = CodeNode(
                 name="merge_all",
                 code_fn=lambda length, sorted_nums, total: {
@@ -551,20 +523,17 @@ if __name__ == "__main__":
             START >> node_a >> [node_b, node_c, node_d] >> node_e >> END
 
         graph3.build()
-
         schema3 = StateSchema(graph3)
-        state3 = schema3.create_state()
+        state3 = MemoryState(schema3)
 
         result3 = await graph3.run(state3)
-        print(f"Result: {result3}")
-        print(f"Expected length: 6, sorted: [1, 2, 3, 5, 8, 9], total: 28")
-        assert result3["length"] == 6
-        assert result3["sorted"] == [1, 2, 3, 5, 8, 9]
-        assert result3["total"] == 28
+        test("apply(len) = 6", result3["length"] == 6)
+        test("apply(sorted)", result3["sorted"] == [1, 2, 3, 5, 8, 9])
+        test("apply(sum) = 28", result3["total"] == 28)
 
-        # =================================================================
+        # =====================================================================
         # Test 4: Ref with chained operations
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 4: Ref with chained operations")
         print("=" * 60)
@@ -576,7 +545,6 @@ if __name__ == "__main__":
                 inputs={}
             )
 
-            # Chain: data["users"][0]["name"].upper()
             node_b = CodeNode(
                 name="get_first_user_upper",
                 code_fn=lambda name: {"first_user": name},
@@ -587,18 +555,15 @@ if __name__ == "__main__":
             START >> node_a >> node_b >> END
 
         graph4.build()
-
         schema4 = StateSchema(graph4)
-        state4 = schema4.create_state()
+        state4 = MemoryState(schema4)
 
         result4 = await graph4.run(state4)
-        print(f"Result: {result4}")
-        print(f"Expected: {{'first_user': 'ALICE'}}")
-        assert result4["first_user"] == "ALICE"
+        test("chained ops: first_user = ALICE", result4["first_user"] == "ALICE")
 
-        # =================================================================
+        # =====================================================================
         # Test 5: Ref with arithmetic operations
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 5: Ref with arithmetic operations")
         print("=" * 60)
@@ -610,7 +575,6 @@ if __name__ == "__main__":
                 inputs={}
             )
 
-            # Use arithmetic: (value + 5) * 2
             node_b = CodeNode(
                 name="compute",
                 code_fn=lambda result: {"result": result},
@@ -621,32 +585,20 @@ if __name__ == "__main__":
             START >> node_a >> node_b >> END
 
         graph5.build()
-
         schema5 = StateSchema(graph5)
-        state5 = schema5.create_state()
+        state5 = MemoryState(schema5)
 
         result5 = await graph5.run(state5)
-        print(f"Result: {result5}")
-        print(f"Expected: {{'result': 30}}  # (10 + 5) * 2")
-        assert result5["result"] == 30
+        test("arithmetic (10 + 5) * 2 = 30", result5["result"] == 30)
 
-        print("\n" + "=" * 60)
-        print("All Ref operation tests passed!")
-        print("=" * 60)
-
-        # =================================================================
+        # =====================================================================
         # Test 6: Soft edges for branch merging
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 6: Soft edges (> operator) for branch merging")
         print("=" * 60)
 
-        # Simulate: branch -> [case_a, case_b] > merge
-        # Without soft edges, merge.ready_count = 2 (deadlock!)
-        # With soft edges, merge.ready_count = 1 (correct!)
-
         with GraphNode(name="soft_edge_graph") as graph6:
-            # Simulated branch: just pick one path based on input
             branch_node = CodeNode(
                 name="branch",
                 code_fn=lambda choice: {"selected": choice},
@@ -668,31 +620,21 @@ if __name__ == "__main__":
             merge = CodeNode(
                 name="merge",
                 code_fn=lambda value: {"result": f"Merged: {value}"},
-                inputs={"value": case_a["value"]},  # Will be overwritten by whichever runs
+                inputs={"value": case_a["value"]},
                 outputs={"result": PARENT["result"]}
             )
 
-            # branch >> [case_a, case_b] with hard edges
-            # [case_a, case_b] > merge with soft edges (> operator)
             START >> branch_node >> [case_a, case_b]
             case_a > merge  # soft edge
             case_b > merge  # soft edge
             merge >> END
 
         graph6.build()
-        print("\nGraph structure:")
-        graph6.show()
+        test("soft edges: merge ready_count = 0", graph6.ready_count['merge'] == 0)
 
-        print(f"\nMerge node ready_count: {graph6.ready_count['merge']}")
-        print(f"Expected: 0 (soft edges don't count)")
-        assert graph6.ready_count['merge'] == 0, f"Got: {graph6.ready_count['merge']}"
-
-        # To actually test execution, we need a proper branch node
-        # For now, just verify the ready_count is correct
-
-        # =================================================================
+        # =====================================================================
         # Test 7: Mixed hard and soft edges
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
         print("Test 7: Mixed hard and soft edges")
         print("=" * 60)
@@ -723,48 +665,35 @@ if __name__ == "__main__":
                 outputs={"result": PARENT["result"]}
             )
 
-            START >> node_a >> merge  # hard edge: ready_count += 1
+            START >> node_a >> merge  # hard edge
             START >> node_b
             START >> node_c
-            node_b > merge  # soft edge: ready_count += 0
-            node_c > merge  # soft edge: ready_count += 0
+            node_b > merge  # soft edge
+            node_c > merge  # soft edge
             merge >> END
 
         graph7.build()
-        print("\nGraph structure:")
-        graph7.show()
+        test("mixed edges: merge ready_count = 1", graph7.ready_count['merge'] == 1)
 
-        print(f"\nMerge node ready_count: {graph7.ready_count['merge']}")
-        print(f"Expected: 1 (only hard edge from node_a counts)")
-        assert graph7.ready_count['merge'] == 1, f"Got: {graph7.ready_count['merge']}"
-
-        # Run it - should work because node_a provides the hard dependency
         schema7 = StateSchema(graph7)
-        state7 = schema7.create_state()
+        state7 = MemoryState(schema7)
         result7 = await graph7.run(state7)
-        print(f"Result: {result7}")
-        assert result7["result"] == 1
+        test("mixed edges execution", result7["result"] == 1)
 
-        print("\n" + "=" * 60)
-        print("All soft edge tests passed!")
-        print("=" * 60)
-
-        # =================================================================
+        # =====================================================================
         # Test 8: Nested graph receiving inputs from another node
-        # =================================================================
+        # =====================================================================
         print("\n" + "=" * 60)
-        print("Test 8: Nested graph receiving inputs from another node")
+        print("Test 8: Nested graph with value flow")
         print("=" * 60)
 
         with GraphNode(name="outer_graph") as outer:
-            # Data source node provides configuration
             data_source = CodeNode(
                 name="data_source",
                 code_fn=lambda: {"config": {"value": 5, "multiplier": 3}},
                 inputs={}
             )
 
-            # Nested graph defined inside outer graph context
             with GraphNode(
                 name="inner_processor",
                 inputs={"x": data_source["config"]["value"]},
@@ -783,7 +712,6 @@ if __name__ == "__main__":
                 )
                 START >> double_node >> add_ten >> END
 
-            # Final node uses result from inner graph
             final_node = CodeNode(
                 name="final",
                 code_fn=lambda inner_val, mult: {"final_result": inner_val * mult},
@@ -797,22 +725,34 @@ if __name__ == "__main__":
             START >> data_source >> inner_graph >> final_node >> END
 
         outer.build()
-
-        print("\nOuter graph structure:")
-        outer.show()
-
         schema8 = StateSchema(outer)
-        state8 = schema8.create_state()
+        state8 = MemoryState(schema8)
         result8 = await outer.run(state8)
 
-        print(f"\nResult: {result8}")
-        print(f"Expected: inner_result = (5 * 2) + 10 = 20")
-        print(f"          final_result = 20 * 3 = 60")
-        assert result8.get("inner_result") == 20, f"Got inner_result: {result8.get('inner_result')}"
-        assert result8.get("final_result") == 60, f"Got final_result: {result8.get('final_result')}"
+        test("nested: inner_result = 20", result8.get("inner_result") == 20)
+        test("nested: final_result = 60", result8.get("final_result") == 60)
 
+        # Verify intermediate state values
+        test("state has data_source config", state8["outer_graph.data_source", "config", None] == {"value": 5, "multiplier": 3})
+        test("state has double result", state8["outer_graph.inner_processor.double", "doubled", None] == 10)
+
+        # =====================================================================
+        # Test 9: Schema extraction
+        # =====================================================================
         print("\n" + "=" * 60)
-        print("Nested graph test passed!")
+        print("Test 9: Schema extraction")
+        print("=" * 60)
+
+        test("linear_graph has 'x' in input_schema", "x" in graph.input_schema)
+        test("linear_graph has 'result' in output_schema", "result" in graph.output_schema)
+        test("outer_graph has 'inner_result' in output_schema", "inner_result" in outer.output_schema)
+        test("outer_graph has 'final_result' in output_schema", "final_result" in outer.output_schema)
+
+        # =====================================================================
+        # Summary
+        # =====================================================================
+        print("\n" + "=" * 60)
+        print("All GraphNode tests passed!")
         print("=" * 60)
 
     asyncio.run(main())

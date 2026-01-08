@@ -1,32 +1,21 @@
-"""Workflow state management.
+"""Workflow state management v2 - simplified Cell-based design.
 
 Design:
-    StateSchema  - Defines structure (links, defaults). Built once.
-    BaseState    - Abstract interface for state backends.
-    MemoryState  - In-memory dict storage (default).
-    RedisState   - Redis storage for distributed apps.
+    StateSchema  - Defines structure with index-based O(1) resolution.
+    MemoryState  - In-memory Cell-based storage.
+    Ref          - Reference with operation chaining.
+    Cell         - Multi-context value storage.
 
 Example:
-    from hush.core.states import StateSchema, MemoryState, RedisState
+    from hush.core.states import StateSchema, MemoryState
 
-    # BUILD (once)
-    schema = StateSchema("my_workflow")
-    schema.link("llm", "messages", "prompt", "output")
-    schema.set("llm", "temperature", 0.7)
+    # From graph
+    schema = StateSchema(graph)
+    state = MemoryState(schema, inputs={"x": 5})
 
-    # RUN with MemoryState (default)
-    state = schema.create_state(inputs={"query": "hello"})
-
-    # RUN with RedisState
-    state = schema.create_state(
-        inputs={"query": "hello"},
-        state_class=RedisState,
-        redis_client=redis_client
-    )
-
-    # Access values (with automatic redirect)
-    state["prompt", "output", None] = "Hello"
-    value = state["llm", "messages", None]  # Returns "Hello" via redirect
+    # Access values
+    state["node", "var", None] = "value"
+    value = state["node", "var", None]
 
     # Debug
     schema.show()
@@ -35,14 +24,12 @@ Example:
 
 from hush.core.states.ref import Ref
 from hush.core.states.schema import StateSchema
-from hush.core.states.base import BaseState
-from hush.core.states.memory import MemoryState
-from hush.core.states.redis import RedisState
+from hush.core.states.state import MemoryState
+from hush.core.states.cell import Cell
 
 __all__ = [
     "Ref",
     "StateSchema",
-    "BaseState",
     "MemoryState",
-    "RedisState",
+    "Cell",
 ]
