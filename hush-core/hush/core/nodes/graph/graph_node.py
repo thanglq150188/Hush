@@ -507,15 +507,15 @@ if __name__ == "__main__":
 
             node_e = CodeNode(
                 name="merge_all",
-                code_fn=lambda length, sorted_nums, total: {
-                    "length": length,
+                code_fn=lambda in_length, sorted_nums, in_total: {
+                    "length": in_length,
                     "sorted": sorted_nums,
-                    "total": total
+                    "total": in_total
                 },
                 inputs={
-                    "length": node_b["length"],
+                    "in_length": node_b["length"],
                     "sorted_nums": node_c["sorted"],
-                    "total": node_d["total"]
+                    "in_total": node_d["total"]
                 },
                 outputs=PARENT
             )
@@ -577,8 +577,8 @@ if __name__ == "__main__":
 
             node_b = CodeNode(
                 name="compute",
-                code_fn=lambda result: {"result": result},
-                inputs={"result": (node_a["value"] + 5) * 2},
+                code_fn=lambda computed: {"result": computed},
+                inputs={"computed": (node_a["value"] + 5) * 2},
                 outputs=PARENT
             )
 

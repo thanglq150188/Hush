@@ -90,13 +90,13 @@ class BaseNode(ABC):
         self.inputs = self._normalize_connections(inputs, self.input_schema)
         self.outputs = self._normalize_connections(outputs, self.output_schema)
 
-        # Warn if same key appears in both inputs and outputs
+        # Error if same key appears in both inputs and outputs (not allowed)
         if self.inputs and self.outputs:
             overlapping_keys = set(self.inputs.keys()) & set(self.outputs.keys())
             if overlapping_keys:
-                LOGGER.warning(
+                raise ValueError(
                     f"Node '{self.name}' has overlapping input/output keys: {overlapping_keys}. "
-                    "This may cause confusion in data flow."
+                    "Input and output variable names must be distinct."
                 )
 
     def _normalize_connections(
