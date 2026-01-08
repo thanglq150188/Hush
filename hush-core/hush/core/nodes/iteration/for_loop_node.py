@@ -135,17 +135,16 @@ class ForLoopNode(BaseIterationNode):
         Returns:
             Dict mapping variable names to their resolved values.
 
-        If the Ref has operations recorded (e.g., ref['key'].apply(len)),
-        those operations are executed on the retrieved value.
+        Note: We must apply value._fn here because the Ref in values may have
+        operations (e.g., ref["key"]["subkey"]) that are not registered in the
+        schema. The schema only stores the base node/var, not the operations.
         """
         result = {}
         for var_name, value in values.items():
             if isinstance(value, Ref):
-                resolved = state._get_value(value.node, value.var, context_id)
-                # Execute any recorded operations on the value
-                if value.has_ops:
-                    resolved = value.execute(resolved)
-                result[var_name] = resolved
+                # Get raw value from state and apply Ref's operations
+                raw = state[value.node, value.var, context_id]
+                result[var_name] = value._fn(raw)
             else:
                 result[var_name] = value
         return result
@@ -295,7 +294,7 @@ class ForLoopNode(BaseIterationNode):
 
 
 if __name__ == "__main__":
-    from hush.core.states import StateSchema
+    from hush.core.states import StateSchema, MemoryState
     from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import code_node
     from hush.core.nodes.graph.graph_node import GraphNode
@@ -322,7 +321,7 @@ if __name__ == "__main__":
         loop1.build()
 
         schema1 = StateSchema(loop1)
-        state1 = schema1.create_state()
+        state1 = MemoryState(schema1)
 
         print(f"Each vars: {loop1._each}")
         print(f"Broadcast vars: {loop1._broadcast_inputs}")
@@ -359,7 +358,7 @@ if __name__ == "__main__":
         loop2.build()
 
         schema2 = StateSchema(loop2)
-        state2 = schema2.create_state()
+        state2 = MemoryState(schema2)
 
         result2 = await loop2.run(state2)
         print(f"Result: {result2['result']}")
@@ -390,7 +389,7 @@ if __name__ == "__main__":
         loop3.build()
 
         schema3 = StateSchema(loop3)
-        state3 = schema3.create_state()
+        state3 = MemoryState(schema3)
 
         result3 = await loop3.run(state3)
         print(f"Result: {result3['sum']}")
@@ -425,7 +424,7 @@ if __name__ == "__main__":
         loop4.build()
 
         schema4 = StateSchema(loop4)
-        state4 = schema4.create_state()
+        state4 = MemoryState(schema4)
 
         result4 = await loop4.run(state4)
         print(f"Result: {result4['result']}")
@@ -459,7 +458,7 @@ if __name__ == "__main__":
         loop5.build()
 
         schema5 = StateSchema(loop5)
-        state5 = schema5.create_state()
+        state5 = MemoryState(schema5)
 
         result5 = await loop5.run(state5)
         print(f"Result: {result5['message']}")
@@ -492,7 +491,7 @@ if __name__ == "__main__":
         loop6.build()
 
         schema6 = StateSchema(loop6)
-        state6 = schema6.create_state()
+        state6 = MemoryState(schema6)
 
         result6 = await loop6.run(state6)
         print(f"Result (x+1)*2: {result6['z']}")
@@ -522,7 +521,7 @@ if __name__ == "__main__":
         loop7.build()
 
         schema7 = StateSchema(loop7)
-        state7 = schema7.create_state()
+        state7 = MemoryState(schema7)
 
         result7 = await loop7.run(state7)
         print(f"Result: {result7['result']}")
@@ -566,7 +565,7 @@ if __name__ == "__main__":
         graph8.build()
 
         schema8 = StateSchema(graph8)
-        state8 = schema8.create_state()
+        state8 = MemoryState(schema8)
 
         result8 = await graph8.run(state8)
         print(f"Generated numbers: [10, 20, 30], factor: 5")
@@ -603,7 +602,7 @@ if __name__ == "__main__":
         outer_loop9.build()
 
         schema9 = StateSchema(outer_loop9)
-        state9 = schema9.create_state()
+        state9 = MemoryState(schema9)
 
         result9 = await outer_loop9.run(state9)
         print(f"Result: {result9}")
@@ -627,7 +626,7 @@ if __name__ == "__main__":
         loop10.build()
 
         schema10 = StateSchema(loop10)
-        state10 = schema10.create_state()
+        state10 = MemoryState(schema10)
 
         result10 = await loop10.run(state10)
         print(f"Result: {result10}")
@@ -658,7 +657,7 @@ if __name__ == "__main__":
         loop11.build()
 
         schema11 = StateSchema(loop11)
-        state11 = schema11.create_state()
+        state11 = MemoryState(schema11)
 
         try:
             result11 = await loop11.run(state11)
@@ -710,7 +709,7 @@ if __name__ == "__main__":
         graph12.build()
 
         schema12 = StateSchema(graph12)
-        state12 = schema12.create_state()
+        state12 = MemoryState(schema12)
 
         result12 = await graph12.run(state12)
         print(f"Result: {result12}")
@@ -749,7 +748,7 @@ if __name__ == "__main__":
         graph13.build()
 
         schema13 = StateSchema(graph13)
-        state13 = schema13.create_state()
+        state13 = MemoryState(schema13)
 
         result13 = await graph13.run(state13)
         print(f"Result: {result13}")
@@ -795,7 +794,7 @@ if __name__ == "__main__":
         graph14.build()
 
         schema14 = StateSchema(graph14)
-        state14 = schema14.create_state()
+        state14 = MemoryState(schema14)
 
         result14 = await graph14.run(state14)
         print(f"Result: {result14}")
@@ -840,7 +839,7 @@ if __name__ == "__main__":
         graph15.build()
 
         schema15 = StateSchema(graph15)
-        state15 = schema15.create_state(inputs={"multiplier": 10})
+        state15 = MemoryState(schema15, inputs={"multiplier": 10})
 
         result15 = await graph15.run(state15)
         print(f"Result: {result15}")
