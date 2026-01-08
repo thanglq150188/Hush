@@ -7,7 +7,7 @@
 
 # from hush.core.nodes.graph.graph_node import GraphNode
 # from hush.core.nodes.base import BaseNode
-# from hush.core.states import BaseState, MemoryState
+# from hush.core.states import MemoryState, MemoryState
 # from hush.core.loggings import LOGGER
 
 
@@ -109,6 +109,6 @@
 
 #         return result
 
-#     def get_state(self, request_id: str) -> BaseState:
+#     def get_state(self, request_id: str) -> MemoryState:
 #         """Get workflow state by request ID."""
 #         pass

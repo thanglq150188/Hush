@@ -276,8 +276,11 @@ class CodeNode(BaseNode):
 
 
 if __name__ == "__main__":
-    import asyncio
-    from hush.core.states import StateSchema
+    def test(name: str, condition: bool):
+        status = "PASS" if condition else "FAIL"
+        print(f"  [{status}] {name}")
+        if not condition:
+            raise AssertionError(f"Test failed: {name}")
 
     @code_node
     def add_numbers(a: int, b: int = 10):
@@ -292,57 +295,85 @@ if __name__ == "__main__":
             "total": count * 2,  # (int) doubled count
             "status": "success",  # just a description, type defaults to Any
         }
-    
+
     @code_node
     def increment(x: int):
         return {"x": x + 1}
 
-    async def main():
-        # Test 0: increment function
-        inc = increment(inputs={"x": 5})
-        print(f"Name: {inc.name}")
-        print(f"Input schema: {inc.input_schema}")
-        print(f"Output schema: {inc.output_schema}")
+    # =========================================================================
+    # Test 1: Basic __call__ usage
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("Test 1: Basic __call__ usage")
+    print("=" * 50)
 
-        schema = StateSchema("test0")
-        state = schema.create_state()
-        result = await inc.run(state)
-        print(f"Increment Result: {result}")
+    node = add_numbers()
+    result = node(a=10, b=20)
+    test("add_numbers(a=10, b=20) = 30", result == {"result": 30})
 
-        print(inc.get_inputs(state, None))
-        print(inc.get_outputs(state, None))
-        state.show()
-        
-        # # Test 1: Single-line return with type hint in comment
-        # node = add_numbers(inputs={"a": 5, "b": 3})
-        # print(f"Name: {node.name}")
-        # print(f"Input schema: {node.input_schema}")
-        # print(f"Output schema: {node.output_schema}")
+    result = node(a=5, b=3)
+    test("add_numbers(a=5, b=3) = 8", result == {"result": 8})
 
-        # schema = StateSchema("test")
-        # state = schema.create_state()
-        # result = await node.run(state)
-        # print(f"Result: {result}")
+    # With default value
+    result = node(a=7)
+    test("add_numbers(a=7) uses default b=10", result == {"result": 17})
 
-        # # Test 2: Multi-line return with type hints and descriptions
-        # proc = process_data(inputs={"name": "World", "count": 5})
-        # print(f"\nProcess node output schema:")
-        # for key, param in proc.output_schema.items():
-        #     print(f"  {key}: type={param.type}, desc='{param.description}'")
-        # result2 = await proc.run(state)
-        # print(f"Process result: {result2}")
+    # =========================================================================
+    # Test 2: Increment function
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("Test 2: Increment function")
+    print("=" * 50)
 
-        # # Test 3: Quick test using __call__
-        # print("\n" + "=" * 50)
-        # print("Test 3: Quick test using __call__")
-        # print("=" * 50)
+    inc = increment()
+    result = inc(x=5)
+    test("increment(x=5) = 6", result == {"x": 6})
 
-        # node3 = add_numbers()
-        # result3 = node3(a=10, b=20)
-        # print(f"node3(a=10, b=20) = {result3}")
+    result = inc(x=0)
+    test("increment(x=0) = 1", result == {"x": 1})
 
-        # node4 = process_data()
-        # result4 = node4(name="Alice", count=3)
-        # print(f"node4(name='Alice', count=3) = {result4}")
+    result = inc(x=-1)
+    test("increment(x=-1) = 0", result == {"x": 0})
 
-    asyncio.run(main())
+    # =========================================================================
+    # Test 3: Process data with multiple outputs
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("Test 3: Process data with multiple outputs")
+    print("=" * 50)
+
+    proc = process_data()
+    result = proc(name="World", count=5)
+    test("message is 'Hello, World!'", result["message"] == "Hello, World!")
+    test("total is 10", result["total"] == 10)
+    test("status is 'success'", result["status"] == "success")
+
+    result = proc(name="Alice", count=3)
+    test("message is 'Hello, Alice!'", result["message"] == "Hello, Alice!")
+    test("total is 6", result["total"] == 6)
+
+    # =========================================================================
+    # Test 4: Schema extraction
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("Test 4: Schema extraction")
+    print("=" * 50)
+
+    node = add_numbers()
+    test("input_schema has 'a'", "a" in node.input_schema)
+    test("input_schema has 'b'", "b" in node.input_schema)
+    test("output_schema has 'result'", "result" in node.output_schema)
+    test("'a' is required", node.input_schema["a"].required == True)
+    test("'b' has default 10", node.input_schema["b"].default == 10)
+
+    proc = process_data()
+    test("output has 'message'", "message" in proc.output_schema)
+    test("output has 'total'", "total" in proc.output_schema)
+    test("output has 'status'", "status" in proc.output_schema)
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("All CodeNode tests passed!")
+    print("=" * 50)

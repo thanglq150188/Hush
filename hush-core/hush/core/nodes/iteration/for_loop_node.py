@@ -14,7 +14,7 @@ from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
-    from hush.core.states import BaseState
+    from hush.core.states import MemoryState
 
 
 class ForLoopNode(BaseIterationNode):
@@ -122,7 +122,7 @@ class ForLoopNode(BaseIterationNode):
     def _resolve_values(
         self,
         values: Dict[str, Any],
-        state: 'BaseState',
+        state: 'MemoryState',
         context_id: Optional[str]
     ) -> Dict[str, Any]:
         """Resolve values, dereferencing any Ref objects.
@@ -187,7 +187,7 @@ class ForLoopNode(BaseIterationNode):
 
     async def run(
         self,
-        state: 'BaseState',
+        state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute the for loop over iteration data concurrently."""

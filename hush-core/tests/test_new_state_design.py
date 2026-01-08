@@ -1,8 +1,8 @@
-"""Test new StateSchema + BaseState design."""
+"""Test new StateSchema + MemoryState design."""
 
 import time
 import concurrent.futures
-from hush.core.states import StateSchema, MemoryState, RedisState, BaseState
+from hush.core.states import StateSchema, MemoryState, RedisState, MemoryState
 
 
 def test_schema_basic():
@@ -39,7 +39,7 @@ def test_memory_state():
 
     # Check type
     assert isinstance(state, MemoryState)
-    assert isinstance(state, BaseState)
+    assert isinstance(state, MemoryState)
 
     # Check defaults applied
     assert state["llm", "temperature", None] == 0.7
