@@ -133,6 +133,12 @@ class AsyncIterNode(BaseIterationNode):
         self.input_schema = {
             iter_var_name: Param(type=AsyncIterable, required=True)
         }
+
+        # If batching is enabled, also register batch and batch_size variables
+        if self._batch_fn is not None:
+            self.input_schema["batch"] = Param(type=List, required=False)
+            self.input_schema["batch_size"] = Param(type=int, required=False)
+
         self.input_schema.update({
             var_name: Param(type=Any, required=isinstance(value, Ref))
             for var_name, value in self._broadcast_inputs.items()
@@ -152,19 +158,38 @@ class AsyncIterNode(BaseIterationNode):
         # Store each and inputs as node's inputs for get_inputs to work
         self.inputs = {**self._each, **self._broadcast_inputs}
 
-    def _resolve_broadcast_values(
+        # If batching is enabled, also add batch and batch_size to inputs
+        # so the schema can set up proper links for inner graph PARENT access
+        if self._batch_fn is not None:
+            self.inputs["batch"] = None
+            self.inputs["batch_size"] = None
+
+    def _resolve_values(
         self,
+        values: Dict[str, Any],
         state: 'MemoryState',
         context_id: Optional[str]
     ) -> Dict[str, Any]:
-        """Resolve broadcast input values, dereferencing any Refs."""
+        """Resolve values, dereferencing any Ref objects.
+
+        Args:
+            values: Dict of {var_name: value_or_ref}
+            state: The workflow state
+            context_id: The context ID for resolution
+
+        Returns:
+            Dict mapping variable names to their resolved values.
+
+        Note: We must apply value._fn here because the Ref in values may have
+        operations (e.g., ref["key"]["subkey"]) that are not registered in the
+        schema. The schema only stores the base node/var, not the operations.
+        """
         result = {}
-        for var_name, value in self._broadcast_inputs.items():
+        for var_name, value in values.items():
             if isinstance(value, Ref):
-                resolved = state._get_value(value.node, value.var, context_id)
-                if value.has_ops:
-                    resolved = value.execute(resolved)
-                result[var_name] = resolved
+                # Get raw value from state and apply Ref's operations
+                raw = state[value.node, value.var, context_id]
+                result[var_name] = value._fn(raw)
             else:
                 result[var_name] = value
         return result
@@ -175,10 +200,9 @@ class AsyncIterNode(BaseIterationNode):
         source = self._each[iter_var_name]
 
         if isinstance(source, Ref):
-            resolved = state._get_value(source.node, source.var, context_id)
-            if source.has_ops:
-                resolved = source.execute(resolved)
-            return resolved
+            # Get raw value from state and apply Ref's operations
+            raw = state[source.node, source.var, context_id]
+            return source._fn(raw)
         return source
 
     async def _process_chunk(
@@ -228,7 +252,7 @@ class AsyncIterNode(BaseIterationNode):
         try:
             # Get source and broadcast values
             source = self._get_source(state, context_id)
-            broadcast_values = self._resolve_broadcast_values(state, context_id)
+            broadcast_values = self._resolve_values(self._broadcast_inputs, state, context_id)
             iter_var_name = list(self._each.keys())[0]
 
             # Store inputs for logging
@@ -411,7 +435,7 @@ class AsyncIterNode(BaseIterationNode):
 
 
 if __name__ == "__main__":
-    from hush.core.states import StateSchema
+    from hush.core.states import StateSchema, MemoryState
     from hush.core.nodes.base import START, END, PARENT
     from hush.core.nodes.transform.code_node import code_node
     from hush.core.nodes.graph.graph_node import GraphNode
@@ -452,7 +476,7 @@ if __name__ == "__main__":
         stream_node.build()
 
         schema = StateSchema(stream_node)
-        state = schema.create_state()
+        state = MemoryState(schema)
 
         output = await stream_node.run(state)
 
@@ -493,7 +517,7 @@ if __name__ == "__main__":
         stream_node2.build()
 
         schema2 = StateSchema(stream_node2)
-        state2 = schema2.create_state()
+        state2 = MemoryState(schema2)
 
         output2 = await stream_node2.run(state2)
 
@@ -531,7 +555,7 @@ if __name__ == "__main__":
         stream_node3.build()
 
         schema3 = StateSchema(stream_node3)
-        state3 = schema3.create_state()
+        state3 = MemoryState(schema3)
 
         output3 = await stream_node3.run(state3)
 
@@ -588,7 +612,7 @@ if __name__ == "__main__":
         graph4.build()
 
         schema4 = StateSchema(graph4)
-        state4 = schema4.create_state()
+        state4 = MemoryState(schema4)
 
         output4 = await graph4.run(state4)
 
@@ -631,7 +655,7 @@ if __name__ == "__main__":
         stream_node5.build()
 
         schema5 = StateSchema(stream_node5)
-        state5 = schema5.create_state()
+        state5 = MemoryState(schema5)
 
         output5 = await stream_node5.run(state5)
 
@@ -671,7 +695,7 @@ if __name__ == "__main__":
         stream_node6.build()
 
         schema6 = StateSchema(stream_node6)
-        state6 = schema6.create_state()
+        state6 = MemoryState(schema6)
 
         output6 = await stream_node6.run(state6)
 
@@ -733,7 +757,7 @@ if __name__ == "__main__":
         graph7.build()
 
         schema7 = StateSchema(graph7)
-        state7 = schema7.create_state(inputs={"start": 0, "end": 5, "prefix": "MSG"})
+        state7 = MemoryState(schema7, inputs={"start": 0, "end": 5, "prefix": "MSG"})
 
         output7 = await graph7.run(state7)
 
