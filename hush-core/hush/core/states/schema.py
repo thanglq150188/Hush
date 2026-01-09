@@ -157,18 +157,6 @@ class StateSchema:
             return ref.idx, ref._fn
         return -1, None
 
-    def resolve(self, node: str, var: str) -> Tuple[str, str]:
-        """Resolve một biến về vị trí nguồn (nếu nó là tham chiếu)."""
-        idx = self._indexer.get((node, var), -1)
-        if idx >= 0:
-            ref = self._refs[idx]
-            if ref and ref.idx >= 0:
-                # Tìm key cho source_idx
-                for key, i in self._indexer.items():
-                    if i == ref.idx:
-                        return key
-        return node, var
-
     @property
     def num_indices(self) -> int:
         """Số lượng storage index."""
@@ -188,40 +176,6 @@ class StateSchema:
             self._register(node, var, value)
         return self
 
-    def link(self, node: str, var: str, source_node: str, source_var: Optional[str] = None, fn: Optional[Callable] = None) -> "StateSchema":
-        """Liên kết một biến với biến khác (với transform tùy chọn)."""
-        key = (node, var)
-        source_key = (source_node, source_var or var)
-
-        # Đảm bảo cả hai tồn tại
-        if key not in self._indexer:
-            self._register(node, var, None)
-        if source_key not in self._indexer:
-            self._register(source_node, source_var or var, None)
-
-        idx = self._indexer[key]
-        source_idx = self._indexer[source_key]
-        # Tạo Ref với idx = source_idx
-        ref = Ref(source_node, source_var or var)
-        ref.idx = source_idx
-        if fn:
-            object.__setattr__(ref, '_fn', fn)
-        self._refs[idx] = ref
-        return self
-
-    def get(self, node: str, var: str) -> Any:
-        """Lấy giá trị mặc định của một biến."""
-        idx = self._indexer.get((node, var), -1)
-        if idx >= 0:
-            return self._values[idx]
-        return None
-
-    def is_ref(self, node: str, var: str) -> bool:
-        """Kiểm tra một biến có phải là tham chiếu không."""
-        idx = self._indexer.get((node, var), -1)
-        if idx >= 0:
-            return self._refs[idx] is not None
-        return False
 
     # =========================================================================
     # Tạo State
@@ -377,11 +331,11 @@ def main():
 
     # Verify structure
     test("schema name", schema.name == "linear_graph")
-    test("node_a.x is ref", schema.is_ref("linear_graph.node_a", "x"))
-    test("node_b.x is ref", schema.is_ref("linear_graph.node_b", "x"))
-    test("node_c.x is ref", schema.is_ref("linear_graph.node_c", "x"))
+    test("node_a.x is ref", isinstance(schema._refs[schema.get_index("linear_graph.node_a", "x")], Ref))
+    test("node_b.x is ref", isinstance(schema._refs[schema.get_index("linear_graph.node_b", "x")], Ref))
+    test("node_c.x is ref", isinstance(schema._refs[schema.get_index("linear_graph.node_c", "x")], Ref))
     # node_c.result is output ref pointing to linear_graph.result
-    test("node_c.result is output ref", schema.is_ref("linear_graph.node_c", "result"))
+    test("node_c.result is output ref", isinstance(schema._refs[schema.get_index("linear_graph.node_c", "result")], Ref))
     node_c_result_ref = schema._refs[schema.get_index("linear_graph.node_c", "result")]
     test("node_c.result refs linear_graph.result", node_c_result_ref.node == "linear_graph" and node_c_result_ref.var == "result")
     test("node_c.result is_output=True", node_c_result_ref.is_output == True)
@@ -531,28 +485,10 @@ def main():
     test("output ref is_output", schema4._refs[result_idx].is_output == True)
 
     # =========================================================================
-    # Test 5: Manual building
+    # Test 5: Simple nested graph
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 5: Manual building")
-    print("=" * 60)
-
-    schema5 = StateSchema(name="manual_schema")
-    schema5.set("node1", "x", 100)
-    schema5.set("node1", "y", 200)
-    schema5.link("node2", "x", "node1", "x")
-    schema5.link("node2", "z", "node1", "y", fn=lambda v: v * 2)
-    schema5.show()
-
-    test("manual set", schema5.get("node1", "x") == 100)
-    test("manual link", schema5.is_ref("node2", "x"))
-    test("manual link with fn", schema5._refs[schema5.get_index("node2", "z")]._fn(200) == 400)
-
-    # =========================================================================
-    # Test 6: Simple nested graph
-    # =========================================================================
-    print("\n" + "=" * 60)
-    print("Test 6: Simple nested graph")
+    print("Test 5: Simple nested graph")
     print("=" * 60)
 
     with GraphNode(name="outer") as outer:
@@ -586,23 +522,23 @@ def main():
 
     # Verify structure
     test("outer.x exists", ("outer", "x") in schema6)
-    test("outer.inner.x is ref to outer.x", schema6.is_ref("outer.inner", "x"))
+    test("outer.inner.x is ref to outer.x", isinstance(schema6._refs[schema6.get_index("outer.inner", "x")], Ref))
     # With output refs: inner.result -> outer.inner_result (output), not outer.inner_result -> inner.result
-    test("outer.inner.result is output ref", schema6.is_ref("outer.inner", "result"))
+    test("outer.inner.result is output ref", isinstance(schema6._refs[schema6.get_index("outer.inner", "result")], Ref))
     inner_result_ref = schema6._refs[schema6.get_index("outer.inner", "result")]
     test("outer.inner.result refs outer.inner_result", inner_result_ref.node == "outer" and inner_result_ref.var == "inner_result")
     test("outer.inner.result is_output", inner_result_ref.is_output == True)
     # outer.result receives from final.result (output ref)
-    test("outer.final.result is output ref", schema6.is_ref("outer.final", "result"))
+    test("outer.final.result is output ref", isinstance(schema6._refs[schema6.get_index("outer.final", "result")], Ref))
     final_result_ref = schema6._refs[schema6.get_index("outer.final", "result")]
     test("outer.final.result refs outer.result", final_result_ref.node == "outer" and final_result_ref.var == "result")
     test("outer.final.result is_output", final_result_ref.is_output == True)
 
     # =========================================================================
-    # Test 7: Nested graph with node feeding into nested graph
+    # Test 6: Nested graph with node feeding into nested graph
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 7: Nested graph with preceding node")
+    print("Test 6: Nested graph with preceding node")
     print("=" * 60)
 
     with GraphNode(name="workflow") as workflow:
@@ -645,15 +581,15 @@ def main():
     schema7.show()
 
     # Verify refs
-    test("processor.x refs source.value", schema7.is_ref("workflow.processor", "x"))
-    test("merge.processed refs processor.result", schema7.is_ref("workflow.merge", "processed"))
-    test("merge.mult refs source.multiplier", schema7.is_ref("workflow.merge", "mult"))
+    test("processor.x refs source.value", isinstance(schema7._refs[schema7.get_index("workflow.processor", "x")], Ref))
+    test("merge.processed refs processor.result", isinstance(schema7._refs[schema7.get_index("workflow.merge", "processed")], Ref))
+    test("merge.mult refs source.multiplier", isinstance(schema7._refs[schema7.get_index("workflow.merge", "mult")], Ref))
 
     # =========================================================================
-    # Test 8: Deeply nested graphs (3 levels)
+    # Test 7: Deeply nested graphs (3 levels)
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 8: Deeply nested graphs (3 levels)")
+    print("Test 7: Deeply nested graphs (3 levels)")
     print("=" * 60)
 
     with GraphNode(name="level1") as level1:
@@ -682,20 +618,20 @@ def main():
     schema8.show()
 
     # Verify deep nesting - inputs chain down
-    test("level1.level2.x refs level1.x", schema8.is_ref("level1.level2", "x"))
-    test("level1.level2.level3.x refs level1.level2.x", schema8.is_ref("level1.level2.level3", "x"))
-    test("level1.level2.level3.core.x refs level1.level2.level3.x", schema8.is_ref("level1.level2.level3.core", "x"))
+    test("level1.level2.x refs level1.x", isinstance(schema8._refs[schema8.get_index("level1.level2", "x")], Ref))
+    test("level1.level2.level3.x refs level1.level2.x", isinstance(schema8._refs[schema8.get_index("level1.level2.level3", "x")], Ref))
+    test("level1.level2.level3.core.x refs level1.level2.level3.x", isinstance(schema8._refs[schema8.get_index("level1.level2.level3.core", "x")], Ref))
     # With output refs: outputs chain up via output refs
-    test("level1.level2.result is output ref", schema8.is_ref("level1.level2", "result"))
+    test("level1.level2.result is output ref", isinstance(schema8._refs[schema8.get_index("level1.level2", "result")], Ref))
     level2_ref = schema8._refs[schema8.get_index("level1.level2", "result")]
     test("level1.level2.result refs level1.result", level2_ref.node == "level1" and level2_ref.var == "result")
     test("level1.level2.result is_output", level2_ref.is_output == True)
 
     # =========================================================================
-    # Test 9: Nested graph with Ref operations
+    # Test 8: Nested graph with Ref operations
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 9: Nested graph with Ref operations")
+    print("Test 8: Nested graph with Ref operations")
     print("=" * 60)
 
     with GraphNode(name="ops_workflow") as ops_workflow:
@@ -740,10 +676,10 @@ def main():
     test("name fn works", name_ref._fn(test_info) == "HELLO")
 
     # =========================================================================
-    # Test 10: Multiple nested graphs at same level
+    # Test 9: Multiple nested graphs at same level
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 10: Multiple nested graphs (parallel)")
+    print("Test 9: Multiple nested graphs (parallel)")
     print("=" * 60)
 
     with GraphNode(name="parallel") as parallel:
@@ -795,16 +731,16 @@ def main():
     schema10.show()
 
     # Verify parallel branches
-    test("branch_a.x refs source.value", schema10.is_ref("parallel.branch_a", "x"))
-    test("branch_b.x refs source.value", schema10.is_ref("parallel.branch_b", "x"))
-    test("merge.a refs branch_a.result", schema10.is_ref("parallel.merge", "a"))
-    test("merge.b refs branch_b.result", schema10.is_ref("parallel.merge", "b"))
+    test("branch_a.x refs source.value", isinstance(schema10._refs[schema10.get_index("parallel.branch_a", "x")], Ref))
+    test("branch_b.x refs source.value", isinstance(schema10._refs[schema10.get_index("parallel.branch_b", "x")], Ref))
+    test("merge.a refs branch_a.result", isinstance(schema10._refs[schema10.get_index("parallel.merge", "a")], Ref))
+    test("merge.b refs branch_b.result", isinstance(schema10._refs[schema10.get_index("parallel.merge", "b")], Ref))
 
     # =========================================================================
-    # Test 11: Iteration node (WhileLoopNode) with output refs
+    # Test 10: Iteration node (WhileLoopNode) with output refs
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Test 11: Iteration node with output refs")
+    print("Test 10: Iteration node with output refs")
     print("=" * 60)
 
     from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
