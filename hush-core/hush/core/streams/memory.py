@@ -7,20 +7,20 @@ from .base import BaseStreamingService
 
 
 class InMemoryStreamService(BaseStreamingService):
-    """In-memory streaming service using asyncio.Queue.
+    """Streaming service in-memory sử dụng asyncio.Queue.
 
-    High-performance in-memory implementation for single-process workflows.
-    Organizes streams by session_id, request_id, and channel_name.
+    Triển khai in-memory hiệu năng cao cho single-process workflow.
+    Tổ chức stream theo phân cấp: session_id -> request_id -> channel_name.
 
-    For distributed systems, use Redis, Kafka, or other distributed backends.
+    Với hệ thống phân tán, sử dụng Redis, Kafka, hoặc các backend phân tán khác.
     """
 
     DEFAULT_SESSION = "default"
 
     def __init__(self):
-        # Structure: {session_id: {request_id: {channel_name: asyncio.Queue}}}
+        # Cấu trúc: {session_id: {request_id: {channel_name: asyncio.Queue}}}
         self._queues: Dict[str, Dict[str, Dict[str, asyncio.Queue]]] = defaultdict(lambda: defaultdict(dict))
-        # Lock for thread-safe operations
+        # Lock để đảm bảo thread-safe
         self._lock = asyncio.Lock()
         LOGGER.info("InMemoryStreamService initialized")
 
@@ -31,13 +31,13 @@ class InMemoryStreamService(BaseStreamingService):
         data: Any,
         session_id: Optional[str] = None
     ) -> None:
-        """Push data to the specified channel queue.
+        """Push data vào queue của channel được chỉ định.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            data: Data to push (any type)
-            session_id: Optional session identifier (defaults to "default")
+            request_id: Định danh request
+            channel_name: Định danh channel
+            data: Data cần push (bất kỳ type nào)
+            session_id: Định danh session (mặc định "default")
         """
         if not request_id:
             raise ValueError("request_id cannot be None or empty")
@@ -46,11 +46,11 @@ class InMemoryStreamService(BaseStreamingService):
 
         try:
             async with self._lock:
-                # Ensure queue exists
+                # Đảm bảo queue tồn tại
                 if channel_name not in self._queues[session_id][request_id]:
                     self._queues[session_id][request_id][channel_name] = asyncio.Queue()
 
-            # Push to queue (non-blocking)
+            # Push vào queue (non-blocking)
             await self._queues[session_id][request_id][channel_name].put(data)
 
         except Exception as e:
@@ -58,12 +58,12 @@ class InMemoryStreamService(BaseStreamingService):
             raise
 
     async def end(self, request_id: str, channel_name: str, session_id: Optional[str] = None) -> None:
-        """Signal end of stream for the specified channel.
+        """Báo hiệu kết thúc stream cho channel được chỉ định.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            session_id: Optional session identifier (defaults to "default")
+            request_id: Định danh request
+            channel_name: Định danh channel
+            session_id: Định danh session (mặc định "default")
         """
         if not request_id:
             raise ValueError("request_id cannot be None or empty")
@@ -75,7 +75,7 @@ class InMemoryStreamService(BaseStreamingService):
                 if channel_name not in self._queues[session_id][request_id]:
                     self._queues[session_id][request_id][channel_name] = asyncio.Queue()
 
-            # Push END sentinel
+            # Push END sentinel để báo hiệu kết thúc
             await self._queues[session_id][request_id][channel_name].put("__END__")
             LOGGER.debug(f"Pushed END signal to {session_id}/{request_id}/{channel_name}")
 
@@ -91,18 +91,18 @@ class InMemoryStreamService(BaseStreamingService):
         timeout: float = 0.01,
         max_idle_time: Optional[float] = None
     ) -> AsyncGenerator[Any, None]:
-        """Get AsyncGenerator for consuming data from the specified channel.
+        """Lấy AsyncGenerator để consume data từ channel được chỉ định.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            session_id: Optional session identifier (defaults to "default")
-            timeout: Timeout for each queue.get() operation in seconds
-            max_idle_time: Maximum time to wait for new data before stopping.
-                          If None, waits indefinitely until END signal.
+            request_id: Định danh request
+            channel_name: Định danh channel
+            session_id: Định danh session (mặc định "default")
+            timeout: Timeout cho mỗi thao tác queue.get() (đơn vị giây)
+            max_idle_time: Thời gian tối đa chờ data mới trước khi dừng.
+                          Nếu None, chờ vô thời hạn đến khi nhận END signal.
 
         Yields:
-            Data from the queue until END signal or max_idle_time exceeded
+            Data từ queue cho đến khi nhận END signal hoặc max_idle_time vượt quá
         """
         if not request_id:
             raise ValueError("request_id cannot be None or empty")
@@ -111,7 +111,7 @@ class InMemoryStreamService(BaseStreamingService):
         last_data_time = time.time()
 
         try:
-            # Ensure queue exists
+            # Đảm bảo queue tồn tại
             async with self._lock:
                 if channel_name not in self._queues[session_id][request_id]:
                     self._queues[session_id][request_id][channel_name] = asyncio.Queue()
@@ -120,19 +120,19 @@ class InMemoryStreamService(BaseStreamingService):
 
             while True:
                 try:
-                    # Wait for data with timeout
+                    # Chờ data với timeout
                     data = await asyncio.wait_for(queue.get(), timeout=timeout)
 
-                    # Check for END sentinel
+                    # Kiểm tra END sentinel
                     if data == "__END__":
                         break
 
-                    # Update last data time and yield
+                    # Cập nhật thời gian nhận data cuối và yield
                     last_data_time = time.time()
                     yield data
 
                 except asyncio.TimeoutError:
-                    # Check if max_idle_time exceeded
+                    # Kiểm tra nếu max_idle_time đã vượt quá
                     if max_idle_time is not None:
                         idle_time = time.time() - last_data_time
                         if idle_time >= max_idle_time:
@@ -151,7 +151,7 @@ class InMemoryStreamService(BaseStreamingService):
             LOGGER.error(f"Error consuming from {session_id}/{request_id}/{channel_name}: {e}")
             raise
         finally:
-            # Cleanup
+            # Dọn dẹp queue sau khi consume xong
             async with self._lock:
                 if (session_id in self._queues and
                     request_id in self._queues[session_id] and
@@ -159,7 +159,7 @@ class InMemoryStreamService(BaseStreamingService):
                     del self._queues[session_id][request_id][channel_name]
 
     def close(self) -> None:
-        """Cleanup resources."""
+        """Dọn dẹp resource."""
         try:
             self._queues.clear()
             LOGGER.info("InMemoryStreamService closed")

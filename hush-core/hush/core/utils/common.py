@@ -1,4 +1,4 @@
-"""Common utility functions for hush-core."""
+"""Các hàm tiện ích dùng chung cho hush-core."""
 
 import asyncio
 import re
@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Type
 
 @dataclass
 class Param:
-    """Parameter definition for node inputs/outputs.
+    """Định nghĩa parameter cho input/output của node.
 
     Example:
         input_schema = {
@@ -24,49 +24,48 @@ class Param:
 
 
 def unique_name() -> str:
-    """Generate a unique name using UUID."""
+    """Tạo tên duy nhất sử dụng UUID."""
     return uuid.uuid4().hex[:8]
 
 
 def verify_data(data: Any) -> bool:
-    """Verify data is valid (not containing invalid types)."""
-    # Basic validation - can be extended
+    """Xác thực dữ liệu hợp lệ (không chứa các type không hợp lệ)."""
+    # Validation cơ bản - có thể mở rộng
     return True
 
 
 def raise_error(message: str) -> None:
-    """Raise a ValueError with the given message."""
+    """Raise ValueError với message được cung cấp."""
     raise ValueError(message)
 
 
 def extract_condition_variables(condition: str) -> Dict[str, str]:
-    """
-    Extract variable names and their inferred types from a condition string.
+    """Trích xuất tên biến và type suy luận từ condition string.
 
     Args:
-        condition: A condition string like "a > 10 and b == 'hello'"
+        condition: Chuỗi condition như "a > 10 and b == 'hello'"
 
     Returns:
-        Dict mapping variable names to inferred types
+        Dict ánh xạ tên biến sang type suy luận
     """
-    # Pattern to match variable names (identifiers not followed by opening paren)
-    # Excludes Python keywords and built-in names
+    # Pattern để match tên biến (identifier không theo sau bởi dấu ngoặc mở)
+    # Loại trừ Python keyword và built-in name
     keywords = {'and', 'or', 'not', 'in', 'is', 'True', 'False', 'None', 'if', 'else'}
 
-    # Find all identifiers
+    # Tìm tất cả identifier
     identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', condition)
 
     variables = {}
     for var in identifiers:
         if var not in keywords and var not in variables:
-            # Try to infer type from context
+            # Thử suy luận type từ context
             variables[var] = "Any"
 
     return variables
 
 
 def fake_chunk_from(content: str, model: str = "default") -> Dict[str, Any]:
-    """Create a fake chunk response for error handling."""
+    """Tạo fake chunk response cho xử lý lỗi."""
     return {
         "choices": [{
             "delta": {
@@ -78,16 +77,16 @@ def fake_chunk_from(content: str, model: str = "default") -> Dict[str, Any]:
 
 
 def ensure_async(func: Callable) -> Callable:
-    """Ensure a function is async-compatible.
+    """Đảm bảo function tương thích với async.
 
-    If the function is already async, return it as-is.
-    If it's synchronous, wrap it to run in a thread pool executor.
+    Nếu function đã là async, trả về nguyên vẹn.
+    Nếu là synchronous, wrap để chạy trong thread pool executor.
 
     Args:
-        func: The function to make async-compatible
+        func: Function cần làm cho tương thích async
 
     Returns:
-        An async function that can be awaited
+        Async function có thể await
 
     Example:
         def sync_func(x):
@@ -96,7 +95,7 @@ def ensure_async(func: Callable) -> Callable:
         async def async_func(x):
             return x * 2
 
-        # Both can now be awaited:
+        # Cả hai giờ có thể await:
         func = ensure_async(sync_func)
         result = await func(10)
     """

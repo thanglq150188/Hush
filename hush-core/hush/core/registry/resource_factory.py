@@ -1,4 +1,4 @@
-"""Extensible resource factory for creating instances from configurations."""
+"""Factory resource mở rộng để tạo instance từ config."""
 
 import logging
 from typing import Any, Callable, Dict, Optional, Type
@@ -8,20 +8,20 @@ from hush.core.utils.yaml_model import YamlModel
 logger = logging.getLogger(__name__)
 
 
-# Registry of config classes: class_name -> class
+# Registry các config class: class_name -> class
 CLASS_NAME_MAP: Dict[str, Type[YamlModel]] = {}
 
-# Registry of factory handlers: config_class -> handler_function
+# Registry các factory handler: config_class -> handler_function
 FACTORY_HANDLERS: Dict[Type[YamlModel], Callable[[YamlModel], Any]] = {}
 
 
 def register_config_class(cls: Type[YamlModel]):
-    """Register a config class for deserialization.
+    """Đăng ký config class để deserialize.
 
-    Call this from external packages to register their config classes.
+    Gọi hàm này từ các package bên ngoài để đăng ký config class của họ.
 
     Args:
-        cls: Config class (must inherit from YamlModel)
+        cls: Config class (phải kế thừa từ YamlModel)
 
     Example:
         from hush.core.registry import register_config_class
@@ -30,14 +30,14 @@ def register_config_class(cls: Type[YamlModel]):
         register_config_class(MyConfig)
     """
     CLASS_NAME_MAP[cls.__name__] = cls
-    logger.debug(f"Registered config class: {cls.__name__}")
+    logger.debug(f"Đã đăng ký config class: {cls.__name__}")
 
 
 def register_config_classes(*classes: Type[YamlModel]):
-    """Register multiple config classes at once.
+    """Đăng ký nhiều config class cùng lúc.
 
     Args:
-        *classes: Config classes to register
+        *classes: Các config class cần đăng ký
 
     Example:
         register_config_classes(LLMConfig, EmbeddingConfig, RedisConfig)
@@ -50,13 +50,13 @@ def register_factory_handler(
     config_class: Type[YamlModel],
     handler: Callable[[YamlModel], Any]
 ):
-    """Register a factory handler for a config type.
+    """Đăng ký factory handler cho một loại config.
 
-    The handler is called to create resource instances from configs.
+    Handler được gọi để tạo resource instance từ config.
 
     Args:
-        config_class: Config class this handler supports
-        handler: Function that takes config and returns resource instance
+        config_class: Config class mà handler này hỗ trợ
+        handler: Function nhận config và trả về resource instance
 
     Example:
         from hush.core.registry import register_factory_handler
@@ -66,55 +66,55 @@ def register_factory_handler(
         register_factory_handler(LLMConfig, LLMFactory.create)
     """
     FACTORY_HANDLERS[config_class] = handler
-    logger.debug(f"Registered factory handler for: {config_class.__name__}")
+    logger.debug(f"Đã đăng ký factory handler cho: {config_class.__name__}")
 
 
 def get_config_class(class_name: str) -> Optional[Type[YamlModel]]:
-    """Get a registered config class by name.
+    """Lấy config class đã đăng ký theo tên.
 
     Args:
-        class_name: Name of the config class
+        class_name: Tên của config class
 
     Returns:
-        Config class or None if not found
+        Config class hoặc None nếu không tìm thấy
     """
     return CLASS_NAME_MAP.get(class_name)
 
 
 class ResourceFactory:
-    """Factory for creating resource instances from configurations.
+    """Factory để tạo resource instance từ config.
 
-    Uses registered handlers to create instances. External packages register
-    their handlers via register_factory_handler().
+    Sử dụng các handler đã đăng ký để tạo instance. Các package bên ngoài
+    đăng ký handler của họ qua register_factory_handler().
 
     Example:
-        # In hush-providers package:
+        # Trong package hush-providers:
         register_factory_handler(LLMConfig, LLMFactory.create)
         register_factory_handler(EmbeddingConfig, EmbeddingFactory.create)
 
-        # Then ResourceFactory can create any registered resource:
+        # Sau đó ResourceFactory có thể tạo bất kỳ resource đã đăng ký:
         config = OpenAIConfig(model="gpt-4", api_key="sk-xxx")
         llm = ResourceFactory.create(config)
     """
 
     @classmethod
     def create(cls, config: YamlModel) -> Optional[Any]:
-        """Create a resource instance from configuration.
+        """Tạo resource instance từ config.
 
-        Looks up the appropriate handler based on config type (including parent classes).
+        Tìm handler phù hợp dựa trên config type (bao gồm cả class cha).
 
         Args:
-            config: Resource configuration object
+            config: Object config của resource
 
         Returns:
-            Resource instance, or None if creation fails
+            Resource instance, hoặc None nếu tạo thất bại
 
         Raises:
-            ValueError: If no handler registered for this config type
+            ValueError: Nếu không có handler nào được đăng ký cho config type này
         """
         config_type = type(config)
 
-        # Look for handler matching this config type or its parent classes
+        # Tìm handler khớp với config type này hoặc các class cha
         handler = None
         for check_type in config_type.__mro__:
             if check_type in FACTORY_HANDLERS:
@@ -123,12 +123,12 @@ class ResourceFactory:
 
         if not handler:
             raise ValueError(
-                f"No factory handler registered for {config_type.__name__}. "
-                f"Register one using register_factory_handler()."
+                f"Không có factory handler nào được đăng ký cho {config_type.__name__}. "
+                f"Hãy đăng ký một handler bằng register_factory_handler()."
             )
 
         try:
             return handler(config)
         except Exception as e:
-            logger.error(f"Failed to create resource for {config_type.__name__}: {e}")
+            logger.error(f"Không thể tạo resource cho {config_type.__name__}: {e}")
             return None

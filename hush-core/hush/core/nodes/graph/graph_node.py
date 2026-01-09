@@ -1,4 +1,4 @@
-"""Graph node for managing subgraphs of workflow nodes."""
+"""Graph node để quản lý subgraph các node trong workflow."""
 
 from datetime import datetime
 from time import perf_counter
@@ -22,11 +22,16 @@ NodeFlowType = Literal["MERGE", "FORK", "BLOOM", "BRANCH", "NORMAL", "OTHER"]
 
 
 class GraphNode(BaseNode):
-    """
-    Node that contains and manages a subgraph of nodes.
+    """Node chứa và quản lý một subgraph các node.
 
-    Allows organizing nodes into reusable subgraphs with parallel branch
-    execution and proper flow control.
+    Cho phép tổ chức các node thành subgraph tái sử dụng với thực thi
+    song song các nhánh và điều khiển luồng phù hợp.
+
+    Hỗ trợ:
+    - Context manager (with GraphNode() as graph)
+    - Entry/exit node tự động
+    - Thực thi song song các node độc lập
+    - Soft/hard edge cho branch merging
     """
 
     __slots__ = [
@@ -46,7 +51,7 @@ class GraphNode(BaseNode):
     type: NodeType = "graph"
 
     def __init__(self, **kwargs):
-        """Initialize GraphNode."""
+        """Khởi tạo GraphNode."""
         super().__init__(**kwargs)
         self._token = None
         self._is_building = True
@@ -60,17 +65,17 @@ class GraphNode(BaseNode):
         self.flowtype_map = BiMap[str, NodeFlowType]()
 
     def __enter__(self):
-        """Enter context manager mode."""
+        """Vào chế độ context manager."""
         self._token = _current_graph.set(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit context manager mode."""
+        """Thoát chế độ context manager."""
         _current_graph.reset(self._token)
 
     def _setup_endpoints(self):
-        """Initialize entry/exit nodes."""
-        LOGGER.debug(f"Graph '{self.name}': initializing endpoints...")
+        """Khởi tạo entry/exit node."""
+        LOGGER.debug(f"Graph '{self.name}': đang khởi tạo endpoints...")
 
         if not self.entries:
             self.entries = [node for node in self._nodes if not self.prevs[node]]
@@ -79,43 +84,43 @@ class GraphNode(BaseNode):
             self.exits = [node for node in self._nodes if not self.nexts[node]]
 
         if not self.entries:
-            LOGGER.error(f"Graph '{self.name}': no entry nodes found. Check START >> node connections.")
-            raise ValueError("Graph must have at least one entry node.")
+            LOGGER.error(f"Graph '{self.name}': không tìm thấy entry node. Kiểm tra kết nối START >> node.")
+            raise ValueError("Graph phải có ít nhất một entry node.")
         if not self.exits:
-            LOGGER.error(f"Graph '{self.name}': no exit nodes found. Check node >> END connections.")
-            raise ValueError("Graph must have at least one exit node.")
+            LOGGER.error(f"Graph '{self.name}': không tìm thấy exit node. Kiểm tra kết nối node >> END.")
+            raise ValueError("Graph phải có ít nhất một exit node.")
 
     def _setup_schema(self):
-        """Initialize input/output schema and inputs dictionary."""
-        LOGGER.debug(f"Graph '{self.name}': creating schema...")
+        """Khởi tạo input/output schema và inputs dictionary."""
+        LOGGER.debug(f"Graph '{self.name}': đang tạo schema...")
         input_schema = {}
         output_schema = {}
 
         for _, node in self._nodes.items():
-            # Check inputs: if ref points to self (father), it's a graph input
+            # Kiểm tra inputs: nếu ref trỏ đến self (father), đó là graph input
             for var, ref in node.inputs.items():
                 if isinstance(ref, Ref) and ref.raw_node is self:
-                    # PARENT["x"] resolved to father - this is a graph input
+                    # PARENT["x"] resolve thành father - đây là graph input
                     if var not in node.input_schema:
                         LOGGER.error(
-                            f"Graph '{self.name}': variable '{var}' not found in input schema of node '{node.name}'"
+                            f"Graph '{self.name}': biến '{var}' không có trong input schema của node '{node.name}'"
                         )
                         raise KeyError(
-                            f"Variable not found in input schema: "
+                            f"Biến không có trong input schema: "
                             f"{self.name}:{ref.var} <-- {node.name}.{var}"
                         )
                     input_schema[ref.var] = node.input_schema[var]
 
-            # Check outputs: if ref points to self (father), it's a graph output
+            # Kiểm tra outputs: nếu ref trỏ đến self (father), đó là graph output
             for var, ref in node.outputs.items():
                 if isinstance(ref, Ref) and ref.raw_node is self:
-                    # PARENT["x"] resolved to father - this is a graph output
+                    # PARENT["x"] resolve thành father - đây là graph output
                     if var not in node.output_schema:
                         LOGGER.error(
-                            f"Graph '{self.name}': variable '{var}' not found in output schema of node '{node.name}'"
+                            f"Graph '{self.name}': biến '{var}' không có trong output schema của node '{node.name}'"
                         )
                         raise KeyError(
-                            f"Variable not found in output schema: "
+                            f"Biến không có trong output schema: "
                             f"{self.name}:{ref.var} <-- {node.name}.{var}"
                         )
                     output_schema[ref.var] = node.output_schema[var]
@@ -124,18 +129,18 @@ class GraphNode(BaseNode):
         self.output_schema = output_schema
 
     def _build_flow_type(self):
-        """Determine flow type of each node based on connection pattern."""
-        LOGGER.debug(f"Graph '{self.name}': determining node flow types...")
+        """Xác định flow type của mỗi node dựa trên pattern kết nối."""
+        LOGGER.debug(f"Graph '{self.name}': đang xác định flow type của các node...")
         self.flowtype_map = BiMap[str, NodeFlowType]()
 
-        # Detect orphan nodes (no connections at all)
+        # Phát hiện orphan node (không có kết nối nào)
         orphan_nodes = []
 
         for name, node in self._nodes.items():
             prev_count = len(self.prevs[name])
             next_count = len(self.nexts[name])
 
-            # Check for orphan nodes (not start/end, not inner graph, and no connections)
+            # Kiểm tra orphan node (không phải start/end, không phải inner graph, và không có kết nối)
             if prev_count == 0 and next_count == 0 and not node.start and not node.end and name != BaseNode.INNER_PROCESS:
                 orphan_nodes.append(name)
 
@@ -158,15 +163,15 @@ class GraphNode(BaseNode):
 
             self.flowtype_map[name] = flow_type
 
-        # Warn about orphan nodes
+        # Cảnh báo về orphan node
         if orphan_nodes:
             LOGGER.warning(
-                f"Graph '{self.full_name}': orphan nodes detected (no edges): {orphan_nodes}. "
-                "These nodes will never be executed."
+                f"Graph '{self.full_name}': phát hiện orphan node (không có edge): {orphan_nodes}. "
+                "Các node này sẽ không bao giờ được thực thi."
             )
 
     def build(self):
-        """Build graph by building child nodes then this graph."""
+        """Build graph bằng cách build các node con trước, sau đó graph này."""
         for node in self._nodes.values():
             if hasattr(node, 'build'):
                 node.build()
@@ -175,9 +180,9 @@ class GraphNode(BaseNode):
         self._build_flow_type()
         self._setup_endpoints()
 
-        # Calculate ready_count - only count hard edges (not soft)
-        # Soft edges (created with >) don't count toward ready_count
-        # This allows branch outputs to merge without deadlock
+        # Tính ready_count - chỉ đếm hard edge (không phải soft)
+        # Soft edge (tạo bằng >) không tính vào ready_count
+        # Điều này cho phép branch output merge mà không deadlock
         self.ready_count = {}
         for name in self._nodes:
             hard_pred_count = 0
@@ -186,7 +191,7 @@ class GraphNode(BaseNode):
                 if edge and not edge.soft:
                     hard_pred_count += 1
                 elif edge is None:
-                    # Edge not found in lookup (shouldn't happen, but count it)
+                    # Edge không tìm thấy trong lookup (không nên xảy ra, nhưng vẫn đếm)
                     hard_pred_count += 1
             self.ready_count[name] = hard_pred_count
 
@@ -194,24 +199,24 @@ class GraphNode(BaseNode):
 
     @staticmethod
     def get_current_graph() -> Optional['GraphNode']:
-        """Get current graph from context."""
+        """Lấy graph hiện tại từ context."""
         try:
             return _current_graph.get()
         except LookupError:
             return None
 
     def add_node(self, node: BaseNode) -> BaseNode:
-        """Add a node to the graph."""
+        """Thêm một node vào graph."""
         if not self._is_building:
-            raise RuntimeError("Cannot add nodes after graph has been built")
+            raise RuntimeError("Không thể thêm node sau khi graph đã được build")
 
         if node in [START, END]:
             return node
 
-        # Warn if node with same name already exists (will be overwritten)
+        # Cảnh báo nếu node cùng tên đã tồn tại (sẽ bị ghi đè)
         if node.name in self._nodes:
             LOGGER.warning(
-                f"Graph '{self.name}': node '{node.name}' already exists and will be overwritten"
+                f"Graph '{self.name}': node '{node.name}' đã tồn tại và sẽ bị ghi đè"
             )
 
         self._nodes[node.name] = node
@@ -227,22 +232,22 @@ class GraphNode(BaseNode):
         return node
 
     def add_edge(self, source: str, target: str, type: EdgeType = "normal", soft: bool = False):
-        """Add an edge between two nodes.
+        """Thêm một edge giữa hai node.
 
         Args:
-            source: Source node name
-            target: Target node name
-            type: Edge type (normal, lookback, condition)
-            soft: If True, edge doesn't count toward ready_count.
-                  Use for branch outputs where only one branch executes.
-                  Created with > operator: case_a > merge_node
+            source: Tên node nguồn
+            target: Tên node đích
+            type: Loại edge (normal, lookback, condition)
+            soft: Nếu True, edge không tính vào ready_count.
+                  Dùng cho branch output khi chỉ một nhánh được thực thi.
+                  Tạo bằng toán tử >: case_a > merge_node
         """
         if not self._is_building:
-            raise RuntimeError("Cannot add edges after graph has been built!")
+            raise RuntimeError("Không thể thêm edge sau khi graph đã được build!")
 
         if source == START.name:
             if target not in self._nodes:
-                raise ValueError(f"Target node '{target}' not found")
+                raise ValueError(f"Node đích '{target}' không tìm thấy")
 
             target_node = self._nodes[target]
             target_node.start = True
@@ -254,7 +259,7 @@ class GraphNode(BaseNode):
 
         if target == END.name:
             if source not in self._nodes:
-                raise ValueError(f"Source node '{source}' not found")
+                raise ValueError(f"Node nguồn '{source}' không tìm thấy")
 
             source_node = self._nodes[source]
             source_node.end = True
@@ -268,9 +273,9 @@ class GraphNode(BaseNode):
             return
 
         if source not in self._nodes:
-            raise ValueError(f"Source node '{source}' not found")
+            raise ValueError(f"Node nguồn '{source}' không tìm thấy")
         if target not in self._nodes:
-            raise ValueError(f"Target node '{target}' not found")
+            raise ValueError(f"Node đích '{target}' không tìm thấy")
 
         new_edge = EdgeConfig(from_node=source, to_node=target, type=type, soft=soft)
         if (source, target) not in self._edges_lookup:
@@ -280,7 +285,7 @@ class GraphNode(BaseNode):
             self.prevs[target].append(source)
 
     def show(self, indent=0):
-        """Display graph structure (debug)."""
+        """Hiển thị cấu trúc graph (debug)."""
         prefix = "  " * indent
         print(f"{prefix}Graph: {self.name}")
         print(f"{prefix}Nodes:", list(self._nodes.keys()))
@@ -299,7 +304,7 @@ class GraphNode(BaseNode):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Execute graph by running all nodes in dependency order."""
+        """Thực thi graph bằng cách chạy tất cả node theo thứ tự dependency."""
 
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
@@ -758,5 +763,5 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
-# Simple alias for cleaner syntax
+# Alias đơn giản cho cú pháp gọn hơn
 graph = GraphNode

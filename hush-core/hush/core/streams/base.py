@@ -3,12 +3,12 @@ from typing import AsyncGenerator, Any, Optional
 
 
 class BaseStreamingService(ABC):
-    """Abstract base class for streaming services.
+    """Abstract base class cho các streaming service.
 
-    This provides a common interface for different streaming backends
-    including in-memory, Redis, Kafka, RabbitMQ, NATS, Pulsar, etc.
+    Cung cấp interface thống nhất cho nhiều backend khác nhau:
+    in-memory, Redis, Kafka, RabbitMQ, NATS, Pulsar, v.v.
 
-    Supports streaming any data type: dicts, chunks, events, or custom objects.
+    Hỗ trợ stream mọi loại data: dict, chunk, event, hoặc custom object.
     """
 
     @abstractmethod
@@ -19,13 +19,13 @@ class BaseStreamingService(ABC):
         data: Any,
         session_id: Optional[str] = None
     ) -> None:
-        """Push data to the specified channel.
+        """Push data vào channel được chỉ định.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            data: Data to push (can be dict, object, or any serializable type)
-            session_id: Optional session identifier for multi-tenant scenarios
+            request_id: Định danh request
+            channel_name: Định danh channel
+            data: Data cần push (có thể là dict, object, hoặc bất kỳ type serializable nào)
+            session_id: Định danh session (optional) cho multi-tenant
         """
         pass
 
@@ -36,15 +36,15 @@ class BaseStreamingService(ABC):
         channel_name: str,
         session_id: Optional[str] = None
     ) -> None:
-        """Signal end of stream for the specified channel.
+        """Báo hiệu kết thúc stream cho channel được chỉ định.
 
-        Pushes a sentinel value to indicate no more data will be sent.
-        Consumers will stop iteration when they receive this signal.
+        Push sentinel value để thông báo không còn data nào được gửi.
+        Consumer sẽ dừng iteration khi nhận được tín hiệu này.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            session_id: Optional session identifier
+            request_id: Định danh request
+            channel_name: Định danh channel
+            session_id: Định danh session (optional)
         """
         pass
 
@@ -57,26 +57,26 @@ class BaseStreamingService(ABC):
         timeout: float = 0.01,
         max_idle_time: Optional[float] = None
     ) -> AsyncGenerator[Any, None]:
-        """Get AsyncGenerator for consuming data from the specified channel.
+        """Lấy AsyncGenerator để consume data từ channel được chỉ định.
 
         Args:
-            request_id: Request identifier
-            channel_name: Channel identifier
-            session_id: Optional session identifier
-            timeout: Timeout for each queue.get() operation in seconds
-            max_idle_time: Maximum time to wait for new data before stopping.
-                          If None, waits indefinitely until END signal.
-                          Useful for timeout-based termination.
+            request_id: Định danh request
+            channel_name: Định danh channel
+            session_id: Định danh session (optional)
+            timeout: Timeout cho mỗi thao tác queue.get() (đơn vị giây)
+            max_idle_time: Thời gian tối đa chờ data mới trước khi dừng.
+                          Nếu None, chờ vô thời hạn đến khi nhận END signal.
+                          Hữu ích cho timeout-based termination.
 
         Yields:
-            Data items from the stream until END signal or timeout
+            Các item data từ stream cho đến khi nhận END signal hoặc timeout
 
         Example:
-            # Wait for END signal (default)
+            # Chờ END signal (mặc định)
             async for data in stream.get(req_id, channel):
                 process(data)
 
-            # Stop after 5 seconds of no data
+            # Dừng sau 5 giây không có data
             async for data in stream.get(req_id, channel, max_idle_time=5.0):
                 process(data)
         """
@@ -84,5 +84,5 @@ class BaseStreamingService(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """Close/cleanup resources."""
+        """Đóng kết nối và dọn dẹp resource."""
         pass

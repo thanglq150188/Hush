@@ -1,4 +1,4 @@
-"""File logging handlers."""
+"""Các logging handler ghi ra file."""
 
 import logging
 from pathlib import Path
@@ -9,16 +9,16 @@ from ..config import HandlerConfig
 
 
 class FileHandlerConfig(HandlerConfig):
-    """File handler configuration (size-based rotation).
+    """Config cho file handler (rotation theo kích thước).
 
     Args:
-        enabled: Enable this handler (default: True)
-        level: Log level for this handler
-        format_str: Custom format string
-        filepath: Path to the log file
-        max_bytes: Max file size before rotation (default: 10MB)
-        backup_count: Number of backup files to keep (default: 5)
-        encoding: File encoding (default: utf-8)
+        enabled: Bật handler này (mặc định: True)
+        level: Log level cho handler này
+        format_str: Format string tùy chỉnh
+        filepath: Đường dẫn đến file log
+        max_bytes: Kích thước file tối đa trước khi rotation (mặc định: 10MB)
+        backup_count: Số file backup giữ lại (mặc định: 5)
+        encoding: Encoding của file (mặc định: utf-8)
     """
 
     type: Literal["file"] = "file"
@@ -29,17 +29,17 @@ class FileHandlerConfig(HandlerConfig):
 
 
 class TimedFileHandlerConfig(HandlerConfig):
-    """Time-based rotating file handler configuration.
+    """Config cho file handler rotation theo thời gian.
 
     Args:
-        enabled: Enable this handler (default: True)
-        level: Log level for this handler
-        format_str: Custom format string
-        filepath: Path to the log file
-        when: Rotation interval type ('S', 'M', 'H', 'D', 'midnight', 'W0'-'W6')
-        interval: Rotation interval (default: 1)
-        backup_count: Number of backup files to keep (default: 30)
-        encoding: File encoding (default: utf-8)
+        enabled: Bật handler này (mặc định: True)
+        level: Log level cho handler này
+        format_str: Format string tùy chỉnh
+        filepath: Đường dẫn đến file log
+        when: Loại khoảng thời gian rotation ('S', 'M', 'H', 'D', 'midnight', 'W0'-'W6')
+        interval: Khoảng thời gian rotation (mặc định: 1)
+        backup_count: Số file backup giữ lại (mặc định: 30)
+        encoding: Encoding của file (mặc định: utf-8)
     """
 
     type: Literal["timed_file"] = "timed_file"
@@ -51,10 +51,10 @@ class TimedFileHandlerConfig(HandlerConfig):
 
 
 def create_file_handler(config: FileHandlerConfig) -> logging.Handler:
-    """Create file handler with size-based rotation.
+    """Tạo file handler với rotation theo kích thước.
 
     Args:
-        config: File handler configuration
+        config: Config cho file handler
 
     Returns:
         Rotating file handler
@@ -76,10 +76,10 @@ def create_file_handler(config: FileHandlerConfig) -> logging.Handler:
 
 
 def create_timed_file_handler(config: TimedFileHandlerConfig) -> logging.Handler:
-    """Create time-based rotating file handler.
+    """Tạo file handler với rotation theo thời gian.
 
     Args:
-        config: Timed file handler configuration
+        config: Config cho timed file handler
 
     Returns:
         Timed rotating file handler

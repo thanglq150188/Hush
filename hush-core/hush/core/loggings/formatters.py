@@ -1,23 +1,23 @@
-"""Log formatting utilities."""
+"""Các tiện ích format log."""
 
 from typing import Any
 
-# Indent for multiline logs
-# Rich auto-indents continuation lines to align with message start
-LOG_INDENT = "  "  # Small additional indent for visual hierarchy
+# Indent cho log nhiều dòng
+# Rich tự động indent các dòng tiếp theo để căn chỉnh với phần đầu message
+LOG_INDENT = "  "  # Indent nhỏ để phân cấp trực quan
 
 
 def log_break(text: str = "") -> str:
-    """Add a line break with proper indentation for multiline logs.
+    """Thêm ngắt dòng với indent phù hợp cho log nhiều dòng.
 
-    Use this when you want to break a long log message across lines.
-    Rich automatically aligns continuation lines with the message start.
+    Sử dụng khi bạn muốn chia log message dài thành nhiều dòng.
+    Rich tự động căn chỉnh các dòng tiếp theo với phần đầu message.
 
     Args:
-        text: The text to put on the new line (optional)
+        text: Nội dung đặt trên dòng mới (tùy chọn)
 
     Returns:
-        Text prefixed with newline and indent
+        Text với tiền tố newline và indent
 
     Example:
         LOGGER.info(f"Processing request{log_break('user_id: 123')}{log_break('action: update')}")
@@ -30,15 +30,15 @@ def log_break(text: str = "") -> str:
 
 
 def format_log_data(data: Any, max_length: int = 400, max_items: int = 3) -> str:
-    """Smart formatting for log data that handles different types elegantly.
+    """Format thông minh cho dữ liệu log, xử lý các kiểu dữ liệu khác nhau.
 
     Args:
-        data: Data to format (dict, list, str, etc.)
-        max_length: Maximum character length for the output
-        max_items: Maximum number of items to show in collections
+        data: Dữ liệu cần format (dict, list, str, v.v.)
+        max_length: Độ dài ký tự tối đa cho output
+        max_items: Số lượng item tối đa hiển thị trong collection
 
     Returns:
-        Formatted string suitable for logging
+        String đã format phù hợp cho logging
 
     Example:
         >>> format_log_data({"key": "value", "list": [1, 2, 3]})

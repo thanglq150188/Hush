@@ -1,23 +1,23 @@
-"""Extensible resource registry for hush packages.
+"""Registry resource mở rộng cho các package hush.
 
-This module provides a centralized resource management system that can be
-extended by other hush-* packages.
+Module này cung cấp hệ thống quản lý resource tập trung có thể được
+mở rộng bởi các package hush-* khác.
 
-Basic usage:
+Sử dụng cơ bản:
     from hush.core.registry import RESOURCE_HUB
 
     llm = RESOURCE_HUB.llm("gpt-4")
     redis = RESOURCE_HUB.redis("default")
 
-Extending from other packages:
+Mở rộng từ các package khác:
     from hush.core.registry import register_config_class, register_factory_handler
     from my_package.configs import MyConfig
     from my_package.factory import MyFactory
 
-    # Register config class for deserialization
+    # Đăng ký config class để deserialize
     register_config_class(MyConfig)
 
-    # Register factory handler for instantiation
+    # Đăng ký factory handler để khởi tạo instance
     register_factory_handler(MyConfig, MyFactory.create)
 """
 
@@ -41,16 +41,16 @@ from .storage import (
     JsonConfigStorage,
 )
 
-# Global RESOURCE_HUB - lazily initialized on first access
+# RESOURCE_HUB global - khởi tạo lazy khi truy cập lần đầu
 RESOURCE_HUB = get_hub()
 
 __all__ = [
-    # Main hub
+    # Hub chính
     "ResourceHub",
     "RESOURCE_HUB",
     "get_hub",
     "set_global_hub",
-    # Factory and registration
+    # Factory và đăng ký
     "ResourceFactory",
     "register_config_class",
     "register_config_classes",
@@ -58,7 +58,7 @@ __all__ = [
     "get_config_class",
     "CLASS_NAME_MAP",
     "FACTORY_HANDLERS",
-    # Storage backends
+    # Các backend storage
     "ConfigStorage",
     "YamlConfigStorage",
     "JsonConfigStorage",

@@ -1,4 +1,4 @@
-"""Parser node for extracting structured data from text."""
+"""Node parser để trích xuất dữ liệu có cấu trúc từ text."""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Literal
@@ -16,14 +16,14 @@ ParserType = Literal["json", "xml", "yaml", "regex", "key_value"]
 
 @dataclass
 class ExtractField:
-    """Represents a field to extract with its path and type information."""
+    """Biểu diễn một field cần trích xuất với path và thông tin type."""
     output_key: str
     chain_path: List[str]
     type_hint: str
 
     @classmethod
     def from_string(cls, schema_str: str) -> 'ExtractField':
-        """Parse schema string like 'company.user.address: dict' into ExtractField."""
+        """Parse chuỗi schema như 'company.user.address: dict' thành ExtractField."""
         if ":" not in schema_str:
             schema_str += ": Any"
 
@@ -48,7 +48,7 @@ def parse_json(text: str) -> Dict[str, Any]:
 
 
 def parse_xml(text: str) -> Dict[str, Any]:
-    """Parse XML text to dictionary."""
+    """Parse XML text thành dictionary."""
     def xml_to_dict(element):
         result = {}
         for child in element:
@@ -83,11 +83,15 @@ def parse_yaml(text: str) -> Dict[str, Any]:
             text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
         return yaml.safe_load(text)
     except ImportError:
-        raise ImportError("pyyaml is required for YAML parsing")
+        raise ImportError("pyyaml là bắt buộc để parse YAML")
 
 
 class ParserNode(BaseNode):
-    """Node for parsing text into structured data."""
+    """Node parse text thành dữ liệu có cấu trúc.
+
+    Hỗ trợ nhiều format: JSON, XML, YAML, regex, key-value.
+    Trích xuất các field theo chain path (ví dụ: 'user.address.city').
+    """
 
     type: NodeType = "parser"
 
@@ -111,15 +115,15 @@ class ParserNode(BaseNode):
         **kwargs
     ):
         if not extract_schema:
-            raise TypeError("extract_schema is required")
+            raise TypeError("extract_schema là bắt buộc")
 
-        # Parse schema into structured format
+        # Parse schema thành format có cấu trúc
         extract_fields = [
             ExtractField.from_string(schema_str)
             for schema_str in extract_schema
         ]
 
-        # Build schemas
+        # Xây dựng schemas
         input_schema = {"text": Param(type=str, required=True)}
         output_schema = {field.output_key: Param(type=Any) for field in extract_fields}
 
@@ -140,7 +144,7 @@ class ParserNode(BaseNode):
         self.core = self._process
 
     def _create_parser(self):
-        """Create parser function based on format."""
+        """Tạo parser function dựa trên format."""
         if self.format == "json":
             return parse_json
         elif self.format == "xml":
@@ -149,7 +153,7 @@ class ParserNode(BaseNode):
             return parse_yaml
         elif self.format == "regex":
             if not self.pattern:
-                raise ValueError("Pattern required for regex parser")
+                raise ValueError("Pattern là bắt buộc cho regex parser")
 
             def regex_parser(text: str) -> Dict[str, Any]:
                 match = re.search(self.pattern, text)
@@ -172,7 +176,7 @@ class ParserNode(BaseNode):
             return parse_xml
 
     def _extract_value_by_path(self, data: Dict[str, Any], chain_path: List[str]) -> Any:
-        """Extract value from nested dictionary using chain path."""
+        """Trích xuất giá trị từ nested dictionary theo chain path."""
         current = data
         for key in chain_path:
             if isinstance(current, dict) and key in current:
@@ -182,7 +186,7 @@ class ParserNode(BaseNode):
         return current
 
     async def _process(self, text: str) -> Dict[str, Any]:
-        """Parse text and extract fields."""
+        """Parse text và trích xuất các field."""
         if not text:
             return {}
 
@@ -195,7 +199,7 @@ class ParserNode(BaseNode):
         return result
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata."""
+        """Trả về metadata riêng của subclass."""
         return {
             "format": self.format,
             "separator": self.separator,

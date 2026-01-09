@@ -1,4 +1,4 @@
-"""Base class for iteration nodes that contain an inner graph."""
+"""Base class cho các iteration node chứa inner graph."""
 
 from typing import Dict, Any, List, TYPE_CHECKING
 
@@ -11,23 +11,23 @@ if TYPE_CHECKING:
 
 
 class Each:
-    """Marker wrapper for iteration sources in unified inputs.
+    """Marker wrapper đánh dấu nguồn iteration trong unified inputs.
 
-    Use this to mark which input should be iterated over (one value per iteration),
-    as opposed to broadcast inputs (same value for all iterations).
+    Dùng để đánh dấu input nào sẽ được iterate (mỗi iteration nhận một value),
+    phân biệt với broadcast inputs (cùng value cho tất cả iterations).
 
     Example:
         with ForLoopNode(
             inputs={
-                "item": Each(items_node["items"]),  # iterate over this
-                "multiplier": PARENT["multiplier"]   # broadcast to all iterations
+                "item": Each(items_node["items"]),  # iterate qua list này
+                "multiplier": PARENT["multiplier"]   # broadcast cho tất cả iterations
             }
         ) as loop:
             ...
 
         with AsyncIterNode(
             inputs={
-                "chunk": Each(stream_source["stream"]),  # iterate over async iterable
+                "chunk": Each(stream_source["stream"]),  # iterate qua async iterable
                 "prefix": config_node["prefix"]          # broadcast
             }
         ) as stream:
@@ -37,10 +37,10 @@ class Each:
     __slots__ = ['source']
 
     def __init__(self, source: Any):
-        """Initialize Each wrapper.
+        """Khởi tạo Each wrapper.
 
         Args:
-            source: The iterable source (list, Ref to list, async iterable, etc.)
+            source: Nguồn iterable (list, Ref đến list, async iterable, etc.)
         """
         self.source = source
 
@@ -49,69 +49,68 @@ class Each:
 
 
 class BaseIterationNode(BaseNode):
-    """
-    Abstract base class for iteration nodes that contain an inner graph.
+    """Abstract base class cho các iteration node chứa inner graph.
 
-    Provides common functionality for:
-    - ForLoopNode: Iterates over a collection concurrently
-    - WhileLoopNode: Iterates while a condition is true
-    - AsyncIterNode: Processes streaming data with ordered output
+    Cung cấp functionality chung cho:
+    - ForLoopNode: Iterate qua collection song song
+    - WhileLoopNode: Iterate khi condition còn true
+    - AsyncIterNode: Xử lý streaming data với output theo thứ tự
 
-    All iteration nodes share:
-    - An inner GraphNode that holds the loop body
-    - Context manager pattern for building the inner graph
-    - Delegation methods for add_node/add_edge
-    - Utility methods for metrics calculation and input injection
+    Tất cả iteration nodes chia sẻ:
+    - Inner GraphNode chứa loop body
+    - Context manager pattern để build inner graph
+    - Delegation methods cho add_node/add_edge
+    - Utility methods cho tính metrics và inject input
 
-    Subclasses must implement their own run() method.
+    Subclasses phải implement run() method riêng.
     """
 
     __slots__ = ['_graph', '_token']
 
     def __init__(self, **kwargs):
-        """Initialize a BaseIterationNode with an inner graph."""
+        """Khởi tạo BaseIterationNode với inner graph."""
         super().__init__(**kwargs)
         self._graph: GraphNode = GraphNode(name=BaseNode.INNER_PROCESS)
         self._graph.father = self
         self._token = None
 
     def __enter__(self):
-        """Enter context manager mode - set inner graph as current context."""
+        """Vào context manager mode - set inner graph làm context hiện tại."""
         self._token = _current_graph.set(self._graph)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit context manager and reset graph context."""
+        """Thoát context manager và reset graph context."""
         _current_graph.reset(self._token)
 
     def add_node(self, node: BaseNode) -> BaseNode:
-        """Delegate node addition to inner graph."""
+        """Delegate việc thêm node vào inner graph."""
         return self._graph.add_node(node)
 
     def add_edge(self, source: str, target: str, type=None):
-        """Delegate edge addition to inner graph."""
+        """Delegate việc thêm edge vào inner graph."""
         return self._graph.add_edge(source, target, type)
 
     def build(self):
-        """Build the inner graph and perform post-initialization."""
+        """Build inner graph và thực hiện post-initialization."""
         self._graph.build()
         self._post_build()
 
     def _post_build(self):
-        """
-        Hook for subclasses to perform additional setup after inner graph is built.
-        Override this method in subclasses if needed.
+        """Hook cho subclasses thực hiện setup bổ sung sau khi inner graph được build.
+
+        Override method này trong subclasses nếu cần.
         """
         pass
 
     def _calculate_iteration_metrics(self, latencies_ms: List[float]) -> Dict[str, Any]:
-        """Calculate aggregate metrics from iteration latencies.
+        """Tính aggregate metrics từ iteration latencies.
 
         Args:
-            latencies_ms: List of latency values in milliseconds
+            latencies_ms: List các giá trị latency tính bằng milliseconds
 
         Returns:
-            Dictionary with latency statistics
+            Dictionary chứa các thống kê latency
         """
         if not latencies_ms:
             return {
@@ -127,7 +126,7 @@ class BaseIterationNode(BaseNode):
         n = len(sorted_latencies)
 
         def percentile(p: float) -> float:
-            """Calculate percentile value."""
+            """Tính giá trị percentile."""
             if n == 1:
                 return sorted_latencies[0]
             k = (n - 1) * p
@@ -150,16 +149,16 @@ class BaseIterationNode(BaseNode):
         inputs: Dict[str, Any],
         context_id: str
     ) -> None:
-        """Inject input values into state for inner graph execution.
+        """Inject các giá trị input vào state để inner graph thực thi.
 
         Args:
-            state: The workflow state
-            inputs: Dict of {var_name: value} to inject
-            context_id: The context ID for this iteration
+            state: Workflow state
+            inputs: Dict {var_name: value} cần inject
+            context_id: Context ID cho iteration này
 
-        Note: Values are stored at the iteration node's location.
-        The schema links inner_graph.var -> iteration_node.var so
-        PARENT["var"] in inner nodes resolves correctly via refs.
+        Note: Values được lưu tại vị trí của iteration node.
+        Schema link inner_graph.var -> iteration_node.var nên
+        PARENT["var"] trong inner nodes resolve đúng qua refs.
         """
         for var_name, value in inputs.items():
             state[self.full_name, var_name, context_id] = value

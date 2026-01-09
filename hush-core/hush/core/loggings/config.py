@@ -1,4 +1,4 @@
-"""Logging configuration models."""
+"""Các model config cho logging."""
 
 from typing import Optional, List, Union, Dict, Any
 
@@ -6,20 +6,20 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class HandlerConfig(BaseModel):
-    """Base handler configuration.
+    """Config cơ bản cho handler.
 
-    External packages extend this class to define their own handler configs.
-    The 'type' field is used as a discriminator to look up the correct
-    config class and factory from the registry.
+    Các package bên ngoài kế thừa class này để định nghĩa config handler riêng.
+    Field 'type' được dùng như discriminator để tra cứu config class
+    và factory tương ứng từ registry.
 
     Args:
-        type: Handler type identifier (e.g., "console", "file", "kafka")
-        enabled: Enable this handler (default: True)
-        level: Log level for this handler (default: DEBUG)
-        format_str: Custom format string
+        type: Định danh loại handler (ví dụ: "console", "file", "kafka")
+        enabled: Bật handler này (mặc định: True)
+        level: Log level cho handler này (mặc định: DEBUG)
+        format_str: Format string tùy chỉnh
 
     Example:
-        # In external package (hush-loggings-kafka)
+        # Trong package bên ngoài (hush-loggings-kafka)
         class KafkaHandlerConfig(HandlerConfig):
             type: Literal["kafka"] = "kafka"
             bootstrap_servers: str
@@ -35,24 +35,24 @@ class HandlerConfig(BaseModel):
 
 
 class LogConfig(BaseModel):
-    """Logging configuration with flexible handler support.
+    """Config logging với hỗ trợ handler linh hoạt.
 
-    Handlers can be specified as:
-    - Dict with 'type' key (will be parsed into correct config class)
-    - HandlerConfig instance (or subclass)
+    Handler có thể được chỉ định dưới dạng:
+    - Dict với key 'type' (sẽ được parse thành config class tương ứng)
+    - Instance HandlerConfig (hoặc subclass)
 
     Args:
-        name: Logger name (default: "hush")
-        level: Root log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        handlers: List of handler configurations (dicts or HandlerConfig instances)
-        propagate: Propagate to parent loggers (default: False)
+        name: Tên logger (mặc định: "hush")
+        level: Log level gốc (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        handlers: Danh sách config handler (dict hoặc instance HandlerConfig)
+        propagate: Truyền lên logger cha (mặc định: False)
 
     Example:
-        # Basic usage with console only
+        # Sử dụng cơ bản chỉ với console
         config = LogConfig()
         logger = setup_logger(config)
 
-        # With multiple handlers (dict-based, works with YAML/JSON)
+        # Với nhiều handler (dạng dict, tương thích YAML/JSON)
         config = LogConfig(
             name="my_app",
             level="DEBUG",
@@ -63,8 +63,8 @@ class LogConfig(BaseModel):
         )
         logger = setup_logger(config)
 
-        # With external handler (after importing the package)
-        import hush.loggings.kafka  # Auto-registers kafka handler
+        # Với handler bên ngoài (sau khi import package)
+        import hush.loggings.kafka  # Tự động đăng ký kafka handler
 
         config = LogConfig(
             handlers=[

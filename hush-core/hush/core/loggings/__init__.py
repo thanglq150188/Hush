@@ -1,21 +1,21 @@
-"""Centralized logging setup for Hush Core.
+"""Thiết lập logging tập trung cho Hush Core.
 
-This package provides a configured LOGGER instance and utilities for logging
-throughout the hush-core package.
+Package này cung cấp instance LOGGER đã được config sẵn và các tiện ích logging
+cho toàn bộ package hush-core.
 
 Modules:
-    config: LogConfig and HandlerConfig base class
-    theme: Logging theme and highlighters
-    handlers: Console, file, and extensible handlers
-    formatters: Log data formatting utilities
+    config: LogConfig và base class HandlerConfig
+    theme: Theme và highlighter cho logging
+    handlers: Console, file, và các handler mở rộng
+    formatters: Các tiện ích format dữ liệu log
 
 Example:
     from hush.core.loggings import LOGGER, LogConfig, setup_logger
 
-    # Use default logger (console only)
+    # Sử dụng logger mặc định (chỉ console)
     LOGGER.info("Hello world")
 
-    # Create custom logger with multiple handlers
+    # Tạo logger tùy chỉnh với nhiều handler
     config = LogConfig(
         name="my_app",
         level="DEBUG",
@@ -26,9 +26,9 @@ Example:
     )
     logger = setup_logger(config)
 
-    # Extend with custom handlers (e.g., Kafka)
-    # In external package: hush-loggings-kafka
-    import hush.loggings.kafka  # Auto-registers on import
+    # Mở rộng với handler tùy chỉnh (ví dụ: Kafka)
+    # Trong package bên ngoài: hush-loggings-kafka
+    import hush.loggings.kafka  # Tự động đăng ký khi import
 
     config = LogConfig(
         handlers=[
@@ -54,7 +54,7 @@ from .formatters import format_log_data, log_break, LOG_INDENT
 from .theme import LOGGING_THEME
 
 
-# Handler registry: type -> (ConfigClass, FactoryFunction)
+# Registry handler: type -> (ConfigClass, FactoryFunction)
 _HANDLER_REGISTRY: Dict[str, Tuple[Type[HandlerConfig], Callable[[HandlerConfig], logging.Handler]]] = {}
 
 
@@ -63,18 +63,18 @@ def register_handler(
     config_class: Type[HandlerConfig],
     factory: Callable[[HandlerConfig], logging.Handler],
 ) -> None:
-    """Register a handler type with its config class and factory.
+    """Đăng ký một loại handler với config class và factory tương ứng.
 
-    This allows extending the logging system with custom handlers.
-    External packages call this to register their handlers.
+    Cho phép mở rộng hệ thống logging với các handler tùy chỉnh.
+    Các package bên ngoài gọi hàm này để đăng ký handler của họ.
 
     Args:
-        handler_type: The handler type identifier (e.g., "kafka", "syslog")
-        config_class: The config class for this handler (extends HandlerConfig)
-        factory: Factory function that takes config and returns logging.Handler
+        handler_type: Định danh loại handler (ví dụ: "kafka", "syslog")
+        config_class: Class config cho handler này (kế thừa HandlerConfig)
+        factory: Hàm factory nhận config và trả về logging.Handler
 
     Example:
-        # In external package (hush-loggings-kafka)
+        # Trong package bên ngoài (hush-loggings-kafka)
         from hush.core.loggings import HandlerConfig, register_handler
 
         class KafkaHandlerConfig(HandlerConfig):
@@ -85,19 +85,19 @@ def register_handler(
         def create_kafka_handler(config: KafkaHandlerConfig) -> logging.Handler:
             ...
 
-        # Auto-register on import
+        # Tự động đăng ký khi import
         register_handler("kafka", KafkaHandlerConfig, create_kafka_handler)
     """
     _HANDLER_REGISTRY[handler_type] = (config_class, factory)
 
 
 def _parse_handler_config(data: Union[HandlerConfig, Dict[str, Any]]) -> HandlerConfig:
-    """Parse raw dict or HandlerConfig into the correct config class."""
-    # Already a specific config class instance
+    """Parse dict hoặc HandlerConfig thành config class tương ứng."""
+    # Đã là instance của config class cụ thể
     if isinstance(data, HandlerConfig) and type(data) is not HandlerConfig:
         return data
 
-    # Convert HandlerConfig base to dict for re-parsing
+    # Chuyển đổi HandlerConfig base thành dict để parse lại
     if isinstance(data, HandlerConfig):
         data = data.model_dump()
 
@@ -106,12 +106,12 @@ def _parse_handler_config(data: Union[HandlerConfig, Dict[str, Any]]) -> Handler
         config_class, _ = _HANDLER_REGISTRY[handler_type]
         return config_class(**data)
 
-    # Fallback to base HandlerConfig (will fail later if used)
+    # Fallback về HandlerConfig base (sẽ fail nếu được sử dụng)
     return HandlerConfig(**data)
 
 
 def _create_handler_from_config(config: HandlerConfig) -> Optional[logging.Handler]:
-    """Create a handler from its configuration."""
+    """Tạo handler từ config tương ứng."""
     if not config.enabled:
         return None
 
@@ -121,31 +121,31 @@ def _create_handler_from_config(config: HandlerConfig) -> Optional[logging.Handl
         _, factory = _HANDLER_REGISTRY[handler_type]
         return factory(config)
 
-    raise ValueError(f"Unknown handler type: {handler_type}. Did you forget to import the handler package?")
+    raise ValueError(f"Loại handler không xác định: {handler_type}. Bạn có quên import package handler không?")
 
 
 def add_handler(logger: logging.Logger, handler: logging.Handler) -> logging.Logger:
-    """Add a handler to a logger.
+    """Thêm handler vào logger.
 
     Args:
-        logger: The logger to add handler to
-        handler: The handler to add
+        logger: Logger cần thêm handler
+        handler: Handler cần thêm
 
     Returns:
-        The logger with the handler added
+        Logger đã được thêm handler
     """
     logger.addHandler(handler)
     return logger
 
 
 def remove_handlers(logger: logging.Logger) -> logging.Logger:
-    """Remove all handlers from a logger.
+    """Xóa tất cả handler khỏi logger.
 
     Args:
-        logger: The logger to clear handlers from
+        logger: Logger cần xóa handler
 
     Returns:
-        The logger with all handlers removed
+        Logger đã được xóa tất cả handler
     """
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
@@ -153,13 +153,13 @@ def remove_handlers(logger: logging.Logger) -> logging.Logger:
 
 
 def setup_logger(config: Optional[LogConfig] = None) -> logging.Logger:
-    """Setup logger from configuration.
+    """Thiết lập logger từ config.
 
     Args:
-        config: Log configuration (default: LogConfig())
+        config: Config cho log (mặc định: LogConfig())
 
     Returns:
-        Configured Logger instance
+        Instance Logger đã được config
     """
     if config is None:
         config = LogConfig()
@@ -168,11 +168,11 @@ def setup_logger(config: Optional[LogConfig] = None) -> logging.Logger:
     logger.setLevel(getattr(logging, config.level.upper()))
     logger.propagate = config.propagate
 
-    # Prevent duplicate handlers
+    # Tránh trùng lặp handler
     if logger.handlers:
         return logger
 
-    # Create and add handlers from config
+    # Tạo và thêm handler từ config
     for handler_data in config.handlers:
         handler_config = _parse_handler_config(handler_data)
         handler = _create_handler_from_config(handler_config)
@@ -182,28 +182,28 @@ def setup_logger(config: Optional[LogConfig] = None) -> logging.Logger:
     return logger
 
 
-# Register built-in handlers
+# Đăng ký các handler có sẵn
 register_handler("console", ConsoleHandlerConfig, create_console_handler)
 register_handler("file", FileHandlerConfig, create_file_handler)
 register_handler("timed_file", TimedFileHandlerConfig, create_timed_file_handler)
 
 
-# Default logger instance
+# Instance logger mặc định
 LOGGER = setup_logger(LogConfig(name="hush.core"))
 
 
 __all__ = [
-    # Main exports
+    # Export chính
     "LOGGER",
     "LogConfig",
     "setup_logger",
-    # Base config for extending
+    # Base config để mở rộng
     "HandlerConfig",
-    # Built-in handler configs
+    # Config cho các handler có sẵn
     "ConsoleHandlerConfig",
     "FileHandlerConfig",
     "TimedFileHandlerConfig",
-    # Utilities
+    # Tiện ích
     "add_handler",
     "remove_handlers",
     "register_handler",

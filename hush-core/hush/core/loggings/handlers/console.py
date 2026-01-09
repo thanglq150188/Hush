@@ -1,4 +1,4 @@
-"""Console logging handlers."""
+"""Các logging handler cho console."""
 
 import sys
 import copy
@@ -15,13 +15,13 @@ from ..theme import LOGGING_THEME
 
 
 class ConsoleHandlerConfig(HandlerConfig):
-    """Console handler configuration.
+    """Config cho console handler.
 
     Args:
-        enabled: Enable this handler (default: True)
-        level: Log level for this handler
-        format_str: Custom format string (ignored if use_rich=True)
-        use_rich: Use Rich handler for beautiful colors (default: True)
+        enabled: Bật handler này (mặc định: True)
+        level: Log level cho handler này
+        format_str: Format string tùy chỉnh (bị bỏ qua nếu use_rich=True)
+        use_rich: Sử dụng Rich handler cho màu sắc đẹp (mặc định: True)
     """
 
     type: Literal["console"] = "console"
@@ -29,41 +29,41 @@ class ConsoleHandlerConfig(HandlerConfig):
 
 
 class NamedRichHandler(RichHandler):
-    """RichHandler that includes logger name in output."""
+    """RichHandler bao gồm tên logger trong output."""
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Emit a log record with logger name and message colored by level."""
-        # Map log levels to styles for both name and message
-        # Use direct colors for WARNING/ERROR/CRITICAL to avoid conflict with custom tags
+        """Emit log record với tên logger và message được tô màu theo level."""
+        # Map log level sang style cho cả name và message
+        # Dùng màu trực tiếp cho WARNING/ERROR/CRITICAL để tránh xung đột với custom tag
         level_styles = {
-            "DEBUG": ("#8b949e", "#8b949e"),                       # Lighter gray (more readable)
-            "INFO": ("white", "white"),                            # White
-            "WARNING": ("#d29922", "#d29922"),                     # Yellow
-            "ERROR": ("#f85149", "#f85149"),                       # Red
-            "CRITICAL": ("bold reverse #b81c1c", "bold reverse #b81c1c"),  # White on dark red
+            "DEBUG": ("#8b949e", "#8b949e"),                       # Xám nhạt (dễ đọc hơn)
+            "INFO": ("white", "white"),                            # Trắng
+            "WARNING": ("#d29922", "#d29922"),                     # Vàng
+            "ERROR": ("#f85149", "#f85149"),                       # Đỏ
+            "CRITICAL": ("bold reverse #b81c1c", "bold reverse #b81c1c"),  # Trắng trên nền đỏ đậm
         }
         name_style, msg_style = level_styles.get(record.levelname, ("muted", "log.message"))
 
-        # Work on a copy to avoid affecting other handlers
+        # Làm việc trên bản sao để không ảnh hưởng đến các handler khác
         record = copy.copy(record)
         record.msg = f"[{name_style}]\\[{record.name}][/{name_style}] [{msg_style}]{record.msg}[/{msg_style}]"
         super().emit(record)
 
 
 def create_console_handler(config: ConsoleHandlerConfig) -> logging.Handler:
-    """Create console handler from config.
+    """Tạo console handler từ config.
 
     Args:
-        config: Console handler configuration
+        config: Config cho console handler
 
     Returns:
-        Rich handler with colors or basic UTF-8 console handler
+        Rich handler với màu sắc hoặc console handler UTF-8 cơ bản
     """
     if config.use_rich:
         console = Console(
             theme=LOGGING_THEME,
-            # Don't force terminal - let Rich auto-detect
-            # This ensures plain text output when piped to files or in CI/CD
+            # Không ép buộc terminal - để Rich tự phát hiện
+            # Đảm bảo output plain text khi pipe sang file hoặc trong CI/CD
             highlight=False,
         )
 
