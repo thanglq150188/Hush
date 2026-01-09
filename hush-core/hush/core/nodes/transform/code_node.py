@@ -1,4 +1,4 @@
-"""Code execution node for running Python functions in workflows."""
+"""Node thực thi code Python trong workflow."""
 
 from typing import Dict, Callable, Any, Optional, List
 import asyncio
@@ -12,10 +12,9 @@ from hush.core.utils.common import Param
 
 
 def code_node(func):
-    """
-    Decorator that converts a function into a CodeNode factory.
+    """Decorator chuyển function thành factory tạo CodeNode.
 
-    Usage:
+    Sử dụng:
         @code_node
         def my_function(arg1, arg2):
             return {"result": value}
@@ -40,7 +39,7 @@ def code_node(func):
 
 
 def ensure_async(func: Callable) -> Callable:
-    """Ensure a function is async."""
+    """Đảm bảo function là async."""
     if asyncio.iscoroutinefunction(func):
         return func
 
@@ -62,13 +61,13 @@ TYPE_MAP = {
 
 
 def parse_default_value(value_str: str, param_type: type) -> Any:
-    """Parse a default value string into the appropriate type.
+    """Parse chuỗi giá trị mặc định thành type phù hợp.
 
-    Returns None if parsing fails.
+    Trả về None nếu parse thất bại.
     """
     value_str = value_str.strip()
 
-    # Handle empty string
+    # Xử lý chuỗi rỗng
     if not value_str:
         if param_type == list:
             return []
@@ -90,17 +89,17 @@ def parse_default_value(value_str: str, param_type: type) -> Any:
         elif param_type == dict:
             return {}
         else:
-            return value_str  # str or Any
+            return value_str  # str hoặc Any
     except (ValueError, TypeError):
         return None
 
 
 def parse_comment(comment: str) -> tuple:
-    """Parse comment like '(type) description' or '(type=default) description'.
+    """Parse comment dạng '(type) description' hoặc '(type=default) description'.
 
-    Only recognizes known types in parentheses at the START of the comment.
+    Chỉ nhận diện các type đã biết trong ngoặc đơn ở ĐẦU comment.
 
-    Examples:
+    Ví dụ:
         '(str) greeting message' -> (str, None, 'greeting message')
         '(int=0) the count' -> (int, 0, 'the count')
         '(bool=true) enabled flag' -> (bool, True, 'enabled flag')
@@ -114,7 +113,7 @@ def parse_comment(comment: str) -> tuple:
         close_idx = comment.index(")")
         type_part = comment[1:close_idx].strip()
 
-        # Check for default value: (type=default)
+        # Kiểm tra giá trị mặc định: (type=default)
         if "=" in type_part:
             type_str, default_str = type_part.split("=", 1)
             type_str = type_str.strip()
@@ -122,34 +121,34 @@ def parse_comment(comment: str) -> tuple:
             type_str = type_part
             default_str = None
 
-        # Only treat as type if it's a known type
+        # Chỉ coi là type nếu thuộc danh sách type đã biết
         if type_str in TYPE_MAP:
             param_type = TYPE_MAP[type_str]
             description = comment[close_idx + 1:].strip()
 
-            # Parse default value if provided
+            # Parse giá trị mặc định nếu có
             if default_str is not None:
                 default = parse_default_value(default_str, param_type)
 
             return param_type, default, description
 
-    # No valid type found, treat entire comment as description
+    # Không tìm thấy type hợp lệ, coi toàn bộ comment là description
     return Any, None, comment
 
 
 def _extract_dict_keys(dict_node: ast.Dict, source_lines: List[str]) -> Dict[str, Param]:
-    """Extract keys from an AST Dict node."""
+    """Trích xuất các key từ AST Dict node."""
     schema = {}
     for key_node in dict_node.keys:
         if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
             key_name = key_node.value
 
-            # Extract type, default, and description from inline comment
+            # Trích xuất type, default, và description từ inline comment
             param_type = Any
             default = None
             description = ""
             for src_line in source_lines:
-                # Check for both single and double quotes
+                # Kiểm tra cả single và double quotes
                 if "#" in src_line and (f'"{key_name}"' in src_line or f"'{key_name}'" in src_line):
                     comment = src_line.split("#", 1)[1].strip()
                     param_type, default, description = parse_comment(comment)
@@ -164,15 +163,15 @@ def _extract_dict_keys(dict_node: ast.Dict, source_lines: List[str]) -> Dict[str
 
 
 def extract_return_schema(func: Callable) -> Dict[str, Param]:
-    """Extract return schema from function source code using AST.
+    """Trích xuất return schema từ source code của function sử dụng AST.
 
-    Supports:
-        # Regular functions
+    Hỗ trợ:
+        # Function thông thường
         return {"key": value}
         return {"key": value,  # description}
         return {"key": value,  # (type) description}
 
-        # Lambda functions
+        # Lambda function
         lambda x: {"key": value}
         lambda x: {"key": value,  # (type) description}
     """
@@ -184,12 +183,12 @@ def extract_return_schema(func: Callable) -> Dict[str, Param]:
 
         schema = {}
         for node in ast.walk(tree):
-            # Handle regular function return statements
+            # Xử lý câu lệnh return của function thông thường
             if isinstance(node, ast.Return) and node.value:
                 if isinstance(node.value, ast.Dict):
                     schema.update(_extract_dict_keys(node.value, source_lines))
 
-            # Handle lambda expressions (body is the return value)
+            # Xử lý lambda expression (body là giá trị return)
             elif isinstance(node, ast.Lambda):
                 if isinstance(node.body, ast.Dict):
                     schema.update(_extract_dict_keys(node.body, source_lines))
@@ -200,7 +199,11 @@ def extract_return_schema(func: Callable) -> Dict[str, Param]:
 
 
 class CodeNode(BaseNode):
-    """Node that executes a Python function."""
+    """Node thực thi function Python.
+
+    Tự động trích xuất input/output schema từ function signature và AST.
+    Hỗ trợ cả sync và async function.
+    """
 
     type: NodeType = "code"
 
@@ -212,7 +215,7 @@ class CodeNode(BaseNode):
         return_keys: Optional[List[str]] = None,
         **kwargs
     ):
-        # Build schemas before super().__init__
+        # Build schemas trước super().__init__
         input_schema, output_schema = self._build_schemas(code_fn, return_keys)
 
         super().__init__(
@@ -224,13 +227,13 @@ class CodeNode(BaseNode):
         self.code_fn = code_fn
         self.core = ensure_async(code_fn) if code_fn else None
 
-        # Get source code
+        # Lấy source code
         try:
             self.source = inspect.getsource(code_fn) if code_fn else ""
         except:
             self.source = str(code_fn) if code_fn else ""
 
-        # Set description from docstring if not provided
+        # Set description từ docstring nếu chưa có
         if not self.description and code_fn and code_fn.__doc__:
             self.description = code_fn.__doc__.strip().split('\n')[0]
 
@@ -239,11 +242,11 @@ class CodeNode(BaseNode):
         code_fn: Optional[Callable],
         return_keys: Optional[List[str]]
     ) -> tuple:
-        """Build input/output schemas from function signature and source."""
+        """Xây dựng input/output schema từ function signature và source."""
         if code_fn is None:
             return {}, {}
 
-        # Build input schema from function parameters
+        # Xây dựng input schema từ các parameter của function
         input_schema = {}
         sig = inspect.signature(code_fn)
 
@@ -258,17 +261,17 @@ class CodeNode(BaseNode):
                 default=default_val
             )
 
-        # Build output schema: explicit return_keys > AST parsing
+        # Xây dựng output schema: return_keys explicit > AST parsing
         if return_keys:
             output_schema = {key: Param(type=Any) for key in return_keys}
         else:
-            # Parse return schema from source code (with type hints and descriptions)
+            # Parse return schema từ source code (với type hints và descriptions)
             output_schema = extract_return_schema(code_fn)
 
         return input_schema, output_schema
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata."""
+        """Trả về metadata riêng của subclass."""
         return {
             "code_fn": self.source[:200] + "..." if len(self.source) > 200 else self.source,
             "function_name": self.code_fn.__name__ if self.code_fn else "unknown"

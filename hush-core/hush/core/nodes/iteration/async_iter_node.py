@@ -1,4 +1,4 @@
-"""Async iteration node for processing async streaming data."""
+"""Async iteration node để xử lý async streaming data."""
 
 from typing import Dict, Any, Optional, AsyncIterable, Callable, Awaitable, TYPE_CHECKING, List
 from datetime import datetime
@@ -18,27 +18,26 @@ if TYPE_CHECKING:
 
 
 def batch_by_size(n: int) -> Callable[[List, Any], bool]:
-    """Create a batch condition that flushes when batch reaches n items."""
+    """Tạo batch condition để flush khi batch đạt n items."""
     return lambda batch, _: len(batch) >= n
 
 
 class AsyncIterNode(BaseIterationNode):
-    """
-    A streaming node that processes async iterable data with optional batching.
+    """Streaming node xử lý async iterable data với optional batching.
 
-    API (unified inputs with Each wrapper):
-        - `inputs`: Dict of all variables. Use Each() wrapper for the async iterable source.
-          - Each(source): The async iterable to iterate over
-          - Regular values: Broadcast to all iterations (same value)
-        - `callback`: Optional async handler for streaming results
+    API (unified inputs với Each wrapper):
+        - `inputs`: Dict tất cả variables. Dùng Each() wrapper cho async iterable source.
+          - Each(source): Async iterable để iterate
+          - Regular values: Broadcast cho tất cả iterations (cùng value)
+        - `callback`: Optional async handler cho streaming results
         - `batch_fn`: Optional batching condition
 
     Features:
-    - Concurrent processing with ordered output emission
-    - Optional batching before processing
-    - Optional callback for streaming results
+    - Concurrent processing với ordered output emission
+    - Optional batching trước khi processing
+    - Optional callback cho streaming results
     - Semaphore-limited concurrency
-    - Collects results like ForLoopNode (unless callback-only mode)
+    - Collect results giống ForLoopNode (trừ khi callback-only mode)
 
     Example:
         async def my_stream():
@@ -75,28 +74,28 @@ class AsyncIterNode(BaseIterationNode):
         max_concurrency: Optional[int] = None,
         **kwargs
     ):
-        """Initialize an AsyncIterNode.
+        """Khởi tạo AsyncIterNode.
 
         Args:
-            inputs: Dict mapping variable names to values or Each(source).
-                    - Each(source): The async iterable to iterate over (exactly one required)
-                    - Other values: Broadcast to all iterations
-                    Values can be literals or Refs to upstream nodes.
-            callback: Optional async function called with each result in order.
-                      If provided, results are streamed; otherwise collected.
+            inputs: Dict mapping variable names đến values hoặc Each(source).
+                    - Each(source): Async iterable để iterate (yêu cầu đúng một)
+                    - Other values: Broadcast cho tất cả iterations
+                    Values có thể là literals hoặc Refs đến upstream nodes.
+            callback: Optional async function được gọi với mỗi result theo thứ tự.
+                      Nếu có, results được stream; ngược lại được collect.
             batch_fn: Optional function (batch, new_item) -> should_flush.
-                      When batching, inner graph receives {"batch": [...], "batch_size": n}.
-            max_concurrency: Maximum concurrent processing tasks.
-                            Defaults to CPU count.
+                      Khi batching, inner graph nhận {"batch": [...], "batch_size": n}.
+            max_concurrency: Số concurrent processing tasks tối đa.
+                            Mặc định là CPU count.
         """
-        # Store raw outputs and inputs before super().__init__ normalizes them
+        # Lưu raw outputs và inputs trước khi super().__init__ normalize chúng
         self._raw_outputs = kwargs.get('outputs')
         self._raw_inputs = inputs or {}
 
-        # Don't pass inputs to parent - we handle it ourselves
+        # Không pass inputs cho parent - tự xử lý
         super().__init__(**kwargs)
 
-        # Separate Each() sources from broadcast inputs
+        # Tách Each() sources khỏi broadcast inputs
         self._each = {}
         self._broadcast_inputs = {}
 
@@ -106,7 +105,7 @@ class AsyncIterNode(BaseIterationNode):
             else:
                 self._broadcast_inputs[var_name] = value
 
-        # Validate exactly one Each() source
+        # Validate đúng một Each() source
         if len(self._each) != 1:
             raise ValueError(
                 f"AsyncIterNode requires exactly one Each() source in inputs, got: {list(self._each.keys())}"
@@ -117,16 +116,16 @@ class AsyncIterNode(BaseIterationNode):
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
     def _post_build(self):
-        """Set input/output schema after inner graph is built.
+        """Thiết lập input/output schema sau khi inner graph được build.
 
-        IMPORTANT: This method normalizes _each and _broadcast_inputs using
-        _normalize_connections to resolve PARENT refs to self.father.
+        QUAN TRỌNG: Method này normalize _each và _broadcast_inputs dùng
+        _normalize_connections để resolve PARENT refs thành self.father.
         """
-        # Normalize each and broadcast inputs (resolves PARENT refs)
+        # Normalize each và broadcast inputs (resolve PARENT refs)
         self._each = self._normalize_connections(self._each, {})
         self._broadcast_inputs = self._normalize_connections(self._broadcast_inputs, {})
 
-        # Get the iteration variable name
+        # Lấy tên iteration variable
         iter_var_name = list(self._each.keys())[0]
 
         # Input schema: iteration var (AsyncIterable) + broadcast inputs (Any)
@@ -134,7 +133,7 @@ class AsyncIterNode(BaseIterationNode):
             iter_var_name: Param(type=AsyncIterable, required=True)
         }
 
-        # If batching is enabled, also register batch and batch_size variables
+        # Nếu batching enabled, đăng ký thêm batch và batch_size variables
         if self._batch_fn is not None:
             self.input_schema["batch"] = Param(type=List, required=False)
             self.input_schema["batch_size"] = Param(type=int, required=False)
@@ -144,22 +143,22 @@ class AsyncIterNode(BaseIterationNode):
             for var_name, value in self._broadcast_inputs.items()
         })
 
-        # Output schema: from inner graph (as lists) + metrics
+        # Output schema: từ inner graph (dạng lists) + metrics
         self.output_schema = {
             key: Param(type=List, required=param.required)
             for key, param in self._graph.output_schema.items()
         }
         self.output_schema["iteration_metrics"] = Param(type=Dict, required=False)
 
-        # Re-normalize outputs now that output_schema is set
+        # Re-normalize outputs sau khi output_schema được set
         if self._raw_outputs is not None:
             self.outputs = self._normalize_connections(self._raw_outputs, self.output_schema)
 
-        # Store each and inputs as node's inputs for get_inputs to work
+        # Lưu each và inputs vào node's inputs để get_inputs hoạt động
         self.inputs = {**self._each, **self._broadcast_inputs}
 
-        # If batching is enabled, also add batch and batch_size to inputs
-        # so the schema can set up proper links for inner graph PARENT access
+        # Nếu batching enabled, thêm batch và batch_size vào inputs
+        # để schema có thể thiết lập links cho inner graph PARENT access
         if self._batch_fn is not None:
             self.inputs["batch"] = None
             self.inputs["batch_size"] = None
@@ -170,24 +169,24 @@ class AsyncIterNode(BaseIterationNode):
         state: 'MemoryState',
         context_id: Optional[str]
     ) -> Dict[str, Any]:
-        """Resolve values, dereferencing any Ref objects.
+        """Resolve values, dereference các Ref objects.
 
         Args:
-            values: Dict of {var_name: value_or_ref}
-            state: The workflow state
-            context_id: The context ID for resolution
+            values: Dict {var_name: value_or_ref}
+            state: Workflow state
+            context_id: Context ID để resolution
 
         Returns:
-            Dict mapping variable names to their resolved values.
+            Dict mapping variable names đến resolved values.
 
-        Note: We must apply value._fn here because the Ref in values may have
-        operations (e.g., ref["key"]["subkey"]) that are not registered in the
-        schema. The schema only stores the base node/var, not the operations.
+        Note: Phải apply value._fn ở đây vì Ref trong values có thể có
+        operations (e.g., ref["key"]["subkey"]) không được đăng ký trong
+        schema. Schema chỉ lưu base node/var, không lưu operations.
         """
         result = {}
         for var_name, value in values.items():
             if isinstance(value, Ref):
-                # Get raw value from state and apply Ref's operations
+                # Lấy raw value từ state và apply Ref's operations
                 raw = state[value.node, value.var, context_id]
                 result[var_name] = value._fn(raw)
             else:
@@ -195,12 +194,12 @@ class AsyncIterNode(BaseIterationNode):
         return result
 
     def _get_source(self, state: 'MemoryState', context_id: Optional[str]) -> AsyncIterable:
-        """Get the async iterable source, resolving Ref if needed."""
+        """Lấy async iterable source, resolve Ref nếu cần."""
         iter_var_name = list(self._each.keys())[0]
         source = self._each[iter_var_name]
 
         if isinstance(source, Ref):
-            # Get raw value from state and apply Ref's operations
+            # Lấy raw value từ state và apply Ref's operations
             raw = state[source.node, source.var, context_id]
             return source._fn(raw)
         return source
@@ -212,7 +211,7 @@ class AsyncIterNode(BaseIterationNode):
         state: 'MemoryState',
         request_id: str
     ) -> Dict[str, Any]:
-        """Process a single chunk through the inner graph."""
+        """Xử lý single chunk qua inner graph."""
         context_id = f"stream[{chunk_id}]"
         start = perf_counter()
 
@@ -240,7 +239,7 @@ class AsyncIterNode(BaseIterationNode):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Process streaming data with concurrent processing but ordered output."""
+        """Xử lý streaming data với concurrent processing nhưng ordered output."""
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -250,12 +249,12 @@ class AsyncIterNode(BaseIterationNode):
         _outputs = {}
 
         try:
-            # Get source and broadcast values
+            # Lấy source và broadcast values
             source = self._get_source(state, context_id)
             broadcast_values = self._resolve_values(self._broadcast_inputs, state, context_id)
             iter_var_name = list(self._each.keys())[0]
 
-            # Store inputs for logging
+            # Lưu inputs để logging
             _inputs = {iter_var_name: "<AsyncIterable>", **broadcast_values}
 
             if source is None:
@@ -272,7 +271,7 @@ class AsyncIterNode(BaseIterationNode):
             handler_error_count = 0
             total_chunks = 0
 
-            # Collected results (if not streaming via callback)
+            # Collected results (nếu không streaming qua callback)
             collected_results: List[Dict[str, Any]] = []
 
             async def process_with_semaphore(chunk_data: Dict[str, Any], cid: int):
@@ -281,7 +280,7 @@ class AsyncIterNode(BaseIterationNode):
                     await result_queue.put((cid, result))
 
             async def consume_stream():
-                """Consume stream and launch processing tasks."""
+                """Consume stream và launch processing tasks."""
                 nonlocal total_chunks
                 current_batch: List = []
                 tasks = []
@@ -303,14 +302,14 @@ class AsyncIterNode(BaseIterationNode):
                             current_batch = []
                         current_batch.append(item)
                     else:
-                        # Normal mode: each item becomes iteration variable
+                        # Normal mode: mỗi item thành iteration variable
                         chunk_data = {iter_var_name: item, **broadcast_values}
                         tasks.append(asyncio.create_task(
                             process_with_semaphore(chunk_data, total_chunks)
                         ))
                         total_chunks += 1
 
-                # Flush remaining batch
+                # Flush batch còn lại
                 if self._batch_fn and current_batch:
                     batch_data = {
                         "batch": current_batch,
@@ -322,7 +321,7 @@ class AsyncIterNode(BaseIterationNode):
                     ))
                     total_chunks += 1
 
-                # Wait for all tasks and signal completion
+                # Chờ tất cả tasks và signal completion
                 if tasks:
                     await asyncio.gather(*tasks)
                 await result_queue.put(None)  # Sentinel
@@ -330,7 +329,7 @@ class AsyncIterNode(BaseIterationNode):
             # Start consumer
             consumer_task = asyncio.create_task(consume_stream())
 
-            # Collect results in order
+            # Collect results theo thứ tự
             pending_results: Dict[int, Dict] = {}
             next_id = 0
 
@@ -342,7 +341,7 @@ class AsyncIterNode(BaseIterationNode):
                 cid, result = item
                 pending_results[cid] = result
 
-                # Emit results in order
+                # Emit results theo thứ tự
                 while next_id in pending_results:
                     result = pending_results.pop(next_id)
                     latencies.append(result.get("latency_ms", 0))
@@ -350,7 +349,7 @@ class AsyncIterNode(BaseIterationNode):
                     if result.get("success"):
                         success_count += 1
 
-                        # Stream to callback if provided
+                        # Stream đến callback nếu có
                         if self._callback:
                             handler_start = perf_counter()
                             try:
@@ -378,14 +377,14 @@ class AsyncIterNode(BaseIterationNode):
                 "error_count": error_count,
             })
 
-            # Warn if high error rate (>10%)
+            # Cảnh báo nếu error rate cao (>10%)
             if total_chunks > 0 and error_count / total_chunks > 0.1:
                 LOGGER.warning(
                     f"AsyncIterNode '{self.full_name}': high error rate "
                     f"({error_count / total_chunks:.1%}). {error_count}/{total_chunks} failed."
                 )
 
-            # Add callback metrics if used
+            # Thêm callback metrics nếu có sử dụng
             if handler_latencies:
                 handler_metrics = self._calculate_iteration_metrics(handler_latencies)
                 iteration_metrics["callback"] = {
@@ -399,7 +398,7 @@ class AsyncIterNode(BaseIterationNode):
                         f"({handler_error_count / len(handler_latencies):.1%})."
                     )
 
-            # Transpose results to column-oriented format (like ForLoopNode)
+            # Transpose results sang column-oriented format (giống ForLoopNode)
             output_keys = list(self._graph.output_schema.keys())
             _outputs = {
                 key: [r.get(key) for r in collected_results]
@@ -424,7 +423,7 @@ class AsyncIterNode(BaseIterationNode):
             return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata."""
+        """Trả về metadata đặc thù của subclass."""
         return {
             "max_concurrency": self._max_concurrency,
             "each": list(self._each.keys()),

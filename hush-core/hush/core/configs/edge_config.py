@@ -1,4 +1,4 @@
-"""Edge configuration types for hush-core."""
+"""Các kiểu config edge cho hush-core."""
 
 from typing import Literal
 from pydantic import BaseModel
@@ -8,15 +8,15 @@ EdgeType = Literal["normal", "lookback", "condition"]
 
 
 class EdgeConfig(BaseModel):
-    """Configuration for edges between nodes in a workflow graph.
+    """Config cho các edge giữa các node trong workflow graph.
 
     Attributes:
-        from_node: Source node name
-        to_node: Target node name
-        type: Edge type (normal, lookback, condition)
-        soft: If True, this edge doesn't count toward ready_count.
-              Use for branch outputs where only one branch executes.
-              Created with > operator instead of >>
+        from_node: Tên node nguồn
+        to_node: Tên node đích
+        type: Loại edge (normal, lookback, condition)
+        soft: Nếu True, edge này không được tính vào ready_count.
+              Dùng cho các đầu ra nhánh khi chỉ một nhánh được thực thi.
+              Được tạo bằng toán tử > thay vì >>
     """
 
     from_node: str

@@ -1,4 +1,16 @@
-"""Core nodes for hush workflow engine."""
+"""Core nodes cho hush workflow engine.
+
+Bao gồm:
+- BaseNode: Base class cho tất cả workflow nodes
+- DummyNode: Node placeholder cho START/END markers
+- GraphNode: Container quản lý subgraph với thực thi song song
+- BranchNode: Conditional routing với precompiled conditions
+- ForLoopNode: Iterate qua collection song song
+- WhileLoopNode: Iterate khi condition còn true
+- AsyncIterNode: Xử lý streaming data với ordered output
+- CodeNode: Thực thi Python functions
+- ParserNode: Extract structured data từ text
+"""
 
 from .base import (
     BaseNode,

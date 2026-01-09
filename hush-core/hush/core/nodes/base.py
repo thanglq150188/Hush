@@ -1,4 +1,4 @@
-"""Base node class for all workflow nodes."""
+"""Base class cho tất cả các node trong workflow."""
 
 from abc import ABC
 from typing import Dict, Any, Callable, Optional, List, TYPE_CHECKING
@@ -19,7 +19,19 @@ if TYPE_CHECKING:
 
 
 class BaseNode(ABC):
-    """Base class for all workflow nodes."""
+    """Base class cho tất cả các node trong workflow.
+
+    Node là đơn vị xử lý cơ bản trong workflow. Mỗi node có:
+    - inputs: Ánh xạ biến đầu vào (có thể là Ref hoặc literal)
+    - outputs: Ánh xạ biến đầu ra
+    - input_schema/output_schema: Định nghĩa các biến
+    - core: Function thực thi logic chính
+
+    Hỗ trợ kết nối node bằng operators:
+    - >> : Kết nối tuần tự (hard edge)
+    - >  : Kết nối điều kiện (soft edge, dùng cho branch)
+    - << : Kết nối ngược
+    """
 
     INNER_PROCESS = "__inner__"
 
@@ -77,26 +89,26 @@ class BaseNode(ABC):
 
         self.core: Optional[Callable] = None
         self.contain_generation = contain_generation
-        # Register to parent graph
+        # Đăng ký vào graph cha
         self.father = get_current()
         if self.father and hasattr(self.father, "add_node"):
             self.father.add_node(self)
 
-        # Validate name
+        # Validate tên node
         if self.name and not self.name.replace('_', '').replace('-', '').isalnum():
-            raise ValueError(f"Node name '{self.name}' must be alphanumeric with underscores/hyphens")
+            raise ValueError(f"Tên node '{self.name}' chỉ được chứa ký tự alphanumeric, underscore và hyphen")
 
-        # Normalize inputs/outputs connections
+        # Chuẩn hóa các kết nối inputs/outputs
         self.inputs = self._normalize_connections(inputs, self.input_schema)
         self.outputs = self._normalize_connections(outputs, self.output_schema)
 
-        # Error if same key appears in both inputs and outputs (not allowed)
+        # Lỗi nếu có key trùng trong cả inputs và outputs
         if self.inputs and self.outputs:
             overlapping_keys = set(self.inputs.keys()) & set(self.outputs.keys())
             if overlapping_keys:
                 raise ValueError(
-                    f"Node '{self.name}' has overlapping input/output keys: {overlapping_keys}. "
-                    "Input and output variable names must be distinct."
+                    f"Node '{self.name}' có key trùng giữa input/output: {overlapping_keys}. "
+                    "Tên biến input và output phải khác nhau."
                 )
 
     def _normalize_connections(
@@ -104,50 +116,49 @@ class BaseNode(ABC):
         connections: Any,
         schema: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Normalize connection mappings to consistent format.
+        """Chuẩn hóa ánh xạ kết nối về format thống nhất.
 
-        Transforms various input formats to: {var_name: Ref} or {var_name: literal}
+        Chuyển đổi các format đầu vào khác nhau thành: {var_name: Ref} hoặc {var_name: literal}
 
-        Supported formats:
+        Các format được hỗ trợ:
             - inputs=some_node → {k: Ref(some_node, k) for k in schema}
             - inputs={"var": some_node} → {"var": Ref(some_node, "var")}
             - inputs={"var": some_node["other"]} → {"var": Ref(some_node, "other")}
             - inputs={"var": Ref(node, "other")} → {"var": Ref(node, "other")}
             - inputs={("a", "b"): some_node} → {"a": Ref(some_node, "a"), "b": Ref(some_node, "b")}
-            - inputs={"var": PARENT["x"]} → {"var": Ref(father, "x")} (PARENT resolves to father node)
+            - inputs={"var": PARENT["x"]} → {"var": Ref(father, "x")} (PARENT resolve thành father node)
         """
         if connections is None:
             return {}
 
         def resolve_node(node):
-            """Resolve PARENT to father node."""
+            """Resolve PARENT thành father node."""
             if hasattr(node, 'name') and node.name == "__PARENT__":
                 return self.father if self.father else node
             return node
 
-        # Case: connections is a node reference (inputs=some_node)
+        # Trường hợp: connections là một node reference (inputs=some_node)
         if hasattr(connections, "name"):
             resolved = resolve_node(connections)
             if schema:
                 return {k: Ref(resolved, k) for k in schema}
             return {}
 
-        # Case: connections is a dict
+        # Trường hợp: connections là dict
         if isinstance(connections, dict):
             result = {}
             for key, value in connections.items():
-                # Handle Ref directly - preserve operations!
+                # Xử lý Ref trực tiếp - giữ nguyên operations!
                 if isinstance(value, Ref):
                     resolved = resolve_node(value.raw_node)
-                    # Preserve the _ops when creating new Ref with resolved node
+                    # Giữ nguyên _ops khi tạo Ref mới với resolved node
                     result[key] = Ref(resolved, value.var, value.ops)
-                # Handle old dict format {"var": node["other_var"]} for backward compat
+                # Xử lý dict format cũ {"var": node["other_var"]} để tương thích ngược
                 elif isinstance(value, dict) and value:
                     ref_node, ref_var = next(iter(value.items()))
                     resolved = resolve_node(ref_node)
                     result[key] = Ref(resolved, ref_var)
-                # Handle tuple keys: {("a", "b"): node} → expand to both
+                # Xử lý tuple keys: {("a", "b"): node} → mở rộng thành cả hai
                 elif isinstance(key, tuple):
                     for k in key:
                         if hasattr(value, "name"):
@@ -161,7 +172,7 @@ class BaseNode(ABC):
                         resolved = resolve_node(value)
                         result[key] = Ref(resolved, key)
                     else:
-                        # Literal value
+                        # Giá trị literal
                         result[key] = value
             return result
 
@@ -169,21 +180,21 @@ class BaseNode(ABC):
 
     @property
     def full_name(self) -> str:
-        """Full hierarchical path of this node."""
+        """Đường dẫn phân cấp đầy đủ của node."""
         if self.father:
             return f"{self.father.full_name}.{self.name}"
         return self.name
 
     def identity(self, context_id: str) -> str:
-        """Full path with context_id."""
+        """Đường dẫn đầy đủ kèm context_id."""
         return f"{self.full_name}[{context_id or 'main'}]"
 
     def __getitem__(self, item: str) -> Ref:
-        """Allow node["var"] syntax for referencing specific output."""
+        """Cho phép cú pháp node["var"] để tham chiếu output cụ thể."""
         return Ref(self, item)
 
     def __rshift__(self, other):
-        """node >> other: connect this node to other."""
+        """node >> other: kết nối node này đến other."""
         edge_type = "condition" if self.type == "branch" else "normal"
 
         if isinstance(other, list):
@@ -198,7 +209,7 @@ class BaseNode(ABC):
         return NotImplemented
 
     def __lshift__(self, other):
-        """node << other: connect other to this node."""
+        """node << other: kết nối other đến node này."""
         edge_type = "condition" if self.type == "branch" else "normal"
 
         if isinstance(other, list):
@@ -223,10 +234,10 @@ class BaseNode(ABC):
         return self
 
     def __gt__(self, other):
-        """node > other: soft edge (doesn't count toward ready_count).
+        """node > other: soft edge (không tính vào ready_count).
 
-        Use for branch outputs where only one branch will execute.
-        Example: case_a > merge_node (merge waits for any ONE predecessor)
+        Dùng cho output của branch khi chỉ một nhánh được thực thi.
+        Ví dụ: case_a > merge_node (merge chờ BẤT KỲ MỘT predecessor)
         """
         edge_type = "condition" if self.type == "branch" else "normal"
 
@@ -242,10 +253,10 @@ class BaseNode(ABC):
         return NotImplemented
 
     def __lt__(self, other):
-        """node < other: reverse soft edge.
+        """node < other: soft edge ngược.
 
-        Use for branch outputs where only one branch will execute.
-        Example: merge_node < case_a (merge waits for any ONE predecessor)
+        Dùng cho output của branch khi chỉ một nhánh được thực thi.
+        Ví dụ: merge_node < case_a (merge chờ BẤT KỲ MỘT predecessor)
         """
         edge_type = "condition" if self.type == "branch" else "normal"
 
@@ -261,31 +272,30 @@ class BaseNode(ABC):
         return NotImplemented
 
     def __call__(self, **kwargs) -> Dict[str, Any]:
-        """
-        Quick test: call node directly with inputs.
+        """Test nhanh: gọi node trực tiếp với inputs.
 
-        Usage:
+        Sử dụng:
             node = SomeNode(name="test", ...)
             result = node(a=1, b=2)
-            # or
+            # hoặc
             result = node(**{"a": 1, "b": 2})
 
         Returns:
-            Dict of outputs from the node execution.
+            Dict các output từ việc thực thi node.
         """
         from hush.core.states import StateSchema, MemoryState
 
-        # Store kwargs as direct inputs (bypass connection resolution)
+        # Lưu kwargs làm inputs trực tiếp (bỏ qua connection resolution)
         self.inputs = kwargs
 
-        # Create schema from this node (registers inputs, outputs, metadata)
+        # Tạo schema từ node này (đăng ký inputs, outputs, metadata)
         schema = StateSchema(node=self)
         state = MemoryState(schema)
 
-        # Run synchronously
+        # Chạy đồng bộ
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # If already in async context, create new loop
+            # Nếu đã trong async context, tạo loop mới
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 result = pool.submit(asyncio.run, self.run(state)).result()
@@ -298,34 +308,34 @@ class BaseNode(ABC):
         return True
 
     def get_inputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
-        """Retrieve input values from state based on connection mappings.
+        """Lấy giá trị input từ state dựa trên ánh xạ kết nối.
 
-        Uses state[this_node, var_name, ctx] which:
-        1. Resolves to canonical storage location via schema index
-        2. Automatically applies any Ref operations (like ['key'].apply(len))
+        Sử dụng state[this_node, var_name, ctx] để:
+        1. Resolve đến vị trí lưu trữ canonical qua schema index
+        2. Tự động áp dụng các Ref operation (như ['key'].apply(len))
 
-        The schema already resolved the Ref chain at build time, so we read
-        from this node's own variable name - the index and ops are pre-computed.
+        Schema đã resolve Ref chain tại thời điểm build, nên ta đọc
+        từ tên biến của chính node này - index và ops đã được tính trước.
         """
         result = {}
 
         for var_name, ref in self.inputs.items():
             if isinstance(ref, Ref):
-                # Read from this node's variable - schema handles index resolution and ops
+                # Đọc từ biến của node này - schema xử lý index resolution và ops
                 value = state[self.full_name, var_name, context_id]
                 result[var_name] = value
             else:
-                # Literal value
+                # Giá trị literal
                 result[var_name] = ref
 
         return result
 
     def get_outputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
-        """Retrieve output values from state.
+        """Lấy giá trị output từ state.
 
-        Reads directly from this node's output variables. Output connections
-        (outputs={...}) are already resolved by the schema at build time -
-        they create refs in the target location, not in this node.
+        Đọc trực tiếp từ các biến output của node này. Output connections
+        (outputs={...}) đã được schema resolve tại thời điểm build -
+        chúng tạo ref ở vị trí đích, không phải ở node này.
         """
         result = {}
         for var_name in self.output_schema:
@@ -338,9 +348,9 @@ class BaseNode(ABC):
         result: Dict[str, Any],
         context_id: str
     ) -> None:
-        """Store result dict to state.
+        """Lưu dict kết quả vào state.
 
-        Uses state[node, var, ctx] = value for index-based O(1) storage.
+        Sử dụng state[node, var, ctx] = value cho lưu trữ O(1) dựa trên index.
         """
         if not result:
             return
@@ -356,7 +366,7 @@ class BaseNode(ABC):
         outputs: Dict[str, Any],
         duration_ms: float
     ) -> None:
-        """Log node execution summary with inputs, outputs and duration."""
+        """Log tóm tắt thực thi node với inputs, outputs và duration."""
         if self.verbose:
             _context_id = context_id or "main"
             _request_id = request_id or "unknown"
@@ -371,7 +381,7 @@ class BaseNode(ABC):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Run the node."""
+        """Thực thi node."""
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -406,19 +416,19 @@ class BaseNode(ABC):
             return _outputs
 
     def get_input_variables(self) -> List[str]:
-        """Return input variable names."""
+        """Trả về danh sách tên biến input."""
         return list(self.input_schema.keys()) if self.input_schema else []
 
     def get_output_variables(self) -> List[str]:
-        """Return output variable names."""
+        """Trả về danh sách tên biến output."""
         return list(self.output_schema.keys()) if self.output_schema else []
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata. Override in subclasses."""
+        """Trả về metadata riêng của subclass. Override ở các subclass."""
         return {}
 
     def metadata(self) -> Dict[str, Any]:
-        """Generate metadata dictionary for the node."""
+        """Tạo dictionary metadata cho node."""
         def get_connect_key(value):
             if isinstance(value, Ref):
                 return {value.node: value.var}
@@ -455,7 +465,7 @@ class BaseNode(ABC):
 
 
 class DummyNode(BaseNode):
-    """Dummy node for START/END markers."""
+    """Dummy node cho các marker START/END/PARENT."""
 
     type: NodeType = "dummy"
 
@@ -540,7 +550,7 @@ class DummyNode(BaseNode):
         return self
 
 
-# Global dummy nodes
+# Các dummy node toàn cục
 START = DummyNode("__START__")
 END = DummyNode("__END__")
 PARENT = DummyNode("__PARENT__")

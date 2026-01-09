@@ -1,4 +1,4 @@
-"""For loop node with unified inputs API using Each wrapper for iteration sources."""
+"""For loop node với unified inputs API sử dụng Each wrapper cho iteration sources."""
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
@@ -18,31 +18,31 @@ if TYPE_CHECKING:
 
 
 class ForLoopNode(BaseIterationNode):
-    """A node that iterates over collections with support for broadcast variables.
+    """Node iterate qua collections với hỗ trợ broadcast variables.
 
-    API (unified inputs with Each wrapper):
-        - `inputs`: Dict of all variables. Use Each() wrapper for iteration sources.
-          - Each(source): Variable iterated over (different value per iteration)
-          - Regular values: Broadcast to all iterations (same value)
+    API (unified inputs với Each wrapper):
+        - `inputs`: Dict tất cả variables. Dùng Each() wrapper cho iteration sources.
+          - Each(source): Variable được iterate (khác value mỗi iteration)
+          - Regular values: Broadcast cho tất cả iterations (cùng value)
 
     Example:
         with ForLoopNode(
             name="process_loop",
             inputs={
                 "x": Each([1, 2, 3]),           # iterate
-                "y": Each([10, 20, 30]),        # iterate (zipped with x)
+                "y": Each([10, 20, 30]),        # iterate (zipped với x)
                 "multiplier": 10                 # broadcast
             }
         ) as loop:
             node = calc(inputs={"x": PARENT["x"], "y": PARENT["y"], "multiplier": PARENT["multiplier"]})
             START >> node >> END
 
-        # Creates 3 iterations:
+        # Tạo 3 iterations:
         #   iteration 0: {"x": 1, "y": 10, "multiplier": 10}
         #   iteration 1: {"x": 2, "y": 20, "multiplier": 10}
         #   iteration 2: {"x": 3, "y": 30, "multiplier": 10}
 
-        # Output (column-oriented, transposed from inner graph outputs):
+        # Output (column-oriented, transposed từ inner graph outputs):
         #   {"result": [r1, r2, r3], "iteration_metrics": {...}}
     """
 
@@ -56,24 +56,24 @@ class ForLoopNode(BaseIterationNode):
         max_concurrency: Optional[int] = None,
         **kwargs
     ):
-        """Initialize a ForLoopNode.
+        """Khởi tạo ForLoopNode.
 
         Args:
-            inputs: Dict mapping variable names to values or Each(source).
-                    - Each(source): Iterated over (zipped if multiple)
-                    - Other values: Broadcast to all iterations
-                    Values can be literals or Refs to upstream nodes.
-            max_concurrency: Maximum number of concurrent tasks to run.
-                Defaults to the number of CPU cores if not specified.
+            inputs: Dict mapping variable names đến values hoặc Each(source).
+                    - Each(source): Được iterate (zipped nếu nhiều)
+                    - Other values: Broadcast cho tất cả iterations
+                    Values có thể là literals hoặc Refs đến upstream nodes.
+            max_concurrency: Số concurrent tasks tối đa được chạy.
+                Mặc định là số CPU cores nếu không chỉ định.
         """
-        # Store raw outputs and inputs before super().__init__ normalizes them
+        # Lưu raw outputs và inputs trước khi super().__init__ normalize chúng
         self._raw_outputs = kwargs.get('outputs')
         self._raw_inputs = inputs or {}
 
-        # Don't pass inputs to parent - we handle it ourselves
+        # Không pass inputs cho parent - tự xử lý
         super().__init__(**kwargs)
 
-        # Separate Each() sources from broadcast inputs
+        # Tách Each() sources khỏi broadcast inputs
         self._each = {}
         self._broadcast_inputs = {}
 
@@ -86,16 +86,16 @@ class ForLoopNode(BaseIterationNode):
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
     def _post_build(self):
-        """Set input/output schema after inner graph is built.
+        """Thiết lập input/output schema sau khi inner graph được build.
 
-        IMPORTANT: This method normalizes _each and _broadcast_inputs using
-        _normalize_connections to resolve PARENT refs to self.father.
+        QUAN TRỌNG: Method này normalize _each và _broadcast_inputs dùng
+        _normalize_connections để resolve PARENT refs thành self.father.
         """
-        # Normalize each and broadcast inputs (resolves PARENT refs)
+        # Normalize each và broadcast inputs (resolve PARENT refs)
         self._each = self._normalize_connections(self._each, {})
         self._broadcast_inputs = self._normalize_connections(self._broadcast_inputs, {})
 
-        # Input schema: all variables from each (List type) + broadcast inputs (Any type)
+        # Input schema: tất cả variables từ each (List type) + broadcast inputs (Any type)
         self.input_schema = {
             var_name: Param(type=List, required=isinstance(value, Ref))
             for var_name, value in self._each.items()
@@ -105,18 +105,18 @@ class ForLoopNode(BaseIterationNode):
             for var_name, value in self._broadcast_inputs.items()
         })
 
-        # Output schema: derived from inner graph's output schema (column-oriented)
+        # Output schema: dẫn xuất từ inner graph's output schema (column-oriented)
         self.output_schema = {
             key: Param(type=List, required=param.required)
             for key, param in self._graph.output_schema.items()
         }
         self.output_schema["iteration_metrics"] = Param(type=Dict, required=False)
 
-        # Re-normalize outputs now that output_schema is set
+        # Re-normalize outputs sau khi output_schema được set
         if self._raw_outputs is not None:
             self.outputs = self._normalize_connections(self._raw_outputs, self.output_schema)
 
-        # Store each and inputs as node's inputs for get_inputs to work
+        # Lưu each và inputs vào node's inputs để get_inputs hoạt động
         self.inputs = {**self._each, **self._broadcast_inputs}
 
     def _resolve_values(
@@ -125,24 +125,24 @@ class ForLoopNode(BaseIterationNode):
         state: 'MemoryState',
         context_id: Optional[str]
     ) -> Dict[str, Any]:
-        """Resolve values, dereferencing any Ref objects.
+        """Resolve values, dereference các Ref objects.
 
         Args:
-            values: Dict of {var_name: value_or_ref}
-            state: The workflow state
-            context_id: The context ID for resolution
+            values: Dict {var_name: value_or_ref}
+            state: Workflow state
+            context_id: Context ID để resolution
 
         Returns:
-            Dict mapping variable names to their resolved values.
+            Dict mapping variable names đến resolved values.
 
-        Note: We must apply value._fn here because the Ref in values may have
-        operations (e.g., ref["key"]["subkey"]) that are not registered in the
-        schema. The schema only stores the base node/var, not the operations.
+        Note: Phải apply value._fn ở đây vì Ref trong values có thể có
+        operations (e.g., ref["key"]["subkey"]) không được đăng ký trong
+        schema. Schema chỉ lưu base node/var, không lưu operations.
         """
         result = {}
         for var_name, value in values.items():
             if isinstance(value, Ref):
-                # Get raw value from state and apply Ref's operations
+                # Lấy raw value từ state và apply Ref's operations
                 raw = state[value.node, value.var, context_id]
                 result[var_name] = value._fn(raw)
             else:
@@ -154,20 +154,20 @@ class ForLoopNode(BaseIterationNode):
         each_values: Dict[str, List],
         broadcast_values: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Build list of iteration data by zipping `each` values and adding broadcast.
+        """Build list iteration data bằng cách zip `each` values và thêm broadcast.
 
         Args:
-            each_values: Dict of {var_name: [values...]}
-            broadcast_values: Dict of {var_name: value}
+            each_values: Dict {var_name: [values...]}
+            broadcast_values: Dict {var_name: value}
 
         Returns:
-            List of dicts, one per iteration, with all variables.
+            List các dicts, mỗi iteration một dict, với tất cả variables.
         """
         if not each_values:
-            # No iteration variables - single iteration with just broadcast
+            # Không có iteration variables - single iteration chỉ với broadcast
             return [broadcast_values.copy()] if broadcast_values else []
 
-        # Validate all lists have same length
+        # Validate tất cả lists có cùng độ dài
         lengths = {var: len(lst) for var, lst in each_values.items()}
         if len(set(lengths.values())) > 1:
             LOGGER.error(
@@ -177,7 +177,7 @@ class ForLoopNode(BaseIterationNode):
                 f"All 'each' variables must have the same length. Got: {lengths}"
             )
 
-        # Zip and merge with broadcast
+        # Zip và merge với broadcast
         keys = list(each_values.keys())
         return [
             {**dict(zip(keys, vals)), **broadcast_values}
@@ -189,7 +189,7 @@ class ForLoopNode(BaseIterationNode):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Execute the for loop over iteration data concurrently."""
+        """Thực thi for loop qua iteration data song song."""
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -199,27 +199,27 @@ class ForLoopNode(BaseIterationNode):
         _outputs = {}
 
         try:
-            # Resolve each and broadcast values
+            # Resolve each và broadcast values
             each_values = self._resolve_values(self._each, state, context_id)
             broadcast_values = self._resolve_values(self._broadcast_inputs, state, context_id)
 
             # Build iteration data
             iteration_data = self._build_iteration_data(each_values, broadcast_values)
 
-            # Store inputs for logging
+            # Lưu inputs để logging
             _inputs = {**each_values, **broadcast_values}
 
-            # Warn if no iterations
+            # Cảnh báo nếu không có iterations
             if not iteration_data:
                 LOGGER.warning(
                     f"ForLoopNode '{self.full_name}': no iteration data. No iterations will be executed."
                 )
 
-            # Create semaphore to limit concurrency
+            # Tạo semaphore để giới hạn concurrency
             semaphore = asyncio.Semaphore(self._max_concurrency)
 
             async def execute_iteration(task_id: str, loop_data: Dict[str, Any]) -> Dict[str, Any]:
-                """Execute a single iteration, returning result with metadata."""
+                """Thực thi single iteration, trả về result với metadata."""
                 start = perf_counter()
                 try:
                     async with semaphore:
@@ -229,13 +229,13 @@ class ForLoopNode(BaseIterationNode):
                 except Exception as e:
                     return {"result": {"error": str(e), "error_type": type(e).__name__}, "latency_ms": (perf_counter() - start) * 1000, "success": False}
 
-            # Run all iterations concurrently
+            # Chạy tất cả iterations song song
             raw_results = await asyncio.gather(*[
                 execute_iteration(f"for[{i}]", data)
                 for i, data in enumerate(iteration_data)
             ])
 
-            # Extract metrics and results in single pass
+            # Extract metrics và results trong single pass
             latencies_ms = []
             final_results = []
             success_count = 0
@@ -245,7 +245,7 @@ class ForLoopNode(BaseIterationNode):
                 success_count += r["success"]
             error_count = len(raw_results) - success_count
 
-            # Calculate iteration metrics
+            # Tính iteration metrics
             iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
             iteration_metrics.update({
                 "total_iterations": len(iteration_data),
@@ -253,14 +253,14 @@ class ForLoopNode(BaseIterationNode):
                 "error_count": error_count,
             })
 
-            # Warn if high error rate (>10%)
+            # Cảnh báo nếu error rate cao (>10%)
             if iteration_data and error_count / len(iteration_data) > 0.1:
                 LOGGER.warning(
                     f"ForLoopNode '{self.full_name}': high error rate ({error_count / len(iteration_data):.1%}). "
                     f"{error_count}/{len(iteration_data)} iterations failed."
                 )
 
-            # Transpose results to column-oriented format
+            # Transpose results sang column-oriented format
             output_keys = list(self._graph.output_schema.keys())
             _outputs = {
                 key: [r.get(key) for r in final_results]
@@ -285,7 +285,7 @@ class ForLoopNode(BaseIterationNode):
             return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata."""
+        """Trả về metadata đặc thù của subclass."""
         return {
             "max_concurrency": self._max_concurrency,
             "each": list(self._each.keys()),

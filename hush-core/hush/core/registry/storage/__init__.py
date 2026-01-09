@@ -1,4 +1,4 @@
-"""Storage backends for resource configurations."""
+"""Các backend storage cho config resource."""
 
 from .base import ConfigStorage
 from .yaml import YamlConfigStorage

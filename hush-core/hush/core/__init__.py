@@ -41,8 +41,6 @@ from hush.core.states import (
     Cell,
 )
 from hush.core.configs import (
-    NodeConfig,
-    NodeType,
     EdgeConfig,
     EdgeType,
 )

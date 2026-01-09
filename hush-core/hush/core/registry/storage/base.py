@@ -1,13 +1,13 @@
-"""Abstract base class for configuration storage backends."""
+"""Abstract base class cho các backend storage config."""
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 
 class ConfigStorage(ABC):
-    """Storage backend interface for persisting resource configurations.
+    """Interface storage backend để lưu trữ config resource.
 
-    Extend this class to add new storage backends (MongoDB, Redis, etc.)
+    Kế thừa class này để thêm các backend storage mới (MongoDB, Redis, v.v.)
 
     Example:
         class MongoConfigStorage(ConfigStorage):
@@ -18,56 +18,56 @@ class ConfigStorage(ABC):
             def load_one(self, key: str) -> Optional[Dict[str, Any]]:
                 return self._db.configs.find_one({"_id": key})
 
-            # ... implement other methods
+            # ... implement các method khác
     """
 
     @abstractmethod
     def load_one(self, key: str) -> Optional[Dict[str, Any]]:
-        """Load a single configuration by key.
+        """Load một config theo key.
 
         Args:
-            key: Registry key (e.g., 'llm:gpt-4', 'redis:default')
+            key: Registry key (ví dụ: 'llm:gpt-4', 'redis:default')
 
         Returns:
-            Raw config dict with '_class' field, or None if not found
+            Dict config thô với field '_class', hoặc None nếu không tìm thấy
         """
         pass
 
     @abstractmethod
     def load_all(self) -> Dict[str, Dict[str, Any]]:
-        """Load all stored configurations.
+        """Load tất cả config đã lưu.
 
         Returns:
-            Dictionary mapping registry keys to raw config dicts
+            Dictionary ánh xạ registry key sang dict config thô
         """
         pass
 
     @abstractmethod
     def save(self, key: str, config_dict: Dict[str, Any]) -> bool:
-        """Persist a configuration.
+        """Lưu một config.
 
         Args:
             key: Registry key
-            config_dict: Raw config dictionary (must include '_class' field)
+            config_dict: Dict config thô (phải bao gồm field '_class')
 
         Returns:
-            True if saved successfully
+            True nếu lưu thành công
         """
         pass
 
     @abstractmethod
     def remove(self, key: str) -> bool:
-        """Delete a configuration.
+        """Xóa một config.
 
         Args:
-            key: Registry key to remove
+            key: Registry key cần xóa
 
         Returns:
-            True if removed, False if not found
+            True nếu đã xóa, False nếu không tìm thấy
         """
         pass
 
     @abstractmethod
     def close(self):
-        """Close connections and cleanup resources."""
+        """Đóng kết nối và dọn dẹp resource."""
         pass

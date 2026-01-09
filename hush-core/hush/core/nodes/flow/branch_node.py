@@ -1,4 +1,4 @@
-"""Branch node for conditional routing in workflows."""
+"""Node branch cho định tuyến có điều kiện trong workflow."""
 
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
@@ -12,7 +12,11 @@ if TYPE_CHECKING:
 
 
 class BranchNode(BaseNode):
-    """A node that evaluates conditions and routes flow to different target nodes."""
+    """Node đánh giá các điều kiện và định tuyến luồng đến các node đích khác nhau.
+
+    Các điều kiện được precompile để đạt hiệu năng tối đa.
+    Hỗ trợ anchor để override định tuyến.
+    """
 
     type: NodeType = "branch"
 
@@ -30,7 +34,7 @@ class BranchNode(BaseNode):
         default: Optional[str] = None,
         **kwargs
     ):
-        # Build schemas before super().__init__
+        # Build schemas trước super().__init__
         input_schema, output_schema = self._build_schemas(cases or {})
 
         super().__init__(
@@ -52,8 +56,8 @@ class BranchNode(BaseNode):
         self.core = self._create_core_function()
 
     def _build_schemas(self, cases: Dict[str, str]) -> tuple:
-        """Build input/output schemas."""
-        # Input schema: anchor + condition variables
+        """Xây dựng input/output schema."""
+        # Input schema: anchor + các biến trong điều kiện
         input_schema = {"anchor": Param(type=str, default=None)}
 
         for condition in cases:
@@ -71,6 +75,7 @@ class BranchNode(BaseNode):
 
     @property
     def candidates(self) -> List[str]:
+        """Danh sách các node đích có thể."""
         if self.given_candidates:
             return self.given_candidates
 
@@ -80,7 +85,7 @@ class BranchNode(BaseNode):
             return list(self.cases.values())
 
     def _compile_conditions(self) -> List[tuple]:
-        """Precompile all conditions for maximum performance."""
+        """Precompile tất cả điều kiện để đạt hiệu năng tối đa."""
         compiled_conditions = []
 
         for condition, target in self.cases.items():
@@ -88,13 +93,13 @@ class BranchNode(BaseNode):
                 compiled_code = compile(condition, f'<condition: {condition}>', 'eval')
                 compiled_conditions.append((compiled_code, condition, target))
             except SyntaxError as e:
-                LOGGER.error(f"Invalid condition syntax '{condition}': {e}")
-                raise ValueError(f"Invalid condition syntax: {condition}")
+                LOGGER.error(f"Cú pháp điều kiện không hợp lệ '{condition}': {e}")
+                raise ValueError(f"Cú pháp điều kiện không hợp lệ: {condition}")
 
         return compiled_conditions
 
     def _create_core_function(self):
-        """Create the optimized core evaluation function."""
+        """Tạo function đánh giá core đã tối ưu."""
         def core(**inputs) -> Dict[str, str]:
             anchor = inputs.get('anchor')
             if anchor:
@@ -106,7 +111,7 @@ class BranchNode(BaseNode):
         return core
 
     def _evaluate_conditions(self, inputs: Dict[str, Any]) -> tuple:
-        """Evaluate all conditions and return the first match."""
+        """Đánh giá tất cả điều kiện và trả về điều kiện khớp đầu tiên."""
         safe_inputs = dict(inputs)
 
         for compiled_cond, condition_str, target in self.conditions:
@@ -114,18 +119,18 @@ class BranchNode(BaseNode):
                 result = eval(compiled_cond, {"__builtins__": {}}, safe_inputs)
 
                 if result:
-                    LOGGER.debug(f"Condition '{condition_str}' matched, routing to '{target}'")
+                    LOGGER.debug(f"Điều kiện '{condition_str}' khớp, định tuyến đến '{target}'")
                     return target, condition_str
 
             except Exception as e:
-                LOGGER.error(f"Error evaluating condition '{condition_str}': {e}")
+                LOGGER.error(f"Lỗi khi đánh giá điều kiện '{condition_str}': {e}")
                 continue
 
         if self.default:
-            LOGGER.debug(f"No conditions matched, using default target '{self.default}'")
+            LOGGER.debug(f"Không có điều kiện khớp, sử dụng target mặc định '{self.default}'")
             return self.default, "default"
         else:
-            LOGGER.warning("No conditions matched and no default target specified")
+            LOGGER.warning("Không có điều kiện khớp và không có target mặc định")
             return None, None
 
     def get_target(
@@ -133,10 +138,11 @@ class BranchNode(BaseNode):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Optional[str]:
+        """Lấy target đã định tuyến từ state."""
         return state[self.full_name, "target", context_id]
 
     def specific_metadata(self) -> Dict[str, Any]:
-        """Return subclass-specific metadata dictionary."""
+        """Trả về metadata riêng của subclass."""
         return {
             "cases": self.cases,
             "default_target": self.default,
