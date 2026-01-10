@@ -226,8 +226,35 @@ class Ref:
     def __ror__(self, other): return self._with_op('ror', other)
     def __xor__(self, other): return self._with_op('xor', other)
     def __rxor__(self, other): return self._with_op('rxor', other)
-    def __lshift__(self, other): return self._with_op('lshift', other)
-    def __rlshift__(self, other): return self._with_op('rlshift', other)
+    def __lshift__(self, other):
+        """PARENT["key"] << node["key"] hoặc bitwise lshift.
+
+        Nếu self là Ref đến PARENT và other là Ref → set output mapping.
+        Ngược lại → bitwise lshift operation.
+        """
+        # Kiểm tra nếu self là PARENT["key"]
+        self_node = self.raw_node
+        if hasattr(self_node, 'name') and self_node.name == "__PARENT__":
+            if isinstance(other, Ref):
+                # self là PARENT["dest_key"], other là node["src_key"]
+                # Set node.outputs[src_key].value = Ref(father, dest_key)
+                source_node = other.raw_node
+                if hasattr(source_node, 'outputs') and hasattr(source_node, 'father'):
+                    from hush.core.utils.common import Param
+                    if source_node.outputs is None:
+                        source_node.outputs = {}
+                    # Tạo Ref đến father (graph cha) với key đích
+                    father_ref = Ref(source_node.father, self.var)
+                    if other.var in source_node.outputs:
+                        source_node.outputs[other.var].value = father_ref
+                    else:
+                        source_node.outputs[other.var] = Param(value=father_ref)
+                return other
+        return self._with_op('lshift', other)
+
+    def __rlshift__(self, other):
+        """Bitwise rlshift operation."""
+        return self._with_op('rlshift', other)
     def __rshift__(self, other): return self._with_op('rshift', other)
     def __rrshift__(self, other): return self._with_op('rrshift', other)
 

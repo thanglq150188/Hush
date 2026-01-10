@@ -18,6 +18,41 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
+class StarRef:
+    """Đại diện cho node[...] - tất cả outputs của một node.
+
+    Dùng với << để forward tất cả outputs:
+        PARENT[...] << merge[...]  → set merge.outputs = PARENT
+
+    Cú pháp: node[...] (dùng Ellipsis, không phải *)
+    """
+
+    __slots__ = ('_node',)
+
+    def __init__(self, node: 'BaseNode'):
+        self._node = node
+
+    def __lshift__(self, other: 'StarRef'):
+        """PARENT[...] << merge[...]
+
+        Khi PARENT[...] << merge[...]:
+        - self là StarRef của PARENT
+        - other là StarRef của merge
+        - Forward tất cả outputs của merge đến PARENT
+        """
+        if isinstance(other, StarRef):
+            # self._node là PARENT (DummyNode), other._node là source node
+            if hasattr(self._node, 'name') and self._node.name == "__PARENT__":
+                source_node = other._node
+                father = source_node.father
+                # Forward mỗi output key đến PARENT
+                for key in list(source_node.outputs.keys()):
+                    param = source_node.outputs[key]
+                    # Set value là Ref đến father (graph cha)
+                    param.value = Ref(father, key)
+        return other
+
+
 class BaseNode(ABC):
     """Base class cho tất cả các node trong workflow.
 
@@ -267,8 +302,14 @@ class BaseNode(ABC):
         """Đường dẫn đầy đủ kèm context_id."""
         return f"{self.full_name}[{context_id or 'main'}]"
 
-    def __getitem__(self, item: str) -> Ref:
-        """Cho phép cú pháp node["var"] để tham chiếu output cụ thể."""
+    def __getitem__(self, item) -> 'Ref':
+        """Cho phép cú pháp node["var"] hoặc node[*] để tham chiếu output.
+
+        - node["var"] → Ref đến output cụ thể
+        - node[*] → StarRef đại diện tất cả outputs (dùng với << để forward)
+        """
+        if item is Ellipsis:  # node[...]
+            return StarRef(self)
         return Ref(self, item)
 
     def __rshift__(self, other):
