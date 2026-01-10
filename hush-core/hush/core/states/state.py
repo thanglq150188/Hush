@@ -12,14 +12,16 @@ _uuid4 = uuid.uuid4
 
 
 class MemoryState:
-    """Workflow state trong bộ nhớ với Cell-based storage và truy cập O(1) theo index.
+    """Workflow state với Cell-based storage và truy cập O(1) theo index.
 
-    Mỗi biến có Cell riêng xử lý nhiều context (các iteration của loop).
-    Tham chiếu được resolve qua schema._refs với tự động áp dụng fn.
+    Thiết kế đơn giản:
+        - Read pulls (1 hop): Nếu có input ref, lấy từ source và cache
+        - Write pushes (1 hop): Nếu có output ref, đẩy đến target
+        - Không có recursion, không có magic
 
     Luồng dữ liệu:
-        __setitem__: idx = schema[node, var], cells[idx][ctx] = value
-        __getitem__: idx = schema[node, var], nếu ref: theo ref.idx, áp dụng ref._fn
+        __setitem__: Lưu value, nếu output ref thì push 1 hop
+        __getitem__: Nếu cached trả về, nếu input ref thì pull 1 hop và cache
     """
 
     __slots__ = ("schema", "_cells", "_execution_order", "_user_id", "_session_id", "_request_id")
@@ -56,80 +58,61 @@ class MemoryState:
                     self._cells[idx][None] = value
 
     # =========================================================================
-    # Truy Cập Core
+    # Core API: Simple and predictable
     # =========================================================================
 
     def __setitem__(self, key: Tuple[str, str, Optional[str]], value: Any) -> None:
-        """Set giá trị: state[node, var, ctx] = value
+        """Store value. Push to output ref if exists (1 hop only).
 
-        Nếu cell này có output ref, ngay lập tức đẩy giá trị đến target.
-        Điều này cho phép output ref lan truyền giá trị khi ghi, không chỉ khi đọc.
+        Args:
+            key: Tuple (node, var, ctx)
+            value: Giá trị cần lưu
         """
         node, var, ctx = key
         idx = self.schema.get_index(node, var)
         if idx < 0:
             raise KeyError(f"({node}, {var}) không có trong schema")
-        self._cells[idx][ctx] = value
 
-        # Nếu cell này có output ref, đẩy giá trị đến target
+        ctx_key = ctx if ctx is not None else DEFAULT_CONTEXT
+        self._cells[idx][ctx_key] = value
+
+        # Output ref? Push 1 hop
         ref = self.schema._refs[idx]
         if ref and ref.is_output and ref.idx >= 0:
-            result = ref._fn(value)
-            self._set_by_index(ref.idx, result, ctx)
+            self._cells[ref.idx][ctx_key] = ref._fn(value)
 
     def __getitem__(self, key: Tuple[str, str, Optional[str]]) -> Any:
-        """Lấy giá trị: state[node, var, ctx] - resolve ref và cache kết quả.
+        """Get value. Resolve input ref if needed (1 hop only).
 
-        Hai loại ref:
-        - Input ref (is_output=False): Theo ref đến source, áp dụng fn, cache và trả về
-        - Output ref (is_output=True): Lấy giá trị cell hiện tại, đẩy đến target, trả về giá trị
+        Args:
+            key: Tuple (node, var, ctx)
 
-        Xử lý ref chain bằng cách resolve đệ quy.
+        Returns:
+            Giá trị tại (node, var, ctx) hoặc None nếu không tìm thấy
         """
         node, var, ctx = key
         idx = self.schema.get_index(node, var)
         if idx < 0:
             return None
-        return self._get_by_index(idx, ctx)
 
-    def _get_by_index(self, idx: int, ctx: Optional[str]) -> Any:
-        """Internal: lấy giá trị theo index, theo ref chain nếu cần."""
-        if idx < 0 or idx >= len(self._cells):
-            return None
-
-        cell = self._cells[idx]
-        ref = self.schema._refs[idx]
-
-        # Chuẩn hóa ctx để kiểm tra tồn tại (Cell chuyển None thành DEFAULT_CONTEXT)
         ctx_key = ctx if ctx is not None else DEFAULT_CONTEXT
+        cell = self._cells[idx]
 
-        # Kiểm tra đây có phải output ref không
-        if ref and ref.is_output:
-            # Output ref: lấy giá trị cell hiện tại và đẩy đến target
-            if ctx_key in cell.contexts:
-                value = cell[ctx]
-                # Áp dụng fn và đẩy đến target cell
-                result = ref._fn(value)
-                if ref.idx >= 0:
-                    self._cells[ref.idx][ctx] = result
-                return value
-            return None
+        # Has cached value? Return it
+        if ctx_key in cell:
+            return cell[ctx_key]
 
-        # Kiểm tra giá trị đã tồn tại trong cell này chưa
-        if ctx_key in cell.contexts:
-            return cell[ctx]
-
-        # Kiểm tra đây có phải input ref không
-        if ref and ref.idx >= 0:
-            # Input ref: đệ quy lấy giá trị source
-            source_value = self._get_by_index(ref.idx, ctx)
-            if source_value is not None:
-                result = ref._fn(source_value)
-                cell[ctx] = result
+        # Input ref? Pull 1 hop and cache
+        ref = self.schema._refs[idx]
+        if ref and not ref.is_output and ref.idx >= 0:
+            source_cell = self._cells[ref.idx]
+            if ctx_key in source_cell:
+                result = ref._fn(source_cell[ctx_key])
+                cell[ctx_key] = result  # Cache
                 return result
-            return None
 
-        return cell[ctx]
+        # No value - return default
+        return cell.default_value
 
     def get(self, node: str, var: str, ctx: Optional[str] = None) -> Any:
         """Lấy giá trị với tham số explicit."""
@@ -142,37 +125,33 @@ class MemoryState:
             raise KeyError(f"({node}, {var}) không có trong schema")
         return self._cells[idx]
 
+    def has(self, node: str, var: str, ctx: Optional[str] = None) -> bool:
+        """Check if value exists (without resolving ref)."""
+        idx = self.schema.get_index(node, var)
+        if idx < 0:
+            return False
+        ctx_key = ctx if ctx is not None else DEFAULT_CONTEXT
+        return ctx_key in self._cells[idx]
+
     # =========================================================================
-    # Truy Cập theo Index (O(1))
+    # Index-based Access (O(1)) - Raw access without ref resolution
     # =========================================================================
 
     def get_by_index(self, idx: int, ctx: Optional[str] = None) -> Any:
-        """Truy cập cell trực tiếp theo index."""
+        """Truy cập cell trực tiếp theo index (không resolve ref)."""
         if 0 <= idx < len(self._cells):
             return self._cells[idx][ctx]
         raise IndexError(f"Index {idx} ngoài phạm vi")
 
     def set_by_index(self, idx: int, value: Any, ctx: Optional[str] = None) -> None:
-        """Gán giá trị cell trực tiếp theo index."""
+        """Gán giá trị cell trực tiếp theo index (không push ref)."""
         if 0 <= idx < len(self._cells):
             self._cells[idx][ctx] = value
         else:
             raise IndexError(f"Index {idx} ngoài phạm vi")
 
-    def _set_by_index(self, idx: int, value: Any, ctx: Optional[str]) -> None:
-        """Internal: set giá trị theo index, theo output ref chain nếu cần."""
-        if idx < 0 or idx >= len(self._cells):
-            return
-        self._cells[idx][ctx] = value
-
-        # Nếu cell này cũng có output ref, tiếp tục lan truyền
-        ref = self.schema._refs[idx]
-        if ref and ref.is_output and ref.idx >= 0:
-            result = ref._fn(value)
-            self._set_by_index(ref.idx, result, ctx)
-
     # =========================================================================
-    # Theo Dõi Thực Thi
+    # Execution Tracking
     # =========================================================================
 
     def record_execution(self, node_name: str, parent: str, context_id: str) -> None:
@@ -275,14 +254,13 @@ class MemoryState:
                     print(f"{node}.{var} -> {cell.default_value}")
             elif len(cell.contexts) == 1:
                 # Một context
-                ctx = cell.versions[0]
+                ctx = next(iter(cell.contexts))
                 value = cell.contexts[ctx]
                 value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
                 print(f"{node}.{var} [{ctx}] = {value_str}")
             else:
                 # Nhiều context
                 print(f"{node}.{var}:")
-                for ctx in cell.versions:
-                    value = cell.contexts[ctx]
+                for ctx, value in cell.contexts.items():
                     value_str = repr(value)[:50] + "..." if len(repr(value)) > 50 else repr(value)
                     print(f"  [{ctx}] = {value_str}")
