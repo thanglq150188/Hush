@@ -1202,6 +1202,97 @@ class TestSoftEdgeBehavior:
 
 
 # ============================================================
+# Test 11: Output Mapping Syntax (PARENT[...] << node[...])
+# ============================================================
+
+class TestOutputMappingSyntax:
+    """Test cú pháp output mapping mới với <<.
+
+    Cú pháp mới:
+    - PARENT[...] << node[...]  → forward tất cả outputs của node đến PARENT
+    - PARENT["key"] << node["key"]  → map output cụ thể
+    """
+
+    @pytest.mark.asyncio
+    async def test_forward_all_outputs_with_ellipsis(self):
+        """PARENT[...] << node[...] forwards tất cả outputs."""
+        with GraphNode(name="ellipsis_forward") as graph:
+            node = CodeNode(
+                name="compute",
+                code_fn=lambda x: {"double": x * 2, "triple": x * 3},
+                inputs={"x": PARENT["x"]}
+            )
+            # Cú pháp mới: forward tất cả outputs
+            PARENT[...] << node[...]
+
+            START >> node >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        assert result["double"] == 10
+        assert result["triple"] == 15
+
+    @pytest.mark.asyncio
+    async def test_specific_output_mapping(self):
+        """PARENT["key"] << node["key"] maps output cụ thể."""
+        with GraphNode(name="specific_mapping") as graph:
+            node = CodeNode(
+                name="compute",
+                code_fn=lambda x: {"a": x + 1, "b": x + 2, "c": x + 3},
+                inputs={"x": PARENT["x"]}
+            )
+            # Map chỉ a và c đến PARENT
+            PARENT["result_a"] << node["a"]
+            PARENT["result_c"] << node["c"]
+
+            START >> node >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 10})
+        result = await graph.run(state)
+
+        assert result["result_a"] == 11
+        assert result["result_c"] == 13
+        assert "result_b" not in result  # b không được map
+
+    @pytest.mark.asyncio
+    async def test_mixed_old_and_new_syntax(self):
+        """Có thể dùng cả outputs=PARENT và PARENT[...] << node[...]."""
+        with GraphNode(name="mixed_syntax") as graph:
+            # Node 1 dùng cú pháp cũ
+            node1 = CodeNode(
+                name="node1",
+                code_fn=lambda x: {"value": x * 2},
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT  # Cú pháp cũ
+            )
+            # Node 2 dùng cú pháp mới
+            node2 = CodeNode(
+                name="node2",
+                code_fn=lambda v: {"result": v + 100},
+                inputs={"v": node1["value"]}
+            )
+            PARENT[...] << node2[...]  # Cú pháp mới
+
+            START >> node1 >> node2 >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        assert result["value"] == 10  # Từ node1 (cú pháp cũ)
+        assert result["result"] == 110  # Từ node2 (cú pháp mới)
+
+
+# ============================================================
 # Run tests with pytest
 # ============================================================
 
