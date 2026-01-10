@@ -816,6 +816,392 @@ class TestCodeNodeDecorator:
 
 
 # ============================================================
+# Test 10: Soft Edge Behavior
+# ============================================================
+
+class TestSoftEdgeBehavior:
+    """Test soft edge (>) vs hard edge (>>) behavior.
+
+    Soft edge semantics:
+    - Hard edge (>>): Đếm từng cái một vào ready_count
+    - Soft edge (>): Nhiều soft edges đến cùng node đếm chung là 1
+      (chỉ cần BẤT KỲ một soft predecessor hoàn thành)
+
+    Ví dụ: A >> D, B > D, C > D
+    => ready_count[D] = 2 (1 hard + 1 soft group)
+    => D chạy khi A hoàn thành VÀ (B HOẶC C) hoàn thành
+    """
+
+    @pytest.mark.asyncio
+    async def test_multiple_soft_edges_any_one_triggers(self):
+        """Multiple soft edges: D runs when ANY ONE soft predecessor completes.
+
+        Graph: B > D, C > D (both soft)
+        D should run when either B or C completes first.
+        """
+        execution_order = []
+
+        with GraphNode(name="soft_any") as graph:
+            b = CodeNode(
+                name="b",
+                code_fn=lambda: (execution_order.append("b"), {"result": "b"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            c = CodeNode(
+                name="c",
+                code_fn=lambda: (execution_order.append("c"), {"result": "c"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            d = CodeNode(
+                name="d",
+                code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
+                return_keys=["result"],
+                inputs={},
+                outputs=PARENT
+            )
+
+            # Soft edges: B > D, C > D
+            START >> [b, c]
+            b > d
+            c > d
+            d >> END
+
+        graph.build()
+
+        # Verify ready_count: D should have ready_count = 1 (soft edges count as 1 group)
+        assert graph.ready_count["d"] == 1, f"Expected ready_count[d]=1, got {graph.ready_count['d']}"
+        assert "d" in graph.has_soft_preds, "d should be in has_soft_preds"
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        result = await graph.run(state)
+
+        # D should execute after either B or C completes
+        assert "d" in execution_order
+        assert result["result"] == "d"
+
+    @pytest.mark.asyncio
+    async def test_hard_and_soft_edges_combined(self):
+        """Mixed hard and soft edges: A >> D, B > D, C > D.
+
+        D must wait for:
+        - A (hard edge - always required)
+        - AND (B OR C) (soft edge group - any one required)
+        """
+        execution_order = []
+
+        async def track_node(name: str, delay: float = 0):
+            if delay > 0:
+                await asyncio.sleep(delay)
+            execution_order.append(name)
+            return {"result": name}
+
+        with GraphNode(name="mixed_edges") as graph:
+            a = CodeNode(
+                name="a",
+                code_fn=lambda: (execution_order.append("a"), {"result": "a"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            b = CodeNode(
+                name="b",
+                code_fn=lambda: (execution_order.append("b"), {"result": "b"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            c = CodeNode(
+                name="c",
+                code_fn=lambda: (execution_order.append("c"), {"result": "c"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            d = CodeNode(
+                name="d",
+                code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
+                return_keys=["result"],
+                inputs={},
+                outputs=PARENT
+            )
+
+            # Hard edge: A >> D
+            # Soft edges: B > D, C > D
+            START >> [a, b, c]
+            a >> d
+            b > d
+            c > d
+            d >> END
+
+        graph.build()
+
+        # Verify ready_count: D should have ready_count = 2 (1 hard + 1 soft group)
+        assert graph.ready_count["d"] == 2, f"Expected ready_count[d]=2, got {graph.ready_count['d']}"
+        assert "d" in graph.has_soft_preds, "d should be in has_soft_preds"
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        result = await graph.run(state)
+
+        # D should execute after A and (B or C) complete
+        d_index = execution_order.index("d")
+        a_index = execution_order.index("a")
+        assert d_index > a_index, "D must execute after A (hard edge)"
+
+        # At least one of B or C must complete before D
+        b_index = execution_order.index("b") if "b" in execution_order else float('inf')
+        c_index = execution_order.index("c") if "c" in execution_order else float('inf')
+        assert d_index > min(b_index, c_index), "D must execute after at least one of B or C"
+
+        assert result["result"] == "d"
+
+    @pytest.mark.asyncio
+    async def test_soft_edge_only_one_counted(self):
+        """Verify that even if multiple soft predecessors complete, only one is counted.
+
+        Graph: B > D, C > D (both soft, both will complete)
+        D's ready_count should only decrease by 1 total (not 2).
+        """
+        with GraphNode(name="soft_count") as graph:
+            b = CodeNode(
+                name="b",
+                code_fn=lambda: {"result": "b"},
+                inputs={}
+            )
+            c = CodeNode(
+                name="c",
+                code_fn=lambda: {"result": "c"},
+                inputs={}
+            )
+            d = CodeNode(
+                name="d",
+                code_fn=lambda b_done, c_done: {"combined": f"{b_done}+{c_done}"},
+                inputs={"b_done": b["result"], "c_done": c["result"]},
+                outputs=PARENT
+            )
+
+            START >> [b, c]
+            b > d
+            c > d
+            d >> END
+
+        graph.build()
+
+        # D has ready_count = 1 (soft group)
+        assert graph.ready_count["d"] == 1
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        result = await graph.run(state)
+
+        # D should run and have access to both B and C results
+        assert result["combined"] == "b+c"
+
+    @pytest.mark.asyncio
+    async def test_multiple_hard_edges_all_required(self):
+        """Multiple hard edges: ALL must complete before D runs.
+
+        Graph: A >> D, B >> D (both hard)
+        D must wait for BOTH A and B.
+        """
+        execution_order = []
+
+        with GraphNode(name="multi_hard") as graph:
+            a = CodeNode(
+                name="a",
+                code_fn=lambda: (execution_order.append("a"), {"result": "a"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            b = CodeNode(
+                name="b",
+                code_fn=lambda: (execution_order.append("b"), {"result": "b"})[1],
+                return_keys=["result"],
+                inputs={}
+            )
+            d = CodeNode(
+                name="d",
+                code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
+                return_keys=["result"],
+                inputs={},
+                outputs=PARENT
+            )
+
+            START >> [a, b] >> d >> END
+
+        graph.build()
+
+        # D has ready_count = 2 (both hard edges counted)
+        assert graph.ready_count["d"] == 2, f"Expected ready_count[d]=2, got {graph.ready_count['d']}"
+        assert "d" not in graph.has_soft_preds, "d should NOT be in has_soft_preds (no soft edges)"
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        result = await graph.run(state)
+
+        # D must execute after BOTH A and B
+        d_index = execution_order.index("d")
+        a_index = execution_order.index("a")
+        b_index = execution_order.index("b")
+        assert d_index > a_index, "D must execute after A"
+        assert d_index > b_index, "D must execute after B"
+
+    @pytest.mark.asyncio
+    async def test_complex_mixed_topology(self):
+        """Complex graph with multiple hard and soft edges.
+
+        Graph topology:
+        - START >> [A, B, C]
+        - A >> E (hard)
+        - B > E (soft)
+        - C > E (soft)
+        - A >> F (hard)
+        - B >> F (hard)
+        - E >> END
+        - F >> END
+
+        E waits for: A AND (B OR C)
+        F waits for: A AND B
+        """
+        execution_order = []
+
+        with GraphNode(name="complex_mixed") as graph:
+            a = CodeNode(
+                name="a",
+                code_fn=lambda: (execution_order.append("a"), {"v": 1})[1],
+                return_keys=["v"],
+                inputs={}
+            )
+            b = CodeNode(
+                name="b",
+                code_fn=lambda: (execution_order.append("b"), {"v": 2})[1],
+                return_keys=["v"],
+                inputs={}
+            )
+            c = CodeNode(
+                name="c",
+                code_fn=lambda: (execution_order.append("c"), {"v": 3})[1],
+                return_keys=["v"],
+                inputs={}
+            )
+            e = CodeNode(
+                name="e",
+                code_fn=lambda a_v: (execution_order.append("e"), {"result_e": a_v * 10})[1],
+                return_keys=["result_e"],
+                inputs={"a_v": a["v"]}
+            )
+            f = CodeNode(
+                name="f",
+                code_fn=lambda a_v, b_v: (execution_order.append("f"), {"result_f": a_v + b_v})[1],
+                return_keys=["result_f"],
+                inputs={"a_v": a["v"], "b_v": b["v"]}
+            )
+
+            START >> [a, b, c]
+
+            # E: hard from A, soft from B and C
+            a >> e
+            b > e
+            c > e
+
+            # F: hard from both A and B
+            a >> f
+            b >> f
+
+            [e, f] >> END
+
+        graph.build()
+
+        # Verify ready_counts
+        assert graph.ready_count["e"] == 2, f"E should have ready_count=2 (1 hard + 1 soft group), got {graph.ready_count['e']}"
+        assert graph.ready_count["f"] == 2, f"F should have ready_count=2 (2 hard), got {graph.ready_count['f']}"
+        assert "e" in graph.has_soft_preds, "E should be in has_soft_preds"
+        assert "f" not in graph.has_soft_preds, "F should NOT be in has_soft_preds"
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        await graph.run(state)
+
+        # E executes after A and (B or C)
+        e_index = execution_order.index("e")
+        a_index = execution_order.index("a")
+        b_index = execution_order.index("b") if "b" in execution_order else float('inf')
+        c_index = execution_order.index("c") if "c" in execution_order else float('inf')
+
+        assert e_index > a_index, "E must execute after A"
+        assert e_index > min(b_index, c_index), "E must execute after at least one of B or C"
+
+        # F executes after both A and B
+        f_index = execution_order.index("f")
+        assert f_index > a_index, "F must execute after A"
+        assert f_index > b_index, "F must execute after B"
+
+    @pytest.mark.asyncio
+    async def test_soft_edge_with_delayed_hard_edge(self):
+        """Soft edge completes first, but D must still wait for hard edge.
+
+        Graph: A (slow) >> D, B (fast) > D
+        B completes first, but D must wait for A.
+        """
+        execution_order = []
+
+        async def slow_a():
+            await asyncio.sleep(0.05)
+            execution_order.append("a")
+            return {"result": "a"}
+
+        async def fast_b():
+            await asyncio.sleep(0.01)
+            execution_order.append("b")
+            return {"result": "b"}
+
+        with GraphNode(name="soft_delayed") as graph:
+            a = CodeNode(
+                name="a",
+                code_fn=slow_a,
+                return_keys=["result"],
+                inputs={}
+            )
+            b = CodeNode(
+                name="b",
+                code_fn=fast_b,
+                return_keys=["result"],
+                inputs={}
+            )
+            d = CodeNode(
+                name="d",
+                code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
+                return_keys=["result"],
+                inputs={},
+                outputs=PARENT
+            )
+
+            START >> [a, b]
+            a >> d  # Hard edge
+            b > d   # Soft edge
+            d >> END
+
+        graph.build()
+
+        assert graph.ready_count["d"] == 2  # 1 hard + 1 soft group
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+        result = await graph.run(state)
+
+        # B completes before A (fast vs slow)
+        b_index = execution_order.index("b")
+        a_index = execution_order.index("a")
+        assert b_index < a_index, "B should complete before A"
+
+        # But D must still wait for A (hard edge requirement)
+        d_index = execution_order.index("d")
+        assert d_index > a_index, "D must wait for A (hard edge) even though B (soft) completed first"
+
+        assert result["result"] == "d"
+
+
+# ============================================================
 # Run tests with pytest
 # ============================================================
 

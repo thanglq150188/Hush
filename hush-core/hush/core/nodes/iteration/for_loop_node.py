@@ -183,12 +183,15 @@ class ForLoopNode(BaseIterationNode):
                 f"All 'each' variables must have the same length. Got: {lengths}"
             )
 
-        # Zip và merge với broadcast
+        # Zip và merge với broadcast - optimized to avoid dict spread
         keys = list(each_values.keys())
-        return [
-            {**dict(zip(keys, vals)), **broadcast_values}
-            for vals in zip(*each_values.values())
-        ]
+        result = []
+        for vals in zip(*each_values.values()):
+            item = broadcast_values.copy()  # Shallow copy broadcast
+            for i, k in enumerate(keys):
+                item[k] = vals[i]
+            result.append(item)
+        return result
 
     async def run(
         self,

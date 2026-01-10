@@ -90,8 +90,10 @@ class BaseNode(ABC):
         self.contain_generation = contain_generation
         # Đăng ký vào graph cha
         self.father = get_current()
-        if self.father and hasattr(self.father, "add_node"):
-            self.father.add_node(self)
+        # Use getattr to avoid hasattr's double lookup
+        add_node = getattr(self.father, "add_node", None)
+        if add_node is not None:
+            add_node(self)
 
         # Validate tên node
         if self.name and not self.name.replace('_', '').replace('-', '').isalnum():
@@ -272,30 +274,33 @@ class BaseNode(ABC):
     def __rshift__(self, other):
         """node >> other: kết nối node này đến other."""
         edge_type = "condition" if self.type == "branch" else "normal"
+        # Cache add_edge lookup to avoid repeated hasattr
+        add_edge = getattr(self.father, "add_edge", None)
 
         if isinstance(other, list):
-            for node in other:
-                if hasattr(self.father, "add_edge"):
-                    self.father.add_edge(self.name, node.name, edge_type)
+            if add_edge is not None:
+                for node in other:
+                    add_edge(self.name, node.name, edge_type)
             return other
-        elif hasattr(other, 'name'):
-            if hasattr(self.father, "add_edge"):
-                self.father.add_edge(self.name, other.name, edge_type)
+        elif getattr(other, 'name', None) is not None:
+            if add_edge is not None:
+                add_edge(self.name, other.name, edge_type)
             return other
         return NotImplemented
 
     def __lshift__(self, other):
         """node << other: kết nối other đến node này."""
         edge_type = "condition" if self.type == "branch" else "normal"
+        add_edge = getattr(self.father, "add_edge", None)
 
         if isinstance(other, list):
-            for node in other:
-                if hasattr(self.father, "add_edge"):
-                    self.father.add_edge(node.name, self.name, edge_type)
+            if add_edge is not None:
+                for node in other:
+                    add_edge(node.name, self.name, edge_type)
             return other
-        elif hasattr(other, 'name'):
-            if hasattr(self.father, "add_edge"):
-                self.father.add_edge(other.name, self.name, edge_type)
+        elif getattr(other, 'name', None) is not None:
+            if add_edge is not None:
+                add_edge(other.name, self.name, edge_type)
             return self
         return NotImplemented
 
@@ -316,15 +321,16 @@ class BaseNode(ABC):
         Ví dụ: case_a > merge_node (merge chờ BẤT KỲ MỘT predecessor)
         """
         edge_type = "condition" if self.type == "branch" else "normal"
+        add_edge = getattr(self.father, "add_edge", None)
 
         if isinstance(other, list):
-            for node in other:
-                if hasattr(self.father, "add_edge"):
-                    self.father.add_edge(self.name, node.name, edge_type, soft=True)
+            if add_edge is not None:
+                for node in other:
+                    add_edge(self.name, node.name, edge_type, soft=True)
             return other
-        elif hasattr(other, 'name'):
-            if hasattr(self.father, "add_edge"):
-                self.father.add_edge(self.name, other.name, edge_type, soft=True)
+        elif getattr(other, 'name', None) is not None:
+            if add_edge is not None:
+                add_edge(self.name, other.name, edge_type, soft=True)
             return other
         return NotImplemented
 
@@ -335,15 +341,16 @@ class BaseNode(ABC):
         Ví dụ: merge_node < case_a (merge chờ BẤT KỲ MỘT predecessor)
         """
         edge_type = "condition" if self.type == "branch" else "normal"
+        add_edge = getattr(self.father, "add_edge", None)
 
         if isinstance(other, list):
-            for node in other:
-                if hasattr(self.father, "add_edge"):
-                    self.father.add_edge(node.name, self.name, edge_type, soft=True)
+            if add_edge is not None:
+                for node in other:
+                    add_edge(node.name, self.name, edge_type, soft=True)
             return other
-        elif hasattr(other, 'name'):
-            if hasattr(self.father, "add_edge"):
-                self.father.add_edge(other.name, self.name, edge_type, soft=True)
+        elif getattr(other, 'name', None) is not None:
+            if add_edge is not None:
+                add_edge(other.name, self.name, edge_type, soft=True)
             return self
         return NotImplemented
 
@@ -514,7 +521,7 @@ class BaseNode(ABC):
         result = {
             "id": self.id,
             "name": self.full_name,
-            "type": str(self.type).replace('NodeType.', '').lower()
+            "type": self.type  # Already a lowercase string (Literal type)
         }
 
         if self.description:
