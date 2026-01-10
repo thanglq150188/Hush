@@ -290,12 +290,10 @@ class AsyncIterNode(BaseIterationNode):
                     if self._batch_fn:
                         # Batching mode
                         if current_batch and self._batch_fn(current_batch, item):
-                            # Flush batch
-                            batch_data = {
-                                "batch": current_batch,
-                                "batch_size": len(current_batch),
-                                **broadcast_values
-                            }
+                            # Flush batch - reuse broadcast_values with update
+                            batch_data = broadcast_values.copy()
+                            batch_data["batch"] = current_batch
+                            batch_data["batch_size"] = len(current_batch)
                             tasks.append(asyncio.create_task(
                                 process_with_semaphore(batch_data, total_chunks)
                             ))
@@ -303,8 +301,9 @@ class AsyncIterNode(BaseIterationNode):
                             current_batch = []
                         current_batch.append(item)
                     else:
-                        # Normal mode: mỗi item thành iteration variable
-                        chunk_data = {iter_var_name: item, **broadcast_values}
+                        # Normal mode: reuse broadcast_values with single key update
+                        chunk_data = broadcast_values.copy()
+                        chunk_data[iter_var_name] = item
                         tasks.append(asyncio.create_task(
                             process_with_semaphore(chunk_data, total_chunks)
                         ))
@@ -312,11 +311,9 @@ class AsyncIterNode(BaseIterationNode):
 
                 # Flush batch còn lại
                 if self._batch_fn and current_batch:
-                    batch_data = {
-                        "batch": current_batch,
-                        "batch_size": len(current_batch),
-                        **broadcast_values
-                    }
+                    batch_data = broadcast_values.copy()
+                    batch_data["batch"] = current_batch
+                    batch_data["batch_size"] = len(current_batch)
                     tasks.append(asyncio.create_task(
                         process_with_semaphore(batch_data, total_chunks)
                     ))

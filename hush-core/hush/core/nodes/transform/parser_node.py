@@ -86,6 +86,14 @@ def parse_yaml(text: str) -> Dict[str, Any]:
         raise ImportError("pyyaml là bắt buộc để parse YAML")
 
 
+# Module-level parser lookup for O(1) format selection
+_PARSER_MAP = {
+    "json": parse_json,
+    "xml": parse_xml,
+    "yaml": parse_yaml,
+}
+
+
 class ParserNode(BaseNode):
     """Node parse text thành dữ liệu có cấu trúc.
 
@@ -148,13 +156,13 @@ class ParserNode(BaseNode):
 
     def _create_parser(self):
         """Tạo parser function dựa trên format."""
-        if self.format == "json":
-            return parse_json
-        elif self.format == "xml":
-            return parse_xml
-        elif self.format == "yaml":
-            return parse_yaml
-        elif self.format == "regex":
+        # O(1) lookup for common formats
+        parser = _PARSER_MAP.get(self.format)
+        if parser is not None:
+            return parser
+
+        # Special cases that need instance attributes
+        if self.format == "regex":
             if not self.pattern:
                 raise ValueError("Pattern là bắt buộc cho regex parser")
 
@@ -163,7 +171,8 @@ class ParserNode(BaseNode):
                 return match.groupdict() if match else {}
 
             return regex_parser
-        elif self.format == "key_value":
+
+        if self.format == "key_value":
             sep = self.separator or "="
 
             def kv_parser(text: str) -> Dict[str, Any]:
@@ -175,8 +184,9 @@ class ParserNode(BaseNode):
                 return result
 
             return kv_parser
-        else:
-            return parse_xml
+
+        # Default fallback
+        return parse_xml
 
     def _extract_value_by_path(self, data: Dict[str, Any], chain_path: List[str]) -> Any:
         """Trích xuất giá trị từ nested dictionary theo chain path."""

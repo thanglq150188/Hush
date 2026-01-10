@@ -42,6 +42,7 @@ class GraphNode(BaseNode):
         'prevs',
         'nexts',
         'ready_count',
+        'has_soft_preds',  # Set of nodes that have soft predecessors
         'flowtype_map',
         '_edges',
         '_edges_lookup',
@@ -63,6 +64,7 @@ class GraphNode(BaseNode):
         self.prevs = defaultdict(list)
         self.nexts = defaultdict(list)
         self.flowtype_map = BiMap[str, NodeFlowType]()
+        self.has_soft_preds = set()  # Các node có soft predecessor
 
     def __enter__(self):
         """Vào chế độ context manager."""
@@ -181,19 +183,28 @@ class GraphNode(BaseNode):
         self._build_flow_type()
         self._setup_endpoints()
 
-        # Tính ready_count - chỉ đếm hard edge (không phải soft)
-        # Soft edge (tạo bằng >) không tính vào ready_count
-        # Điều này cho phép branch output merge mà không deadlock
+        # Tính ready_count:
+        # - Hard edge (>>) đếm từng cái một
+        # - Soft edge (>) của cùng node đích đếm chung là 1 (chờ BẤT KỲ một soft pred hoàn thành)
+        # Ví dụ: A >> D, B > D, C > D => ready_count[D] = 2 (1 hard + 1 soft group)
         self.ready_count = {}
+        self.has_soft_preds = set()
         for name in self._nodes:
             hard_pred_count = 0
+            has_soft = False
             for pred in self.prevs[name]:
                 edge = self._edges_lookup.get((pred, name))
-                if edge and not edge.soft:
+                if edge and edge.soft:
+                    has_soft = True
+                elif edge and not edge.soft:
                     hard_pred_count += 1
                 elif edge is None:
                     # Edge không tìm thấy trong lookup (không nên xảy ra, nhưng vẫn đếm)
                     hard_pred_count += 1
+            # Soft edges đếm chung là 1 nếu có
+            if has_soft:
+                self.has_soft_preds.add(name)
+                hard_pred_count += 1
             self.ready_count[name] = hard_pred_count
 
         self._is_building = False
@@ -328,6 +339,8 @@ class GraphNode(BaseNode):
             active_tasks: Dict[str, asyncio.Task] = {}
 
             ready_count: Dict[str, int] = self.ready_count.copy()
+            # Track nodes đã nhận soft edge completion (chỉ đếm 1 lần)
+            soft_satisfied: set = set()
 
             for entry in self.entries:
                 task = asyncio.create_task(
@@ -342,11 +355,16 @@ class GraphNode(BaseNode):
                     return_when=asyncio.FIRST_COMPLETED
                 )
 
+                # Cache dict lookups for performance
+                nodes = self._nodes
+                nexts = self.nexts
+                edges_lookup = self._edges_lookup
+
                 for task in done_tasks:
                     node_name = task.get_name()
                     active_tasks.pop(node_name)
 
-                    node = self._nodes[node_name]
+                    node = nodes[node_name]
 
                     if node.type == "branch":
                         branch_target = node.get_target(state, context_id)
@@ -355,15 +373,26 @@ class GraphNode(BaseNode):
                         else:
                             next_nodes = []
                     else:
-                        next_nodes = self.nexts[node_name]
+                        next_nodes = nexts[node_name]
 
                     for next_node in next_nodes:
-                        ready_count[next_node] -= 1
+                        # Kiểm tra edge type
+                        edge = edges_lookup.get((node_name, next_node))
+                        is_soft = edge and edge.soft
 
-                        if ready_count[next_node] == 0:
+                        if is_soft:
+                            # Soft edge: chỉ đếm 1 lần cho tất cả soft predecessors
+                            if next_node in soft_satisfied:
+                                continue  # Đã có soft pred khác hoàn thành
+                            soft_satisfied.add(next_node)
+
+                        count = ready_count[next_node] - 1
+                        ready_count[next_node] = count
+
+                        if count == 0:
                             task = asyncio.create_task(
                                 name=next_node,
-                                coro=self._nodes[next_node].run(state, context_id)
+                                coro=nodes[next_node].run(state, context_id)
                             )
                             active_tasks[next_node] = task
 
