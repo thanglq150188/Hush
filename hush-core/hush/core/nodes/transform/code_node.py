@@ -1,14 +1,13 @@
 """Node thực thi code Python trong workflow."""
 
 from typing import Dict, Callable, Any, Optional, List
-import asyncio
 import inspect
 import ast
 from functools import wraps
 
 from hush.core.nodes.base import BaseNode
 from hush.core.configs.node_config import NodeType
-from hush.core.utils.common import Param
+from hush.core.utils.common import Param, ensure_async
 
 
 def code_node(func):
@@ -36,17 +35,6 @@ def code_node(func):
 
     wrapper.__wrapped__ = func
     return wrapper
-
-
-def ensure_async(func: Callable) -> Callable:
-    """Đảm bảo function là async."""
-    if asyncio.iscoroutinefunction(func):
-        return func
-
-    async def async_wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return async_wrapper
 
 
 TYPE_MAP = {
@@ -201,7 +189,7 @@ def extract_return_schema(func: Callable) -> Dict[str, Param]:
 class CodeNode(BaseNode):
     """Node thực thi function Python.
 
-    Tự động trích xuất input/output schema từ function signature và AST.
+    Tự động trích xuất input/output từ function signature và AST.
     Hỗ trợ cả sync và async function.
     """
 
@@ -213,16 +201,19 @@ class CodeNode(BaseNode):
         self,
         code_fn: Optional[Callable] = None,
         return_keys: Optional[List[str]] = None,
+        inputs: Dict[str, Any] = None,
+        outputs: Dict[str, Any] = None,
         **kwargs
     ):
-        # Build schemas trước super().__init__
-        input_schema, output_schema = self._build_schemas(code_fn, return_keys)
+        # Parse inputs/outputs từ function signature/AST
+        parsed_inputs, parsed_outputs = self._parse_function(code_fn, return_keys)
 
-        super().__init__(
-            input_schema=input_schema,
-            output_schema=output_schema,
-            **kwargs
-        )
+        # Gọi super().__init__ không truyền inputs/outputs
+        super().__init__(**kwargs)
+
+        # Merge parsed schema với user-provided inputs/outputs
+        self.inputs = self._merge_params(parsed_inputs, inputs)
+        self.outputs = self._merge_params(parsed_outputs, outputs)
 
         self.code_fn = code_fn
         self.core = ensure_async(code_fn) if code_fn else None
@@ -237,38 +228,42 @@ class CodeNode(BaseNode):
         if not self.description and code_fn and code_fn.__doc__:
             self.description = code_fn.__doc__.strip().split('\n')[0]
 
-    def _build_schemas(
+    def _parse_function(
         self,
         code_fn: Optional[Callable],
         return_keys: Optional[List[str]]
     ) -> tuple:
-        """Xây dựng input/output schema từ function signature và source."""
+        """Parse inputs/outputs từ function signature và source.
+
+        Returns:
+            Tuple[Dict[str, Param], Dict[str, Param]]: (inputs, outputs)
+        """
         if code_fn is None:
             return {}, {}
 
-        # Xây dựng input schema từ các parameter của function
-        input_schema = {}
+        # Parse inputs từ function parameters
+        inputs = {}
         sig = inspect.signature(code_fn)
 
         for param_name, param in sig.parameters.items():
-            param_type = param.annotation if param.annotation != inspect.Parameter.empty else Any
+            param_type = param.annotation if param.annotation != inspect.Parameter.empty else None
             has_default = param.default != inspect.Parameter.empty
             default_val = param.default if has_default else None
 
-            input_schema[param_name] = Param(
+            inputs[param_name] = Param(
                 type=param_type,
                 required=not has_default,
                 default=default_val
             )
 
-        # Xây dựng output schema: return_keys explicit > AST parsing
+        # Parse outputs: return_keys explicit > AST parsing
         if return_keys:
-            output_schema = {key: Param(type=Any) for key in return_keys}
+            outputs = {key: Param() for key in return_keys}
         else:
             # Parse return schema từ source code (với type hints và descriptions)
-            output_schema = extract_return_schema(code_fn)
+            outputs = extract_return_schema(code_fn)
 
-        return input_schema, output_schema
+        return inputs, outputs
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Trả về metadata riêng của subclass."""
@@ -276,107 +271,3 @@ class CodeNode(BaseNode):
             "code_fn": self.source[:200] + "..." if len(self.source) > 200 else self.source,
             "function_name": self.code_fn.__name__ if self.code_fn else "unknown"
         }
-
-
-if __name__ == "__main__":
-    def test(name: str, condition: bool):
-        status = "PASS" if condition else "FAIL"
-        print(f"  [{status}] {name}")
-        if not condition:
-            raise AssertionError(f"Test failed: {name}")
-
-    @code_node
-    def add_numbers(a: int, b: int = 10):
-        """Add two numbers."""
-        return {"result": a + b}  # (int) the sum
-
-    @code_node
-    def process_data(name: str, count: int):
-        """Process data with type hints and descriptions."""
-        return {
-            "message": f"Hello, {name}!",  # (str) greeting message
-            "total": count * 2,  # (int) doubled count
-            "status": "success",  # just a description, type defaults to Any
-        }
-
-    @code_node
-    def increment(x: int):
-        return {"x": x + 1}
-
-    # =========================================================================
-    # Test 1: Basic __call__ usage
-    # =========================================================================
-    print("\n" + "=" * 50)
-    print("Test 1: Basic __call__ usage")
-    print("=" * 50)
-
-    node = add_numbers()
-    result = node(a=10, b=20)
-    test("add_numbers(a=10, b=20) = 30", result == {"result": 30})
-
-    result = node(a=5, b=3)
-    test("add_numbers(a=5, b=3) = 8", result == {"result": 8})
-
-    # With default value
-    result = node(a=7)
-    test("add_numbers(a=7) uses default b=10", result == {"result": 17})
-
-    # =========================================================================
-    # Test 2: Increment function
-    # =========================================================================
-    print("\n" + "=" * 50)
-    print("Test 2: Increment function")
-    print("=" * 50)
-
-    inc = increment()
-    result = inc(x=5)
-    test("increment(x=5) = 6", result == {"x": 6})
-
-    result = inc(x=0)
-    test("increment(x=0) = 1", result == {"x": 1})
-
-    result = inc(x=-1)
-    test("increment(x=-1) = 0", result == {"x": 0})
-
-    # =========================================================================
-    # Test 3: Process data with multiple outputs
-    # =========================================================================
-    print("\n" + "=" * 50)
-    print("Test 3: Process data with multiple outputs")
-    print("=" * 50)
-
-    proc = process_data()
-    result = proc(name="World", count=5)
-    test("message is 'Hello, World!'", result["message"] == "Hello, World!")
-    test("total is 10", result["total"] == 10)
-    test("status is 'success'", result["status"] == "success")
-
-    result = proc(name="Alice", count=3)
-    test("message is 'Hello, Alice!'", result["message"] == "Hello, Alice!")
-    test("total is 6", result["total"] == 6)
-
-    # =========================================================================
-    # Test 4: Schema extraction
-    # =========================================================================
-    print("\n" + "=" * 50)
-    print("Test 4: Schema extraction")
-    print("=" * 50)
-
-    node = add_numbers()
-    test("input_schema has 'a'", "a" in node.input_schema)
-    test("input_schema has 'b'", "b" in node.input_schema)
-    test("output_schema has 'result'", "result" in node.output_schema)
-    test("'a' is required", node.input_schema["a"].required == True)
-    test("'b' has default 10", node.input_schema["b"].default == 10)
-
-    proc = process_data()
-    test("output has 'message'", "message" in proc.output_schema)
-    test("output has 'total'", "total" in proc.output_schema)
-    test("output has 'status'", "status" in proc.output_schema)
-
-    # =========================================================================
-    # Summary
-    # =========================================================================
-    print("\n" + "=" * 50)
-    print("All CodeNode tests passed!")
-    print("=" * 50)

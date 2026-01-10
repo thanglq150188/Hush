@@ -10,7 +10,7 @@ import uuid
 
 from hush.core.configs.node_config import NodeType
 from hush.core.utils.context import get_current, _current_graph
-from hush.core.utils.common import unique_name
+from hush.core.utils.common import unique_name, Param
 from hush.core.loggings import LOGGER, format_log_data
 from hush.core.states.ref import Ref
 
@@ -22,10 +22,16 @@ class BaseNode(ABC):
     """Base class cho tất cả các node trong workflow.
 
     Node là đơn vị xử lý cơ bản trong workflow. Mỗi node có:
-    - inputs: Ánh xạ biến đầu vào (có thể là Ref hoặc literal)
-    - outputs: Ánh xạ biến đầu ra
-    - input_schema/output_schema: Định nghĩa các biến
+    - inputs: Dict[str, Param] - định nghĩa và kết nối biến đầu vào
+    - outputs: Dict[str, Param] - định nghĩa và kết nối biến đầu ra
     - core: Function thực thi logic chính
+
+    Mỗi Param chứa:
+    - type: Kiểu dữ liệu (tự động infer nếu không chỉ định)
+    - required: Có bắt buộc hay không
+    - default: Giá trị mặc định
+    - description: Mô tả
+    - value: Ref hoặc literal value
 
     Hỗ trợ kết nối node bằng operators:
     - >> : Kết nối tuần tự (hard edge)
@@ -48,8 +54,6 @@ class BaseNode(ABC):
         'targets',
         'inputs',
         'outputs',
-        'input_schema',
-        'output_schema',
         'core',
         'father',
         'contain_generation',
@@ -62,8 +66,6 @@ class BaseNode(ABC):
         description: str = "",
         inputs: Dict[str, Any] = None,
         outputs: Dict[str, Any] = None,
-        input_schema: Dict[str, Any] = None,
-        output_schema: Dict[str, Any] = None,
         sources: List[str] = None,
         targets: List[str] = None,
         stream: bool = False,
@@ -84,9 +86,6 @@ class BaseNode(ABC):
         self.sources: List[str] = sources or []
         self.targets: List[str] = targets or []
 
-        self.input_schema = input_schema or {}
-        self.output_schema = output_schema or {}
-
         self.core: Optional[Callable] = None
         self.contain_generation = contain_generation
         # Đăng ký vào graph cha
@@ -98,9 +97,9 @@ class BaseNode(ABC):
         if self.name and not self.name.replace('_', '').replace('-', '').isalnum():
             raise ValueError(f"Tên node '{self.name}' chỉ được chứa ký tự alphanumeric, underscore và hyphen")
 
-        # Chuẩn hóa các kết nối inputs/outputs
-        self.inputs = self._normalize_connections(inputs, self.input_schema)
-        self.outputs = self._normalize_connections(outputs, self.output_schema)
+        # Chuẩn hóa inputs/outputs thành Dict[str, Param]
+        self.inputs: Dict[str, Param] = self._normalize_params(inputs)
+        self.outputs: Dict[str, Param] = self._normalize_params(outputs)
 
         # Lỗi nếu có key trùng trong cả inputs và outputs
         if self.inputs and self.outputs:
@@ -111,72 +110,149 @@ class BaseNode(ABC):
                     "Tên biến input và output phải khác nhau."
                 )
 
-    def _normalize_connections(
-        self,
-        connections: Any,
-        schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Chuẩn hóa ánh xạ kết nối về format thống nhất.
-
-        Chuyển đổi các format đầu vào khác nhau thành: {var_name: Ref} hoặc {var_name: literal}
+    def _resolve_value(self, key: str, value: Any) -> Any:
+        """Chuyển đổi value thành Ref hoặc giữ nguyên literal.
 
         Các format được hỗ trợ:
-            - inputs=some_node → {k: Ref(some_node, k) for k in schema}
-            - inputs={"var": some_node} → {"var": Ref(some_node, "var")}
-            - inputs={"var": some_node["other"]} → {"var": Ref(some_node, "other")}
-            - inputs={"var": Ref(node, "other")} → {"var": Ref(node, "other")}
-            - inputs={("a", "b"): some_node} → {"a": Ref(some_node, "a"), "b": Ref(some_node, "b")}
-            - inputs={"var": PARENT["x"]} → {"var": Ref(father, "x")} (PARENT resolve thành father node)
+            - some_node → Ref(some_node, key)
+            - some_node["other"] → Ref(some_node, "other")
+            - Ref(node, "var") → giữ nguyên
+            - PARENT["x"] → Ref(father, "x")
+            - literal → giữ nguyên
         """
-        if connections is None:
-            return {}
-
         def resolve_node(node):
             """Resolve PARENT thành father node."""
             if hasattr(node, 'name') and node.name == "__PARENT__":
                 return self.father if self.father else node
             return node
 
-        # Trường hợp: connections là một node reference (inputs=some_node)
-        if hasattr(connections, "name"):
-            resolved = resolve_node(connections)
-            if schema:
-                return {k: Ref(resolved, k) for k in schema}
+        # Xử lý Ref trực tiếp - giữ nguyên operations
+        if isinstance(value, Ref):
+            resolved = resolve_node(value.raw_node)
+            return Ref(resolved, value.var, value.ops)
+
+        # Xử lý node reference: some_node → Ref(some_node, key)
+        if hasattr(value, "name"):
+            resolved = resolve_node(value)
+            return Ref(resolved, key)
+
+        # Giá trị literal
+        return value
+
+    def _normalize_params(
+        self,
+        params: Any
+    ) -> Dict[str, Param]:
+        """Chuẩn hóa inputs/outputs thành Dict[str, Param].
+
+        Các format được hỗ trợ:
+            - params=None → {}
+            - params=PARENT → {} (sẽ xử lý sau khi có outputs parsed)
+            - params={"var": Param(...)} → giữ nguyên, resolve value
+            - params={"var": some_node} → {"var": Param(value=Ref(some_node, "var"))}
+            - params={"var": some_node["other"]} → {"var": Param(value=Ref(some_node, "other"))}
+            - params={"var": literal} → {"var": Param(value=literal)}
+            - params={("a", "b"): some_node} → mở rộng thành cả hai keys
+        """
+        if params is None:
             return {}
 
-        # Trường hợp: connections là dict
-        if isinstance(connections, dict):
-            result = {}
-            for key, value in connections.items():
-                # Xử lý Ref trực tiếp - giữ nguyên operations!
-                if isinstance(value, Ref):
-                    resolved = resolve_node(value.raw_node)
-                    # Giữ nguyên _ops khi tạo Ref mới với resolved node
-                    result[key] = Ref(resolved, value.var, value.ops)
-                # Xử lý dict format cũ {"var": node["other_var"]} để tương thích ngược
-                elif isinstance(value, dict) and value:
-                    ref_node, ref_var = next(iter(value.items()))
-                    resolved = resolve_node(ref_node)
-                    result[key] = Ref(resolved, ref_var)
+        # Xử lý PARENT shorthand - trả về marker để xử lý trong _merge_params
+        if hasattr(params, 'name') and params.name == "__PARENT__":
+            return {"__FORWARD_TO_PARENT__": params}
+
+        result = {}
+
+        if isinstance(params, dict):
+            for key, value in params.items():
                 # Xử lý tuple keys: {("a", "b"): node} → mở rộng thành cả hai
-                elif isinstance(key, tuple):
+                if isinstance(key, tuple):
                     for k in key:
-                        if hasattr(value, "name"):
-                            resolved = resolve_node(value)
-                            result[k] = Ref(resolved, k)
-                        else:
-                            result[k] = value
+                        resolved_value = self._resolve_value(k, value)
+                        result[k] = Param(value=resolved_value)
+                # Xử lý Param trực tiếp
+                elif isinstance(value, Param):
+                    # Resolve value trong Param nếu có
+                    if value.value is not None:
+                        value.value = self._resolve_value(key, value.value)
+                    result[key] = value
                 else:
-                    # Single key: {"var": node} → {"var": Ref(node, "var")}
-                    if hasattr(value, "name"):
-                        resolved = resolve_node(value)
-                        result[key] = Ref(resolved, key)
-                    else:
-                        # Giá trị literal
-                        result[key] = value
+                    # Tạo Param mới với value đã resolve (type auto-inferred)
+                    resolved_value = self._resolve_value(key, value)
+                    result[key] = Param(value=resolved_value)
+
+        return result
+
+    def _merge_params(
+        self,
+        schema: Dict[str, Param],
+        user_provided: Dict[str, Any]
+    ) -> Dict[str, Param]:
+        """Merge schema (từ parsing) với user-provided inputs/outputs.
+
+        - Nếu key đã tồn tại trong schema → chỉ gán value
+        - Nếu key mới → tạo Param mới (type auto-inferred)
+        - Nếu user_provided có marker __FORWARD_TO_PARENT__ → forward tất cả keys trong schema đến PARENT
+
+        Args:
+            schema: Dict[str, Param] từ parsing (ví dụ: từ function signature)
+            user_provided: Dict từ user (Ref | literal | Param)
+
+        Returns:
+            Dict[str, Param] đã merge
+        """
+        # Copy schema để không mutate original
+        result = {
+            k: Param(type=v.type, required=v.required, default=v.default,
+                     description=v.description, value=v.value)
+            for k, v in schema.items()
+        }
+
+        if not user_provided:
             return result
 
-        return {}
+        # Xử lý PARENT shorthand: outputs=PARENT → forward tất cả outputs đến parent
+        if "__FORWARD_TO_PARENT__" in user_provided:
+            parent_node = user_provided["__FORWARD_TO_PARENT__"]
+            # Resolve PARENT thành father
+            resolved_parent = self.father if self.father else parent_node
+            # Tạo Ref cho mỗi key trong schema
+            for key in result:
+                result[key].value = Ref(resolved_parent, key)
+            return result
+
+        for key, value in user_provided.items():
+            # Xử lý tuple keys
+            if isinstance(key, tuple):
+                for k in key:
+                    self._merge_single_param(result, k, value)
+            else:
+                self._merge_single_param(result, key, value)
+
+        return result
+
+    def _merge_single_param(
+        self,
+        result: Dict[str, Param],
+        key: str,
+        value: Any
+    ) -> None:
+        """Merge một param vào result dict."""
+        if key in result:
+            # Key đã tồn tại → chỉ gán value
+            if isinstance(value, Param):
+                result[key].value = self._resolve_value(key, value.value) if value.value is not None else None
+            else:
+                result[key].value = self._resolve_value(key, value)
+        else:
+            # Key mới → tạo Param mới (type auto-inferred in Param.__post_init__)
+            if isinstance(value, Param):
+                if value.value is not None:
+                    value.value = self._resolve_value(key, value.value)
+                result[key] = value
+            else:
+                resolved_value = self._resolve_value(key, value)
+                result[key] = Param(value=resolved_value)
 
     @property
     def full_name(self) -> str:
@@ -285,12 +361,10 @@ class BaseNode(ABC):
         """
         from hush.core.states import StateSchema, MemoryState
 
-        # Lưu kwargs làm inputs trực tiếp (bỏ qua connection resolution)
-        self.inputs = kwargs
-
-        # Tạo schema từ node này (đăng ký inputs, outputs, metadata)
+        # Tạo schema từ node này
         schema = StateSchema(node=self)
-        state = MemoryState(schema)
+        # Truyền kwargs vào MemoryState để override inputs
+        state = MemoryState(schema, inputs=kwargs)
 
         # Chạy đồng bộ
         loop = asyncio.get_event_loop()
@@ -319,14 +393,17 @@ class BaseNode(ABC):
         """
         result = {}
 
-        for var_name, ref in self.inputs.items():
-            if isinstance(ref, Ref):
-                # Đọc từ biến của node này - schema xử lý index resolution và ops
-                value = state[self.full_name, var_name, context_id]
+        for var_name, param in self.inputs.items():
+            # Luôn đọc từ state trước (có thể có giá trị từ MemoryState inputs hoặc Ref)
+            value = state[self.full_name, var_name, context_id]
+            if value is not None:
                 result[var_name] = value
-            else:
-                # Giá trị literal
-                result[var_name] = ref
+            elif param.value is not None and not isinstance(param.value, Ref):
+                # Fallback: giá trị literal trong Param.value
+                result[var_name] = param.value
+            elif param.default is not None:
+                # Fallback: giá trị default
+                result[var_name] = param.default
 
         return result
 
@@ -338,7 +415,7 @@ class BaseNode(ABC):
         chúng tạo ref ở vị trí đích, không phải ở node này.
         """
         result = {}
-        for var_name in self.output_schema:
+        for var_name in self.outputs:
             result[var_name] = state[self.full_name, var_name, context_id]
         return result
 
@@ -417,11 +494,11 @@ class BaseNode(ABC):
 
     def get_input_variables(self) -> List[str]:
         """Trả về danh sách tên biến input."""
-        return list(self.input_schema.keys()) if self.input_schema else []
+        return list(self.inputs.keys()) if self.inputs else []
 
     def get_output_variables(self) -> List[str]:
         """Trả về danh sách tên biến output."""
-        return list(self.output_schema.keys()) if self.output_schema else []
+        return list(self.outputs.keys()) if self.outputs else []
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Trả về metadata riêng của subclass. Override ở các subclass."""
@@ -429,10 +506,10 @@ class BaseNode(ABC):
 
     def metadata(self) -> Dict[str, Any]:
         """Tạo dictionary metadata cho node."""
-        def get_connect_key(value):
-            if isinstance(value, Ref):
-                return {value.node: value.var}
-            return value
+        def get_connect_key(param: Param):
+            if isinstance(param.value, Ref):
+                return {param.value.node: param.value.var}
+            return param.value
 
         result = {
             "id": self.id,
