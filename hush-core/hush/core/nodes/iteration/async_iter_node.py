@@ -116,52 +116,52 @@ class AsyncIterNode(BaseIterationNode):
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
     def _post_build(self):
-        """Thiết lập input/output schema sau khi inner graph được build.
+        """Thiết lập inputs/outputs sau khi inner graph được build.
 
         QUAN TRỌNG: Method này normalize _each và _broadcast_inputs dùng
-        _normalize_connections để resolve PARENT refs thành self.father.
+        _normalize_params để resolve PARENT refs thành self.father.
         """
         # Normalize each và broadcast inputs (resolve PARENT refs)
-        self._each = self._normalize_connections(self._each, {})
-        self._broadcast_inputs = self._normalize_connections(self._broadcast_inputs, {})
+        normalized_each = self._normalize_params(self._each)
+        normalized_broadcast = self._normalize_params(self._broadcast_inputs)
+
+        # Extract value/Ref từ normalized Params
+        self._each = {k: v.value for k, v in normalized_each.items()}
+        self._broadcast_inputs = {k: v.value for k, v in normalized_broadcast.items()}
 
         # Lấy tên iteration variable
         iter_var_name = list(self._each.keys())[0]
 
-        # Input schema: iteration var (AsyncIterable) + broadcast inputs (Any)
-        self.input_schema = {
-            iter_var_name: Param(type=AsyncIterable, required=True)
+        # Build inputs: iteration var (AsyncIterable) + broadcast inputs (Any)
+        parsed_inputs = {
+            iter_var_name: Param(type=AsyncIterable, required=True, value=self._each[iter_var_name])
         }
 
         # Nếu batching enabled, đăng ký thêm batch và batch_size variables
         if self._batch_fn is not None:
-            self.input_schema["batch"] = Param(type=List, required=False)
-            self.input_schema["batch_size"] = Param(type=int, required=False)
+            parsed_inputs["batch"] = Param(type=List, required=False)
+            parsed_inputs["batch_size"] = Param(type=int, required=False)
 
-        self.input_schema.update({
-            var_name: Param(type=Any, required=isinstance(value, Ref))
+        parsed_inputs.update({
+            var_name: Param(type=Any, required=isinstance(value, Ref), value=value)
             for var_name, value in self._broadcast_inputs.items()
         })
 
-        # Output schema: từ inner graph (dạng lists) + metrics
-        self.output_schema = {
+        # Build outputs: từ inner graph (dạng lists) + metrics
+        parsed_outputs = {
             key: Param(type=List, required=param.required)
-            for key, param in self._graph.output_schema.items()
+            for key, param in self._graph.outputs.items()
         }
-        self.output_schema["iteration_metrics"] = Param(type=Dict, required=False)
+        parsed_outputs["iteration_metrics"] = Param(type=Dict, required=False)
 
-        # Re-normalize outputs sau khi output_schema được set
+        # Merge với user-provided outputs nếu có
         if self._raw_outputs is not None:
-            self.outputs = self._normalize_connections(self._raw_outputs, self.output_schema)
+            self.outputs = self._merge_params(parsed_outputs, self._raw_outputs)
+        else:
+            self.outputs = parsed_outputs
 
-        # Lưu each và inputs vào node's inputs để get_inputs hoạt động
-        self.inputs = {**self._each, **self._broadcast_inputs}
-
-        # Nếu batching enabled, thêm batch và batch_size vào inputs
-        # để schema có thể thiết lập links cho inner graph PARENT access
-        if self._batch_fn is not None:
-            self.inputs["batch"] = None
-            self.inputs["batch_size"] = None
+        # Set inputs
+        self.inputs = parsed_inputs
 
     def _resolve_values(
         self,
@@ -245,6 +245,7 @@ class AsyncIterNode(BaseIterationNode):
 
         request_id = state.request_id
         start_time = datetime.now()
+        perf_start = perf_counter()
         _inputs = {}
         _outputs = {}
 
@@ -399,7 +400,7 @@ class AsyncIterNode(BaseIterationNode):
                     )
 
             # Transpose results sang column-oriented format (giống ForLoopNode)
-            output_keys = list(self._graph.output_schema.keys())
+            output_keys = list(self._graph.outputs.keys())
             _outputs = {
                 key: [r.get(key) for r in collected_results]
                 for key in output_keys
@@ -416,7 +417,7 @@ class AsyncIterNode(BaseIterationNode):
 
         finally:
             end_time = datetime.now()
-            duration_ms = (end_time - start_time).total_seconds() * 1000
+            duration_ms = (perf_counter() - perf_start) * 1000
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
@@ -431,345 +432,3 @@ class AsyncIterNode(BaseIterationNode):
             "has_callback": self._callback is not None,
             "has_batch_fn": self._batch_fn is not None,
         }
-
-
-if __name__ == "__main__":
-    from hush.core.states import StateSchema, MemoryState
-    from hush.core.nodes.base import START, END, PARENT
-    from hush.core.nodes.transform.code_node import code_node
-    from hush.core.nodes.graph.graph_node import GraphNode
-
-    async def main():
-        # =================================================================
-        # Test 1: Simple streaming - double each value
-        # =================================================================
-        print("=" * 60)
-        print("Test 1: Simple streaming - double each value")
-        print("=" * 60)
-
-        async def simple_source():
-            for i in range(10):
-                yield i
-                await asyncio.sleep(0.01)
-
-        results = []
-
-        async def collect_results(data):
-            results.append(data)
-
-        @code_node
-        def double_value(value: int):
-            return {"result": value * 2}
-
-        with AsyncIterNode(
-            name="double_stream",
-            inputs={"value": Each(simple_source())},
-            callback=collect_results
-        ) as stream_node:
-            processor = double_value(
-                inputs={"value": PARENT["value"]},
-                outputs=PARENT
-            )
-            START >> processor >> END
-
-        stream_node.build()
-
-        schema = StateSchema(stream_node)
-        state = MemoryState(schema)
-
-        output = await stream_node.run(state)
-
-        print(f"Callback received {len(results)} results: {results[:5]}...")
-        print(f"Collected output: {output['result'][:5]}...")
-        print(f"Metrics: {output['iteration_metrics']}")
-        assert output['result'] == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-
-        # =================================================================
-        # Test 2: Streaming with broadcast inputs
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 2: Streaming with broadcast inputs")
-        print("=" * 60)
-
-        async def number_source():
-            for i in range(5):
-                yield i + 1
-                await asyncio.sleep(0.01)
-
-        @code_node
-        def multiply(value: int, multiplier: int):
-            return {"result": value * multiplier}
-
-        with AsyncIterNode(
-            name="multiply_stream",
-            inputs={
-                "value": Each(number_source()),
-                "multiplier": 10  # broadcast
-            }
-        ) as stream_node2:
-            processor = multiply(
-                inputs={"value": PARENT["value"], "multiplier": PARENT["multiplier"]},
-                outputs=PARENT
-            )
-            START >> processor >> END
-
-        stream_node2.build()
-
-        schema2 = StateSchema(stream_node2)
-        state2 = MemoryState(schema2)
-
-        output2 = await stream_node2.run(state2)
-
-        print(f"Result: {output2['result']}")
-        print(f"Expected: [10, 20, 30, 40, 50]")
-        assert output2['result'] == [10, 20, 30, 40, 50]
-
-        # =================================================================
-        # Test 3: Streaming with batching
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 3: Streaming with batching")
-        print("=" * 60)
-
-        async def batch_source():
-            for i in range(12):
-                yield i
-                await asyncio.sleep(0.005)
-
-        @code_node
-        def sum_batch(batch: list, batch_size: int):
-            return {"total": sum(batch), "size": batch_size}
-
-        with AsyncIterNode(
-            name="batch_stream",
-            inputs={"item": Each(batch_source())},
-            batch_fn=batch_by_size(4)
-        ) as stream_node3:
-            processor = sum_batch(
-                inputs={"batch": PARENT["batch"], "batch_size": PARENT["batch_size"]},
-                outputs=PARENT
-            )
-            START >> processor >> END
-
-        stream_node3.build()
-
-        schema3 = StateSchema(stream_node3)
-        state3 = MemoryState(schema3)
-
-        output3 = await stream_node3.run(state3)
-
-        print(f"Totals: {output3['total']}")
-        print(f"Sizes: {output3['size']}")
-        print(f"Expected totals: [6, 22, 38] (0+1+2+3, 4+5+6+7, 8+9+10+11)")
-        assert output3['total'] == [6, 22, 38]
-        assert output3['size'] == [4, 4, 4]
-
-        # =================================================================
-        # Test 4: With Ref (dynamic config from upstream)
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 4: With Ref (dynamic config from upstream)")
-        print("=" * 60)
-
-        @code_node
-        def get_config():
-            return {"factor": 5, "offset": 100}
-
-        async def ref_source():
-            for i in range(4):
-                yield i + 1
-                await asyncio.sleep(0.01)
-
-        @code_node
-        def compute(value: int, factor: int, offset: int):
-            return {"result": value * factor + offset}
-
-        with GraphNode(name="ref_test") as graph4:
-            config_node = get_config()
-
-            with AsyncIterNode(
-                name="compute_stream",
-                inputs={
-                    "value": Each(ref_source()),
-                    "factor": config_node["factor"],   # broadcast Ref
-                    "offset": config_node["offset"]    # broadcast Ref
-                },
-                outputs=PARENT
-            ) as stream_node4:
-                processor = compute(
-                    inputs={
-                        "value": PARENT["value"],
-                        "factor": PARENT["factor"],
-                        "offset": PARENT["offset"]
-                    },
-                    outputs=PARENT
-                )
-                START >> processor >> END
-
-            START >> config_node >> stream_node4 >> END
-
-        graph4.build()
-
-        schema4 = StateSchema(graph4)
-        state4 = MemoryState(schema4)
-
-        output4 = await graph4.run(state4)
-
-        print(f"Result: {output4['result']}")
-        print(f"Expected: [105, 110, 115, 120] (1*5+100, 2*5+100, ...)")
-        assert output4['result'] == [105, 110, 115, 120]
-
-        # =================================================================
-        # Test 5: Dict items in stream
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 5: Dict items in stream")
-        print("=" * 60)
-
-        async def dict_source():
-            users = [
-                {"name": "Alice", "score": 85},
-                {"name": "Bob", "score": 92},
-                {"name": "Charlie", "score": 78},
-            ]
-            for user in users:
-                yield user
-                await asyncio.sleep(0.01)
-
-        @code_node
-        def grade_user(user: dict):
-            grade = "A" if user["score"] >= 90 else "B" if user["score"] >= 80 else "C"
-            return {"name": user["name"], "grade": grade}
-
-        with AsyncIterNode(
-            name="grade_stream",
-            inputs={"user": Each(dict_source())}
-        ) as stream_node5:
-            processor = grade_user(
-                inputs={"user": PARENT["user"]},
-                outputs=PARENT
-            )
-            START >> processor >> END
-
-        stream_node5.build()
-
-        schema5 = StateSchema(stream_node5)
-        state5 = MemoryState(schema5)
-
-        output5 = await stream_node5.run(state5)
-
-        print(f"Names: {output5['name']}")
-        print(f"Grades: {output5['grade']}")
-        assert output5['name'] == ["Alice", "Bob", "Charlie"]
-        assert output5['grade'] == ["B", "A", "C"]
-
-        # =================================================================
-        # Test 6: Concurrency limit
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 6: Concurrency limit (max_concurrency=2)")
-        print("=" * 60)
-
-        async def slow_source():
-            for i in range(6):
-                yield i
-                await asyncio.sleep(0.01)
-
-        @code_node
-        async def slow_process(value: int):
-            await asyncio.sleep(0.05)
-            return {"result": value * 10}
-
-        with AsyncIterNode(
-            name="concurrent_stream",
-            inputs={"value": Each(slow_source())},
-            max_concurrency=2
-        ) as stream_node6:
-            processor = slow_process(
-                inputs={"value": PARENT["value"]},
-                outputs=PARENT
-            )
-            START >> processor >> END
-
-        stream_node6.build()
-
-        schema6 = StateSchema(stream_node6)
-        state6 = MemoryState(schema6)
-
-        output6 = await stream_node6.run(state6)
-
-        print(f"Result: {output6['result']}")
-        print(f"Metrics: {output6['iteration_metrics']}")
-        assert output6['result'] == [0, 10, 20, 30, 40, 50]
-
-        # =================================================================
-        # Test 7: AsyncIterNode receives source from upstream node output
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("Test 7: AsyncIterNode receives source from upstream node")
-        print("=" * 60)
-
-        # This node creates and returns an async generator as its output
-        @code_node
-        def create_stream_source(start: int, end: int):
-            """Node that produces an async iterable as output."""
-            async def generated_stream():
-                for i in range(start, end):
-                    yield {"id": i, "value": i * 10}
-                    await asyncio.sleep(0.01)
-            return {"stream": generated_stream(), "metadata": {"count": end - start}}
-
-        @code_node
-        def process_item(item: dict, prefix: str):
-            """Process each streamed item."""
-            return {
-                "processed_id": f"{prefix}_{item['id']}",
-                "doubled_value": item["value"] * 2
-            }
-
-        with GraphNode(name="dynamic_stream_graph") as graph7:
-            # Upstream node creates the async iterable
-            source_creator = create_stream_source(
-                inputs={"start": PARENT["start"], "end": PARENT["end"]}
-            )
-
-            # AsyncIterNode receives the stream via Ref from upstream node
-            with AsyncIterNode(
-                name="dynamic_processor",
-                inputs={
-                    "item": Each(source_creator["stream"]),  # <-- Ref to upstream output!
-                    "prefix": PARENT["prefix"]               # broadcast from graph input
-                },
-                outputs=PARENT
-            ) as stream_node7:
-                processor = process_item(
-                    inputs={
-                        "item": PARENT["item"],
-                        "prefix": PARENT["prefix"]
-                    },
-                    outputs=PARENT
-                )
-                START >> processor >> END
-
-            START >> source_creator >> stream_node7 >> END
-
-        graph7.build()
-
-        schema7 = StateSchema(graph7)
-        state7 = MemoryState(schema7, inputs={"start": 0, "end": 5, "prefix": "MSG"})
-
-        output7 = await graph7.run(state7)
-
-        print(f"Processed IDs: {output7['processed_id']}")
-        print(f"Doubled values: {output7['doubled_value']}")
-        print(f"Expected IDs: ['MSG_0', 'MSG_1', 'MSG_2', 'MSG_3', 'MSG_4']")
-        print(f"Expected values: [0, 20, 40, 60, 80]")
-        assert output7['processed_id'] == ['MSG_0', 'MSG_1', 'MSG_2', 'MSG_3', 'MSG_4']
-        assert output7['doubled_value'] == [0, 20, 40, 60, 80]
-
-        # =================================================================
-        print("\n" + "=" * 60)
-        print("All tests passed!")
-        print("=" * 60)
-
-    asyncio.run(main())

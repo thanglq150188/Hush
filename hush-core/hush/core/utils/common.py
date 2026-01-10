@@ -7,20 +7,59 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Type
 
 
+def _infer_type(value: Any) -> Type:
+    """Suy luận type từ giá trị literal (chỉ basic types)."""
+    if value is None:
+        return Any
+    if isinstance(value, str):
+        return str
+    if isinstance(value, bool):  # bool trước int vì bool là subclass của int
+        return bool
+    if isinstance(value, int):
+        return int
+    if isinstance(value, float):
+        return float
+    if isinstance(value, list):
+        return list
+    if isinstance(value, dict):
+        return dict
+    return Any
+
+
 @dataclass
 class Param:
     """Định nghĩa parameter cho input/output của node.
 
+    Attributes:
+        type: Kiểu dữ liệu của parameter (str, int, list, etc.)
+              Tự động infer từ value nếu không được chỉ định.
+        required: Có bắt buộc hay không
+        default: Giá trị mặc định nếu không được cung cấp
+        description: Mô tả parameter
+        value: Giá trị hoặc tham chiếu (Ref | literal | None)
+
     Example:
-        input_schema = {
-            "query": Param(str, required=True, description="Search query"),
-            "limit": Param(int, default=10, description="Max results"),
+        inputs = {
+            "query": Param(str, required=True, description="Search query", value=other_node["result"]),
+            "limit": Param(default=10, description="Max results"),  # type inferred as int
         }
     """
-    type: Type = str
+    type: Type = None
     required: bool = False
     default: Any = None
     description: str = ""
+    value: Any = None  # Ref | literal | None
+
+    def __post_init__(self):
+        """Auto-infer type từ value hoặc default nếu type chưa được chỉ định."""
+        if self.type is None:
+            # Thử infer từ value trước, sau đó từ default
+            if self.value is not None:
+                self.type = _infer_type(self.value)
+            elif self.default is not None:
+                self.type = _infer_type(self.default)
+            else:
+                self.type = Any
 
 
 def unique_name() -> str:

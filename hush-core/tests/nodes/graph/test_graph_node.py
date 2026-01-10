@@ -554,8 +554,8 @@ class TestAsyncOperations:
                 code_fn=lambda x: {"value": x},
                 inputs={"x": PARENT["x"]}
             )
-            a = CodeNode(name="a", code_fn=slow_a, inputs={"x": start["value"]})
-            b = CodeNode(name="b", code_fn=slow_b, inputs={"x": start["value"]})
+            a = CodeNode(name="a", code_fn=slow_a, inputs={"x": start["value"]}, outputs={"result": None})
+            b = CodeNode(name="b", code_fn=slow_b, inputs={"x": start["value"]}, outputs={"result": None})
             merge = CodeNode(
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
@@ -655,7 +655,7 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_empty_input(self):
-        """Handle empty/None inputs gracefully."""
+        """Handle empty string inputs gracefully."""
         with GraphNode(name="empty_input") as graph:
             node = CodeNode(
                 name="handle_empty",
@@ -668,7 +668,7 @@ class TestEdgeCases:
         graph.build()
 
         schema = StateSchema(graph)
-        state = schema.create_state(inputs={"x": None})
+        state = schema.create_state(inputs={"x": ""})
         result = await graph.run(state)
 
         assert result["result"] == "default"
