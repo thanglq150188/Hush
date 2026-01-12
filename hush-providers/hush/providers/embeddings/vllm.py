@@ -166,30 +166,20 @@ def cosine_similarity_search(query_emb: List[float], embs: List[List[float]]) ->
 
 async def main() -> None:
     """Main function for testing and demonstration."""
-    import sys
     import time
-    from beegen.utils.common import configure_event_loop
-
-    configure_event_loop()
 
     start_time = time.time()
     print("Starting embedding generation...")
 
     vllm_embed = VLLMEmbedding(EmbeddingConfig.default())
 
-    # text1 = """UBND Hà Đông"""
+    text1 = """machine learning and deep learning"""
+    text2 = """natural language processing"""
 
-    text2 = """Ủy Ban Nhân Dân quận Hà Đông"""
+    embs = await vllm_embed.run(texts=[text1, text2])
 
-    embs = await vllm_embed.run(texts=[text2])
-    # query_emb = await vllm_embed.run(texts=["Ủy Ban Nhân Dân"])
-
-    # results = cosine_similarity_search(query_emb[0], embs)
-
-    # Print results
-    # for idx, score in results:
-    #     print(f"Index: {idx}, Similarity Score: {score:.4f}")
-    print(embs)
+    print(f"Generated embeddings: {embs}")
+    print(f"Completed in {time.time() - start_time:.2f}s")
 
 
 if __name__ == "__main__":

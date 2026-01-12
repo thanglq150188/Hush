@@ -1,7 +1,6 @@
 """Prompt Node for hush-providers.
 
 This module provides PromptNode for building chat messages from templates.
-Migrated from beeflow with hush-core design patterns.
 """
 
 from typing import Dict, Any, Optional, List, Set

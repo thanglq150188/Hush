@@ -343,43 +343,22 @@ async def test_tool_callings():
 
 async def test_time_to_first_token():
     """Test time to first token latency for the OpenAI SDK model."""
-    from beegen.registry import RESOURCE_HUB
     import time
 
     print("Starting Time to First Token Test...")
 
     # Initialize model
     model_init_start = time.perf_counter()
-    # config = OpenAIConfig(
-    #     api_key=os.getenv("OPENROUTER_API_KEY", "your-api-key-here"),
-    #     base_url="https://openrouter.ai/api/v1",
-    #     model="openai/chatgpt-4o-latest"
-    # )
-    # print(config.to_yaml_string())
-    # model = OpenAISDKModel(config=config)
-    model = RESOURCE_HUB.llm("qwen3-30b-a3b")
+    config = OpenAIConfig(
+        api_key=os.getenv("OPENAI_API_KEY", "your-api-key-here"),
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o"
+    )
+    model = OpenAISDKModel(config=config)
     model_init_time = time.perf_counter() - model_init_start
     print(f"Model initialization time: {model_init_time:.3f}s")
 
-    query = """Mục tiêu:
-- Viết lại đoạn hội thoại của người dùng thành một câu, vẫn mang đủ ý của khách hàng.
-
-Đầu ra định dạng (xml format):
-<rewrite>câu query ngắn gọn được viết lại cho đủ ý của khách hàng</rewrite>
-
-Example:
-Input:
-- lịch sử trò chuyện:
-['Người dùng: chủ tịch của MB là ai ?', 'BOT: chủ tịch của MB là anh Lưu Trung Thái']
-- câu chat gần nhất: anh ấy tại vị được bao lâu rồi?
-
-Output (xml format):
-<rewrite>Chủ tịch Lưu Trung Thái đã tại vị được bao lâu?</rewrite>
-
-Các thông tin đầu vào:
-- lịch sử trò chuyện:
-[{'role': 'user', 'content': 'tổng giám đốc MB là ai ?'}, {'role': 'assistant', 'content': 'là anh Phạm Như Ánh đấy.'}]
-- câu chat gần nhất: anh ấy có già không ?"""
+    query = """Summarize this text in one sentence: Machine learning is a subset of artificial intelligence that enables systems to learn and improve from experience without being explicitly programmed."""
 
     # Test message
     messages = [{"role": "user", "content": query}]
@@ -392,7 +371,7 @@ Các thông tin đầu vào:
         async for chunk in model.stream(messages=messages):
             if first_token_time is None:
                 first_token_time = time.perf_counter() - start_time
-                print(f"⚡ Time to First Token: {first_token_time:.3f}s")
+                print(f"Time to First Token: {first_token_time:.3f}s")
 
             # Print first chunk content if available
             if chunk.choices and chunk.choices[0].delta.content:

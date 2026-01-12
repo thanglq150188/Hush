@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Beeflow Team" }
+    { name = "Hush Team" }
 ]
 keywords = ["llm", "embedding", "reranking", "openai", "azure", "gemini", "workflow"]
 classifiers = [

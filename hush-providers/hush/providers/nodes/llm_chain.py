@@ -2,7 +2,6 @@
 
 This module provides LLMChainNode - a composite node that combines
 PromptNode, LLMNode, and optionally ParserNode into a single reusable chain.
-Migrated from beeflow with hush-core design patterns.
 """
 
 from typing import Dict, Any, Optional, List

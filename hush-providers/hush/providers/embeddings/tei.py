@@ -150,37 +150,34 @@ def cosine_similarity_search(query_emb: List[float], embs: List[List[float]]) ->
 
 async def main() -> None:
     """Main function for testing and demonstration."""
-    import sys
     import time
-    from beegen.utils.common import configure_event_loop
-
-
-    configure_event_loop()
 
     start_time = time.time()
     print("Starting embedding generation...")
 
     tei_embed = TEIEmbedding(EmbeddingConfig(
         api_type = "tei",
-        api_key = "mb123456789",
-        base_url = "http://10.1.39.127:30044/embed",
+        api_key = "your-api-key",
+        base_url = "http://localhost:8080/embed",
         model = "BAAI/bge-m3",
         embed_batch_size = 32,
         dimensions = 1024
     ))
 
-    text1 = """gói, Tính năng, Mất tiền, MB, đền, mua"""
+    text1 = """machine learning, deep learning, neural networks"""
 
-    text2 = """chương trình, Mất tiền MB đền, điều kiện?"""
+    text2 = """natural language processing, text embeddings"""
 
     embs = await tei_embed.run(texts=[text1, text2])
-    query_emb = await tei_embed.run(texts=["Hướng dẫn  mua gói \"Mất tiền MB đền\" trên App MBBank"])
+    query_emb = await tei_embed.run(texts=["How to use the text embedding service"])
 
-    results = cosine_similarity_search(query_emb[0], embs)
+    results = cosine_similarity_search(query_emb["embeddings"][0], embs["embeddings"])
 
     # Print results
     for idx, score in results:
         print(f"Index: {idx}, Similarity Score: {score:.4f}")
+
+    print(f"Completed in {time.time() - start_time:.2f}s")
 
 
 if __name__ == "__main__":

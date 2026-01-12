@@ -119,8 +119,7 @@ class LLMNode(BaseNode):
     ) -> Dict[str, Any]:
         """Run the LLM node with streaming support via STREAM_SERVICE.
 
-        Following beeflow pattern: handles streaming internally with
-        STREAM_SERVICE.push() for each chunk.
+        Handles streaming internally with STREAM_SERVICE.push() for each chunk.
         """
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
