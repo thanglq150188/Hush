@@ -86,6 +86,10 @@ class WhileLoopNode(BaseIterationNode):
         # Lưu user-provided inputs trước khi merge
         user_inputs = self.inputs.copy()
 
+        # Preserve output mappings set via << syntax before _post_build
+        # e.g., PARENT["final_total"] << loop["total"] sets loop.outputs["total"].value
+        existing_outputs = self.outputs or {}
+
         # Bắt đầu với inner graph's inputs/outputs
         parsed_inputs = {
             k: Param(type=v.type, required=v.required, default=v.default,
@@ -112,6 +116,11 @@ class WhileLoopNode(BaseIterationNode):
         # User inputs có thể chứa literal values ({"counter": 0})
         self.inputs = self._merge_params(parsed_inputs, user_inputs)
         self.outputs = parsed_outputs
+
+        # Restore .value references from existing outputs (set by << syntax)
+        for key, existing_param in existing_outputs.items():
+            if key in self.outputs and existing_param.value is not None:
+                self.outputs[key].value = existing_param.value
 
     async def run(
         self,
