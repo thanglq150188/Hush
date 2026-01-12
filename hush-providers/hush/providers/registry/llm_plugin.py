@@ -1,42 +1,65 @@
-"""LLM resource plugin for ResourceHub."""
+"""LLM resource plugin for ResourceHub.
 
-from typing import Any, Type
+Auto-registers LLM config classes and factory handlers with hush-core.
+"""
 
-from hush.core.registry import ResourcePlugin, ResourceConfig
-from hush.providers.llms.config import LLMConfig
+from hush.core.registry import (
+    register_config_class,
+    register_config_classes,
+    register_factory_handler,
+)
+from hush.providers.llms.config import LLMConfig, OpenAIConfig, AzureConfig, GeminiConfig
 from hush.providers.llms.factory import LLMFactory
 
 
-class LLMPlugin(ResourcePlugin):
-    """Plugin for LLM resources."""
+class LLMPlugin:
+    """Plugin for auto-registering LLM resources with ResourceHub.
+
+    Call LLMPlugin.register() to register all LLM config classes and factory handlers.
+
+    Example:
+        ```python
+        from hush.providers.registry import LLMPlugin
+
+        # Register once at startup
+        LLMPlugin.register()
+
+        # Now ResourceHub can create LLM instances from configs
+        from hush.core.registry import get_hub
+        hub = get_hub()
+        llm = hub.llm("gpt-4")
+        ```
+    """
+
+    _registered = False
 
     @classmethod
-    def config_class(cls) -> Type[ResourceConfig]:
-        """Return LLMConfig as the config class."""
-        return LLMConfig
+    def register(cls):
+        """Register all LLM config classes and factory handler."""
+        if cls._registered:
+            return
+
+        # Register all config classes for deserialization
+        register_config_classes(
+            LLMConfig,
+            OpenAIConfig,
+            AzureConfig,
+            GeminiConfig,
+        )
+
+        # Register factory handler for creating instances
+        register_factory_handler(LLMConfig, LLMFactory.create)
+        register_factory_handler(OpenAIConfig, LLMFactory.create)
+        register_factory_handler(AzureConfig, LLMFactory.create)
+        register_factory_handler(GeminiConfig, LLMFactory.create)
+
+        cls._registered = True
 
     @classmethod
-    def create(cls, config: ResourceConfig) -> Any:
-        """Create LLM instance from config."""
-        if not isinstance(config, LLMConfig):
-            raise ValueError(f"Expected LLMConfig, got {type(config)}")
-        return LLMFactory.create(config)
+    def is_registered(cls) -> bool:
+        """Check if plugin has been registered."""
+        return cls._registered
 
-    @classmethod
-    def resource_type(cls) -> str:
-        """Return 'llm' as the resource type."""
-        return "llm"
 
-    @classmethod
-    def generate_key(cls, config: ResourceConfig) -> str:
-        """Generate key like 'llm:openai:gpt-4' or 'llm:gpt-4'."""
-        if not isinstance(config, LLMConfig):
-            return super().generate_key(config)
-
-        # Include provider type in key for clarity
-        if hasattr(config, 'api_type') and config.api_type:
-            # Extract the enum value if it's an enum
-            api_type = config.api_type.value if hasattr(config.api_type, 'value') else config.api_type
-            return f"llm:{api_type}:{config.model}"
-
-        return f"llm:{config.model}"
+# Auto-register on import
+LLMPlugin.register()

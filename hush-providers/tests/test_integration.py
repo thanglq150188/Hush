@@ -1,0 +1,164 @@
+"""Integration tests for hush-providers nodes working together."""
+
+import pytest
+from hush.core.nodes import GraphNode, START, END, PARENT
+from hush.core.states import StateSchema, MemoryState
+
+
+class TestNodeIntegration:
+    """Integration tests for nodes working together."""
+
+    def test_all_nodes_importable(self):
+        """Test all nodes can be imported from hush.providers."""
+        from hush.providers import (
+            LLMNode,
+            EmbeddingNode,
+            RerankNode,
+            PromptNode,
+            LLMChainNode,
+        )
+
+        assert LLMNode is not None
+        assert EmbeddingNode is not None
+        assert RerankNode is not None
+        assert PromptNode is not None
+        assert LLMChainNode is not None
+
+    def test_prompt_node_with_parent_inputs(self):
+        """Test PromptNode with PARENT reference for inputs."""
+        from hush.providers.nodes import PromptNode
+
+        with GraphNode(name="test_graph") as graph:
+            prompt = PromptNode(
+                name="prompt",
+                user_prompt="Query: {query}",
+                inputs=PARENT,
+                outputs=PARENT
+            )
+            START >> prompt >> END
+
+        graph.build()
+
+        # PARENT inputs should be resolved
+        assert "query" in graph.inputs
+
+    @pytest.mark.asyncio
+    async def test_prompt_node_execution(self):
+        """Test PromptNode standalone execution."""
+        from hush.providers.nodes import PromptNode
+
+        prompt = PromptNode(
+            name="prompt",
+            system_prompt="You are helpful.",
+            user_prompt="Task: {task}"
+        )
+
+        schema = StateSchema(node=prompt)
+        state = MemoryState(schema, inputs={"task": "write code"})
+
+        result = await prompt.run(state)
+
+        assert "messages" in result
+        assert len(result["messages"]) == 2
+        assert result["messages"][1]["content"] == "Task: write code"
+
+
+class TestPluginAutoRegistration:
+    """Tests for plugin auto-registration."""
+
+    def test_plugins_are_registered(self):
+        """Test that plugins auto-register on import."""
+        from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
+
+        assert LLMPlugin.is_registered()
+        assert EmbeddingPlugin.is_registered()
+        assert RerankPlugin.is_registered()
+
+    def test_config_classes_registered(self):
+        """Test that config classes are registered in CLASS_NAME_MAP."""
+        from hush.core.registry import CLASS_NAME_MAP
+
+        # Import plugins to trigger registration
+        from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
+
+        assert "OpenAIConfig" in CLASS_NAME_MAP
+        assert "AzureConfig" in CLASS_NAME_MAP
+        assert "GeminiConfig" in CLASS_NAME_MAP
+        assert "EmbeddingConfig" in CLASS_NAME_MAP
+        assert "RerankingConfig" in CLASS_NAME_MAP
+
+
+class TestResourceHubIntegration:
+    """Tests for ResourceHub integration."""
+
+    def test_hub_loads_from_yaml(self, hub):
+        """Test ResourceHub loads configs from YAML."""
+        # Hub should have some keys
+        keys = hub.keys()
+        print(f"Available resources: {keys}")
+
+    def test_hub_has_llm_config(self, hub):
+        """Test hub has LLM configurations."""
+        if hub.has("llm:claude-4-sonnet"):
+            config = hub.get_config("llm:claude-4-sonnet")
+            assert config is not None
+            print(f"LLM config: {config}")
+
+    def test_hub_has_embedding_config(self, hub):
+        """Test hub has embedding configurations."""
+        if hub.has("embedding:bge-m3"):
+            config = hub.get_config("embedding:bge-m3")
+            assert config is not None
+            print(f"Embedding config: {config}")
+
+    def test_hub_has_reranking_config(self, hub):
+        """Test hub has reranking configurations."""
+        if hub.has("reranking:bge-m3"):
+            config = hub.get_config("reranking:bge-m3")
+            assert config is not None
+            print(f"Reranking config: {config}")
+
+
+class TestEndToEndPipeline:
+    """End-to-end pipeline tests."""
+
+    @pytest.mark.asyncio
+    async def test_prompt_to_llm_pipeline(self, hub):
+        """Test a pipeline from PromptNode to LLMNode."""
+        from hush.providers.nodes import PromptNode, LLMNode
+
+        if not hub.has("llm:claude-4-sonnet"):
+            pytest.skip("llm:claude-4-sonnet not configured")
+
+        # Create a graph with Prompt -> LLM
+        with GraphNode(name="chat_pipeline") as pipeline:
+            prompt = PromptNode(
+                name="prompt",
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Answer briefly: {question}",
+                inputs=PARENT,
+                outputs={"messages": PARENT["messages"]}
+            )
+
+            llm = LLMNode(
+                name="llm",
+                resource_key="claude-4-sonnet",
+                inputs={"messages": prompt["messages"]},
+                outputs=PARENT
+            )
+
+            START >> prompt >> llm >> END
+
+        pipeline.build()
+
+        schema = StateSchema(node=pipeline)
+        state = MemoryState(schema, inputs={"question": "What is 2+2?"})
+
+        result = await pipeline.run(state)
+
+        assert "content" in result
+        print(f"Pipeline result: {result['content']}")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

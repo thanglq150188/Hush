@@ -1,14 +1,14 @@
 """Embedding Node for hush-providers.
 
 This module provides EmbeddingNode that uses ResourceHub to access embedding resources.
-It matches the original beeflow implementation using resource_key.
+Follows hush-core design patterns with Param-based schema.
 """
 
 from typing import Dict, Any, Optional, List, Union
 
-from hush.core import BaseNode, WorkflowState
-from hush.core.schema import ParamSet
+from hush.core.nodes import BaseNode
 from hush.core.configs import NodeType
+from hush.core.utils.common import Param
 from hush.core.registry import ResourceHub, get_hub
 
 
@@ -19,69 +19,72 @@ class EmbeddingNode(BaseNode):
 
     Example:
         ```python
-        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, RESOURCE_HUB
-        from hush.providers import EmbeddingNode  # Plugin auto-registers!
-        from hush.providers.embeddings.config import EmbeddingConfig
+        from hush.core import GraphNode, START, END, PARENT
+        from hush.providers import EmbeddingNode
 
-        # Register config (optional - can also use resources.yaml)
-        config = EmbeddingConfig(api_type="hf", model="BAAI/bge-m3", dimensions=1024)
-        RESOURCE_HUB.register(config, registry_key="embedding:bge-m3", persist=False)
-
-        # Create workflow
-        with WorkflowEngine(name="embed") as workflow:
+        with GraphNode(name="embed") as workflow:
             embed = EmbeddingNode(
                 name="embed",
-                resource_key="bge-m3",  # Uses global RESOURCE_HUB
-                inputs={"texts": INPUT},
-                outputs={"embeddings": OUTPUT}
+                resource_key="bge-m3",
+                inputs={"texts": PARENT["texts"]},
+                outputs=PARENT
             )
             START >> embed >> END
 
-        workflow.compile()
-        result = await workflow.run(inputs={"texts": ["Hello world", "How are you?"]})
+        workflow.build()
         ```
     """
 
-    __slots__ = ['resource_key']
+    __slots__ = ['resource_key', 'backend']
 
     type: NodeType = "embedding"
-
-    input_schema: ParamSet = (
-        ParamSet.new()
-            .var("texts: Union[str, List[str]]", required=True)
-            .build()
-    )
-
-    output_schema: ParamSet = (
-        ParamSet.new()
-            .var("embeddings: List[List[float]]", required=True)
-            .build()
-    )
 
     def __init__(
         self,
         resource_key: Optional[str] = None,
+        inputs: Dict[str, Any] = None,
+        outputs: Dict[str, Any] = None,
         **kwargs
     ):
         """Initialize EmbeddingNode.
 
         Args:
             resource_key: Resource key for embedding model in ResourceHub (e.g., "bge-m3")
+            inputs: Input variable mappings
+            outputs: Output variable mappings
             **kwargs: Additional keyword arguments for BaseNode
         """
         super().__init__(**kwargs)
 
         self.resource_key = resource_key
 
-        # Try to get hub (prefers singleton for backwards compatibility, then global)
+        # Define input/output schema
+        input_schema = {
+            "texts": Param(type=list, required=True),
+        }
+
+        output_schema = {
+            "embeddings": Param(type=list, required=True),
+        }
+
+        # Merge with user-provided
+        self.inputs = self._merge_params(input_schema, inputs)
+        self.outputs = self._merge_params(output_schema, outputs)
+
+        # Get embedder from ResourceHub
         try:
             hub = ResourceHub.instance()
         except RuntimeError:
-            # Fall back to global hub if no singleton set
             hub = get_hub()
 
-        embedder = hub.embedding(self.resource_key)
-        self.core = embedder.run
+        self.backend = hub.embedding(self.resource_key)
+        self.core = self._process
+
+    async def _process(self, texts: Union[str, List[str]]) -> Dict[str, Any]:
+        """Process texts and return embeddings."""
+        result = await self.backend.run(texts)
+        # backend.run() returns {"embeddings": [[...], [...], ...]}
+        return result
 
     def specific_metadata(self) -> Dict[str, Any]:
         """Return embedding-specific metadata dictionary."""

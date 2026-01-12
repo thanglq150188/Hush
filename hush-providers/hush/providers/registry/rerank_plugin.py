@@ -1,28 +1,56 @@
-"""Reranking resource plugin for ResourceHub."""
+"""Reranking resource plugin for ResourceHub.
 
-from typing import Any, Type
+Auto-registers reranking config classes and factory handlers with hush-core.
+"""
 
-from hush.core.registry import ResourcePlugin, ResourceConfig
+from hush.core.registry import (
+    register_config_class,
+    register_factory_handler,
+)
 from hush.providers.rerankers.config import RerankingConfig
 from hush.providers.rerankers.factory import RerankingFactory
 
 
-class RerankPlugin(ResourcePlugin):
-    """Plugin for reranking resources."""
+class RerankPlugin:
+    """Plugin for auto-registering reranking resources with ResourceHub.
+
+    Call RerankPlugin.register() to register all reranking config classes and factory handlers.
+
+    Example:
+        ```python
+        from hush.providers.registry import RerankPlugin
+
+        # Register once at startup
+        RerankPlugin.register()
+
+        # Now ResourceHub can create reranker instances from configs
+        from hush.core.registry import get_hub
+        hub = get_hub()
+        reranker = hub.reranker("bge-m3")
+        ```
+    """
+
+    _registered = False
 
     @classmethod
-    def config_class(cls) -> Type[ResourceConfig]:
-        """Return RerankingConfig as the config class."""
-        return RerankingConfig
+    def register(cls):
+        """Register reranking config class and factory handler."""
+        if cls._registered:
+            return
+
+        # Register config class for deserialization
+        register_config_class(RerankingConfig)
+
+        # Register factory handler for creating instances
+        register_factory_handler(RerankingConfig, RerankingFactory.create)
+
+        cls._registered = True
 
     @classmethod
-    def create(cls, config: ResourceConfig) -> Any:
-        """Create reranker instance from config."""
-        if not isinstance(config, RerankingConfig):
-            raise ValueError(f"Expected RerankingConfig, got {type(config)}")
-        return RerankingFactory.create(config)
+    def is_registered(cls) -> bool:
+        """Check if plugin has been registered."""
+        return cls._registered
 
-    @classmethod
-    def resource_type(cls) -> str:
-        """Return 'reranking' as the resource type."""
-        return "reranking"
+
+# Auto-register on import
+RerankPlugin.register()
