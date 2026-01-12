@@ -5,19 +5,18 @@ A powerful async workflow orchestration framework.
 
 Example:
     ```python
-    from hush.core import WorkflowEngine, START, END
+    from hush.core import Hush, START, END
 
-    with WorkflowEngine(name="my-workflow") as workflow:
+    with Hush("my-workflow") as flow:
         # Define your nodes and flow here
         START >> your_node >> END
 
-    workflow.compile()
-    result = await workflow.run(inputs={"key": "value"})
+    flow.compile()
+    result = await flow.run(inputs={"key": "value"})
     ```
 """
 
-# TODO: Uncomment when workflow.py is refactored
-# from hush.core.workflow import WorkflowEngine
+from hush.core.workflow import Hush
 from hush.core.nodes import (
     BaseNode,
     DummyNode,
@@ -62,12 +61,20 @@ from hush.core.registry import (
     YamlConfigStorage,
     JsonConfigStorage,
 )
+from hush.core.tracers import (
+    BaseTracer,
+    register_tracer,
+    get_registered_tracers,
+    MEDIA_KEY,
+    MediaAttachment,
+    serialize_media_attachments,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
     # Main engine
-    # "WorkflowEngine",  # TODO: Uncomment when refactored
+    "Hush",
     # Nodes
     "BaseNode",
     "DummyNode",
@@ -112,4 +119,11 @@ __all__ = [
     "ConfigStorage",
     "YamlConfigStorage",
     "JsonConfigStorage",
+    # Tracers
+    "BaseTracer",
+    "register_tracer",
+    "get_registered_tracers",
+    "MEDIA_KEY",
+    "MediaAttachment",
+    "serialize_media_attachments",
 ]

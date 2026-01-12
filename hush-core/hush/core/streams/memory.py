@@ -158,6 +158,59 @@ class InMemoryStreamService(BaseStreamingService):
                     channel_name in self._queues[session_id][request_id]):
                     del self._queues[session_id][request_id][channel_name]
 
+    async def end_request(
+        self,
+        request_id: str,
+        session_id: Optional[str] = None
+    ) -> None:
+        """Signal that all channels for this request are complete.
+
+        Sends END signal to all active channels for the given request.
+
+        Args:
+            request_id: Request identifier
+            session_id: Session identifier (default "default")
+        """
+        if not request_id:
+            raise ValueError("request_id cannot be None or empty")
+
+        session_id = session_id or self.DEFAULT_SESSION
+
+        try:
+            async with self._lock:
+                if session_id in self._queues and request_id in self._queues[session_id]:
+                    # Send END to all channels for this request
+                    channels = list(self._queues[session_id][request_id].keys())
+                    for channel_name in channels:
+                        queue = self._queues[session_id][request_id][channel_name]
+                        await queue.put("__END__")
+                    LOGGER.debug(f"Sent END signal to all channels for {session_id}/{request_id}")
+
+        except Exception as e:
+            LOGGER.error(f"Error ending request {session_id}/{request_id}: {e}")
+            raise
+
+    async def get_channels(
+        self,
+        request_id: str,
+        session_id: Optional[str] = None
+    ) -> AsyncGenerator[str, None]:
+        """Get all channel names for a request.
+
+        Args:
+            request_id: Request identifier
+            session_id: Session identifier (default "default")
+
+        Yields:
+            Channel names
+        """
+        session_id = session_id or self.DEFAULT_SESSION
+
+        async with self._lock:
+            if session_id in self._queues and request_id in self._queues[session_id]:
+                for channel_name in self._queues[session_id][request_id].keys():
+                    yield channel_name
+
     def close(self) -> None:
         """Dọn dẹp resource."""
         try:

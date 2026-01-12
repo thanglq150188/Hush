@@ -1,7 +1,4 @@
-"""Trace models for observability.
-
-Based on legacy beegen trace models but updated for hush-core.
-"""
+"""Trace models for observability."""
 
 from collections.abc import Mapping
 from datetime import datetime
