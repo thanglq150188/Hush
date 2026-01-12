@@ -1,14 +1,14 @@
 """Rerank Node for hush-providers.
 
 This module provides RerankNode that uses ResourceHub to access reranker resources.
-It matches the original beeflow implementation using resource_key.
+Follows hush-core design patterns with Param-based schema.
 """
 
 from typing import Dict, Any, Optional, List
 
-from hush.core import BaseNode, WorkflowState
-from hush.core.schema import ParamSet
+from hush.core.nodes import BaseNode
 from hush.core.configs import NodeType
+from hush.core.utils.common import Param
 from hush.core.registry import ResourceHub, get_hub
 
 
@@ -19,30 +19,19 @@ class RerankNode(BaseNode):
 
     Example:
         ```python
-        from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT, RESOURCE_HUB
-        from hush.providers import RerankNode  # Plugin auto-registers!
-        from hush.providers.rerankers.config import RerankingConfig
+        from hush.core import GraphNode, START, END, PARENT
+        from hush.providers import RerankNode
 
-        # Register config (optional - can also use resources.yaml)
-        config = RerankingConfig(api_type="hf", model="BAAI/bge-reranker-v2-m3")
-        RESOURCE_HUB.register(config, registry_key="reranking:bge-m3", persist=False)
-
-        # Create workflow
-        with WorkflowEngine(name="rerank") as workflow:
+        with GraphNode(name="rerank") as workflow:
             rerank = RerankNode(
                 name="rerank",
-                resource_key="bge-m3",  # Uses global RESOURCE_HUB
-                inputs={"query": INPUT, "documents": INPUT},
-                outputs={"reranks": OUTPUT}
+                resource_key="bge-m3",
+                inputs={"query": PARENT["query"], "documents": PARENT["documents"]},
+                outputs=PARENT
             )
             START >> rerank >> END
 
-        workflow.compile()
-        result = await workflow.run(inputs={
-            "query": "search query",
-            "documents": ["doc1", "doc2", "doc3"],
-            "top_k": 2
-        })
+        workflow.build()
         ```
     """
 
@@ -50,41 +39,45 @@ class RerankNode(BaseNode):
 
     type: NodeType = "rerank"
 
-    input_schema: ParamSet = (
-        ParamSet.new()
-            .var("query: str", required=True)
-            .var("documents: List", required=True)
-            .var("top_k: int = -1")
-            .var("threshold: float = 0.0")
-            .build()
-    )
-
-    output_schema: ParamSet = (
-        ParamSet.new()
-            .var("reranks: List[Dict]")
-            .build()
-    )
-
     def __init__(
         self,
         resource_key: Optional[str] = None,
+        inputs: Dict[str, Any] = None,
+        outputs: Dict[str, Any] = None,
         **kwargs
     ):
         """Initialize RerankNode.
 
         Args:
             resource_key: Resource key for reranker in ResourceHub (e.g., "bge-m3")
+            inputs: Input variable mappings
+            outputs: Output variable mappings
             **kwargs: Additional keyword arguments for BaseNode
         """
         super().__init__(**kwargs)
 
         self.resource_key = resource_key
 
-        # Try to get hub (prefers singleton for backwards compatibility, then global)
+        # Define input/output schema
+        input_schema = {
+            "query": Param(type=str, required=True),
+            "documents": Param(type=list, required=True),
+            "top_k": Param(type=int, default=-1),
+            "threshold": Param(type=float, default=0.0),
+        }
+
+        output_schema = {
+            "reranks": Param(type=list, required=True),
+        }
+
+        # Merge with user-provided
+        self.inputs = self._merge_params(input_schema, inputs)
+        self.outputs = self._merge_params(output_schema, outputs)
+
+        # Get reranker from ResourceHub
         try:
             hub = ResourceHub.instance()
         except RuntimeError:
-            # Fall back to global hub if no singleton set
             hub = get_hub()
 
         self.backend = hub.reranker(self.resource_key)

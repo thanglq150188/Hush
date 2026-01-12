@@ -1,28 +1,56 @@
-"""Embedding resource plugin for ResourceHub."""
+"""Embedding resource plugin for ResourceHub.
 
-from typing import Any, Type
+Auto-registers embedding config classes and factory handlers with hush-core.
+"""
 
-from hush.core.registry import ResourcePlugin, ResourceConfig
+from hush.core.registry import (
+    register_config_class,
+    register_factory_handler,
+)
 from hush.providers.embeddings.config import EmbeddingConfig
 from hush.providers.embeddings.factory import EmbeddingFactory
 
 
-class EmbeddingPlugin(ResourcePlugin):
-    """Plugin for embedding resources."""
+class EmbeddingPlugin:
+    """Plugin for auto-registering embedding resources with ResourceHub.
+
+    Call EmbeddingPlugin.register() to register all embedding config classes and factory handlers.
+
+    Example:
+        ```python
+        from hush.providers.registry import EmbeddingPlugin
+
+        # Register once at startup
+        EmbeddingPlugin.register()
+
+        # Now ResourceHub can create embedding instances from configs
+        from hush.core.registry import get_hub
+        hub = get_hub()
+        embedder = hub.embedding("bge-m3")
+        ```
+    """
+
+    _registered = False
 
     @classmethod
-    def config_class(cls) -> Type[ResourceConfig]:
-        """Return EmbeddingConfig as the config class."""
-        return EmbeddingConfig
+    def register(cls):
+        """Register embedding config class and factory handler."""
+        if cls._registered:
+            return
+
+        # Register config class for deserialization
+        register_config_class(EmbeddingConfig)
+
+        # Register factory handler for creating instances
+        register_factory_handler(EmbeddingConfig, EmbeddingFactory.create)
+
+        cls._registered = True
 
     @classmethod
-    def create(cls, config: ResourceConfig) -> Any:
-        """Create embedding instance from config."""
-        if not isinstance(config, EmbeddingConfig):
-            raise ValueError(f"Expected EmbeddingConfig, got {type(config)}")
-        return EmbeddingFactory.create(config)
+    def is_registered(cls) -> bool:
+        """Check if plugin has been registered."""
+        return cls._registered
 
-    @classmethod
-    def resource_type(cls) -> str:
-        """Return 'embedding' as the resource type."""
-        return "embedding"
+
+# Auto-register on import
+EmbeddingPlugin.register()

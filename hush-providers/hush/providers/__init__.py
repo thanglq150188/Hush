@@ -53,6 +53,8 @@ from hush.providers.nodes import (
     LLMNode,
     EmbeddingNode,
     RerankNode,
+    PromptNode,
+    LLMChainNode,
 )
 
 # Registry plugin exports
@@ -99,6 +101,8 @@ __all__ = [
     "LLMNode",
     "EmbeddingNode",
     "RerankNode",
+    "PromptNode",
+    "LLMChainNode",
     # Registry Plugins
     "LLMPlugin",
     "EmbeddingPlugin",
