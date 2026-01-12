@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 import requests
-from beegen.loggings import LOGGER
+from hush.core.loggings import LOGGER
 
 
 class GeminiOpenAISDKModel(OpenAISDKModel):
@@ -312,10 +312,14 @@ class GeminiOpenAISDKModel(OpenAISDKModel):
 
 async def main():
     """Test the Gemini OpenAI SDK Model"""
+    import os
 
-    from beegen.const import BEEGEN_ROOT
-
-    config = GeminiConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/gemini_2.5_flash.yaml")
+    config = GeminiConfig(
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        model="gemini-2.0-flash",
+        service_account_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service-account.json")
+    )
 
     model = GeminiOpenAISDKModel(config=config)
 
@@ -327,10 +331,16 @@ async def main():
 
 
 async def test_tool_calling():
+    import os
     import json
-    from beegen.const import BEEGEN_ROOT
 
-    model = GeminiOpenAISDKModel(GeminiConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/gemini_2.5_flash.yaml"))
+    config = GeminiConfig(
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        model="gemini-2.0-flash",
+        service_account_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service-account.json")
+    )
+    model = GeminiOpenAISDKModel(config)
     # Define some example tools
     weather_tool = {
         "type": "function",
@@ -395,37 +405,42 @@ async def test_tool_calling():
 
 
 async def test_multimodal_image():
-    from beegen.const import BEEGEN_ROOT
+    import os
 
-    model = GeminiOpenAISDKModel(GeminiConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/gemini_2.5_flash.yaml"))
+    config = GeminiConfig(
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        model="gemini-2.0-flash",
+        service_account_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service-account.json")
+    )
+    model = GeminiOpenAISDKModel(config)
 
-    # Multimodal example with tools
-    print("\nMultimodal example with tools:")
+    # Multimodal example
+    print("\nMultimodal example:")
     completion = await model.generate(
         messages=[{
             "role": "user",
             "content": [
                 {"type": "text", "text": "What can you see in this image?"},
-                {"type": "image_url", "image_url": {"url": r"C:\Users\thanglq2\Downloads\deepseek.png"}}
+                {"type": "image_url", "image_url": {"url": "https://example.com/sample-image.png"}}
             ]
         }],
-        # tools=tools
     )
     print(completion)
 
-    print("\nMultimodal example (stream) with tools:")
+    print("\nMultimodal example (stream):")
     stream_response = model.stream(
         messages=[{
             "role": "user",
             "content": [
                 {"type": "text", "text": "What can you see in this image?"},
-                {"type": "image_url", "image_url": {"url": r"C:\Users\thanglq2\Downloads\deepseek.png"}}
+                {"type": "image_url", "image_url": {"url": "https://example.com/sample-image.png"}}
             ]
         }],
-        # tools=tools
     )
     async for chunk in stream_response:
         print(chunk)
+
 
 if __name__ == "__main__":
     import asyncio

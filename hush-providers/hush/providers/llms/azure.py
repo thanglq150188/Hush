@@ -4,12 +4,6 @@ from .openai import OpenAISDKModel
 from openai.types.chat import ChatCompletionMessageParam
 from typing import List, Dict, Any
 import httpx
-import os
-
-
-# Set proxy bypass for internal services
-# os.environ['NO_PROXY'] = 'llm-gateway-dev.mbbank.com.vn,10.1.47.71,10.1.13.168'
-os.environ['NO_PROXY'] = 'llm-gateway-dev.mbbank.com.vn'
 
 
 class AzureSDKModel(OpenAISDKModel):
@@ -114,23 +108,31 @@ class AzureSDKModel(OpenAISDKModel):
 
 
 async def main():
-    from beegen.const import BEEGEN_ROOT
-    from beegen.registry.resource_hub import ResourceHub
+    import os
 
-    # model = ModelRegistry.self().llm("cua-gpt-4.1")
-
-    config = LLMConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/azure.yaml")
+    config = AzureConfig(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY", "your-api-key"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://your-resource.openai.azure.com"),
+        api_version="2024-02-15-preview",
+        model="gpt-4o"
+    )
     model = AzureSDKModel(config)
 
-    async for chunk in model.stream(messages=[{"role": "user", "content": "xin chào"}]):
+    async for chunk in model.stream(messages=[{"role": "user", "content": "Hello!"}]):
         print(chunk)
 
 
 async def test_tools_calling():
-    from beegen.const import BEEGEN_ROOT
+    import os
     import json
 
-    model = AzureSDKModel(AzureConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/azure.yaml"))
+    config = AzureConfig(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY", "your-api-key"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://your-resource.openai.azure.com"),
+        api_version="2024-02-15-preview",
+        model="gpt-4o"
+    )
+    model = AzureSDKModel(config)
 
     # Define some example tools
     weather_tool = {
@@ -190,38 +192,42 @@ async def test_tools_calling():
 
 
 async def test_multimodal_image():
-    from beegen.const import BEEGEN_ROOT
-    import json
+    import os
 
-    model = AzureSDKModel(AzureConfig.from_yaml_file(BEEGEN_ROOT / "config/llms/azure.yaml"))
+    config = AzureConfig(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY", "your-api-key"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://your-resource.openai.azure.com"),
+        api_version="2024-02-15-preview",
+        model="gpt-4o"
+    )
+    model = AzureSDKModel(config)
 
-    # Multimodal example with tools
-    print("\nMultimodal example with tools:")
+    # Multimodal example
+    print("\nMultimodal example:")
     completion = await model.generate(
         messages=[{
             "role": "user",
             "content": [
                 {"type": "text", "text": "What can you see in this image?"},
-                {"type": "image_url", "image_url": {"url": r"C:\Users\thanglq2\Downloads\deepseek.png"}}
+                {"type": "image_url", "image_url": {"url": "https://example.com/sample-image.png"}}
             ]
         }],
-        # tools=tools
     )
     print(completion)
 
-    print("\nMultimodal example (stream) with tools:")
+    print("\nMultimodal example (stream):")
     stream_response = model.stream(
         messages=[{
             "role": "user",
             "content": [
                 {"type": "text", "text": "What can you see in this image?"},
-                {"type": "image_url", "image_url": {"url": r"C:\Users\thanglq2\Downloads\deepseek.png"}}
+                {"type": "image_url", "image_url": {"url": "https://example.com/sample-image.png"}}
             ]
         }],
-        # tools=tools
     )
     async for chunk in stream_response:
         print(chunk)
+
 
 if __name__ == "__main__":
     import asyncio

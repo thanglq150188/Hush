@@ -40,8 +40,8 @@ async def main():
         config=EmbeddingConfig.default()
     )
 
-    # Test with Vietnamese text
-    test_text = "tổng giám đốc của MB là ai ?"
+    # Test with sample text
+    test_text = "What is machine learning and how does it work?"
     vectors = await embed.run(test_text)
     print(f"Generated embedding vectors: {vectors}")
 

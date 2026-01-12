@@ -141,14 +141,16 @@ async def response_to_text(response: aiohttp.ClientResponse) -> AsyncIterator[st
 
 # Usage example
 async def main():
-    url = "http://10.1.47.71:30042/v1/chat/completions"
+    import os
+
+    url = os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
 
     payload = json.dumps({
-        "model": "model/beegen-model-v1",
+        "model": "gpt-4o",
         "messages": [
             {
             "role": "user",
-            "content": "xin chào"
+            "content": "Hello!"
             }
         ],
         "temperature": 0.7,
@@ -157,11 +159,10 @@ async def main():
     })
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer mb123456789',
-        'Cookie': 'BIGipServer~DEV_ACI~dgx_dev_llm-large_pool_30042=rd8o00000000000000000000ffff0ad77a10o30042'
+        'Authorization': f'Bearer {os.getenv("OPENAI_API_KEY", "your-api-key")}'
     }
 
-            # Configure timeouts
+    # Configure timeouts
     timeout = aiohttp.ClientTimeout(
         total=None,  # No total timeout
         connect=5.0,  # Connection timeout
@@ -184,16 +185,17 @@ async def main():
 
 
 async def simple_test():
+    import os
+
     # API configuration
-    url = "http://10.1.47.71:30042/v1/chat/completions"
+    url = os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer mb123456789',
-        'Cookie': 'BIGipServer~DEV_ACI~dgx_dev_llm-large_pool_30042=rd8o00000000000000000000ffff0ad77a10o30042'
+        'Authorization': f'Bearer {os.getenv("OPENAI_API_KEY", "your-api-key")}'
     }
     payload = {
-        "model": "model/beegen-model-v1",
-        "messages": [{"role": "user", "content": "xin chào"}],
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello!"}],
         "temperature": 0.7,
         "max_tokens": 500,
         "stream": True
@@ -207,7 +209,7 @@ async def simple_test():
                     yield line.decode('utf-8')
 
             # Process with LLMGenerator
-            async for chunk in LLMGenerator.process(text_stream(), "model/beegen-model-v1"):
+            async for chunk in LLMGenerator.process(text_stream(), "gpt-4o"):
                 if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                     print(chunk.choices[0].delta.content, end="", flush=True)
     print()  # Final newline
