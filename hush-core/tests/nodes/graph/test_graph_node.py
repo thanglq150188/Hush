@@ -1293,6 +1293,710 @@ class TestOutputMappingSyntax:
 
 
 # ============================================================
+# Test 12: Node-to-Node Output Mapping (node1[...] << node2[...])
+# ============================================================
+
+class TestNodeToNodeOutputMapping:
+    """Test output mapping syntax từ node đến node (không phải PARENT).
+
+    Cú pháp:
+    - node1["x"] << node2["y"]  → node2's "y" output maps to node1's "x" input
+    - Tương đương với: node2.outputs = {"y": node1["x"]}
+    """
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_single_output(self):
+        """node1['x'] << node2['y'] maps node2's y output to node1's x input."""
+        with GraphNode(name="node_to_node") as graph:
+            # node1 produces a value
+            node1 = CodeNode(
+                name="producer",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": PARENT["x"]}
+            )
+            # node2 receives from node1 via << syntax
+            node2 = CodeNode(
+                name="consumer",
+                code_fn=lambda value: {"final": value + 100},
+                inputs={}  # inputs will be set via << syntax
+            )
+            # Map node1's "result" to node2's "value" input
+            node2["value"] << node1["result"]
+
+            # node3 outputs to PARENT
+            node3 = CodeNode(
+                name="final",
+                code_fn=lambda v: {"output": v * 3},
+                inputs={"v": node2["final"]},
+                outputs=PARENT
+            )
+
+            START >> node1 >> node2 >> node3 >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        # (5 * 2) = 10 -> (10 + 100) = 110 -> (110 * 3) = 330
+        assert result["output"] == 330
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_multiple_outputs(self):
+        """Multiple node-to-node output mappings."""
+        with GraphNode(name="multi_node_mapping") as graph:
+            # Producer node creates multiple outputs
+            producer = CodeNode(
+                name="producer",
+                code_fn=lambda x: {"a": x + 1, "b": x + 2},
+                inputs={"x": PARENT["x"]}
+            )
+            # Consumer receives both outputs via << syntax
+            consumer = CodeNode(
+                name="consumer",
+                code_fn=lambda val_a, val_b: {"sum": val_a + val_b},
+                inputs={},
+                outputs=PARENT
+            )
+            # Map producer's outputs to consumer's inputs
+            consumer["val_a"] << producer["a"]
+            consumer["val_b"] << producer["b"]
+
+            START >> producer >> consumer >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 10})
+        result = await graph.run(state)
+
+        # (10+1) + (10+2) = 11 + 12 = 23
+        assert result["sum"] == 23
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_ellipsis_forward(self):
+        """node1[...] << node2[...] forwards all outputs to node1's inputs."""
+        with GraphNode(name="node_ellipsis") as graph:
+            producer = CodeNode(
+                name="producer",
+                code_fn=lambda x: {"double": x * 2, "triple": x * 3},
+                inputs={"x": PARENT["x"]}
+            )
+            consumer = CodeNode(
+                name="consumer",
+                code_fn=lambda double, triple: {"result": double + triple},
+                inputs={},
+                outputs=PARENT
+            )
+            # Forward all producer outputs to consumer inputs
+            consumer[...] << producer[...]
+
+            START >> producer >> consumer >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        # (5*2) + (5*3) = 10 + 15 = 25
+        assert result["result"] == 25
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_chain(self):
+        """Chain of node-to-node mappings: A -> B -> C using << syntax."""
+        with GraphNode(name="chain_mapping") as graph:
+            node_a = CodeNode(
+                name="node_a",
+                code_fn=lambda x: {"value": x + 10},
+                inputs={"x": PARENT["x"]}
+            )
+            node_b = CodeNode(
+                name="node_b",
+                code_fn=lambda inp: {"value": inp * 2},
+                inputs={}
+            )
+            node_c = CodeNode(
+                name="node_c",
+                code_fn=lambda inp: {"result": inp - 5},
+                inputs={},
+                outputs=PARENT
+            )
+
+            # Chain mappings using << syntax
+            node_b["inp"] << node_a["value"]
+            node_c["inp"] << node_b["value"]
+
+            START >> node_a >> node_b >> node_c >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        # (5 + 10) = 15 -> (15 * 2) = 30 -> (30 - 5) = 25
+        assert result["result"] == 25
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_mixed_with_parent(self):
+        """Mix node-to-node and PARENT mappings."""
+        with GraphNode(name="mixed_mapping") as graph:
+            producer = CodeNode(
+                name="producer",
+                code_fn=lambda x: {"a": x * 2, "b": x * 3},
+                inputs={"x": PARENT["x"]}
+            )
+            consumer = CodeNode(
+                name="consumer",
+                code_fn=lambda val: {"processed": val + 100},
+                inputs={}
+            )
+            # Map producer["a"] to consumer input
+            consumer["val"] << producer["a"]
+            # Map producer["b"] directly to PARENT
+            PARENT["direct_b"] << producer["b"]
+            # Map consumer output to PARENT
+            PARENT["processed"] << consumer["processed"]
+
+            START >> producer >> consumer >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 5})
+        result = await graph.run(state)
+
+        assert result["direct_b"] == 15  # 5 * 3
+        assert result["processed"] == 110  # (5 * 2) + 100
+
+    @pytest.mark.asyncio
+    async def test_node_to_node_parallel_merge(self):
+        """Parallel nodes output to a merge node via << syntax."""
+        with GraphNode(name="parallel_merge_mapping") as graph:
+            branch_a = CodeNode(
+                name="branch_a",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": PARENT["x"]}
+            )
+            branch_b = CodeNode(
+                name="branch_b",
+                code_fn=lambda x: {"result": x * 3},
+                inputs={"x": PARENT["x"]}
+            )
+            merge = CodeNode(
+                name="merge",
+                code_fn=lambda a, b: {"total": a + b},
+                inputs={},
+                outputs=PARENT
+            )
+
+            # Map parallel branches to merge inputs via << syntax
+            merge["a"] << branch_a["result"]
+            merge["b"] << branch_b["result"]
+
+            START >> [branch_a, branch_b] >> merge >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"x": 10})
+        result = await graph.run(state)
+
+        # (10 * 2) + (10 * 3) = 50
+        assert result["total"] == 50
+
+
+# ============================================================
+# Test 13: Complex Graph with All Node Types
+# ============================================================
+
+class TestComplexGraphWithAllNodeTypes:
+    """Test complex graphs combining BranchNode, ForLoopNode, WhileLoopNode, and CodeNode.
+
+    These tests demonstrate real-world scenarios where multiple node types
+    work together in a single workflow using new syntax:
+    - Branch("name").if_(condition, target).otherwise(default)
+    - node1["key"] << node2["key"] for output mapping
+    """
+
+    @pytest.mark.asyncio
+    async def test_forloop_with_new_syntax(self):
+        """Test ForLoopNode using << syntax inside and to PARENT."""
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def double_number(value: int):
+            return {"result": value * 2}
+
+        with GraphNode(name="forloop_graph") as graph:
+            with ForLoopNode(
+                name="double_loop",
+                inputs={"value": Each(PARENT["data"])}
+            ) as loop:
+                node = double_number(
+                    inputs={"value": PARENT["value"]}
+                )
+                PARENT[...] << node[...]
+                START >> node >> END
+
+            # Map loop result to graph output
+            PARENT["final_result"] << loop["result"]
+            START >> loop >> END
+
+        graph.build()
+
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={"data": [1, 2, 3, 4, 5]})
+        result = await graph.run(state)
+        state.show()
+        assert result["final_result"] == [2, 4, 6, 8, 10]
+
+    @pytest.mark.asyncio
+    async def test_while_loop_with_branch_inside(self):
+        """WhileLoop with BranchNode inside for conditional processing.
+
+        Loop increments counter. Inside loop, branch decides:
+        - If counter is even: add 10
+        - If counter is odd: add 5
+        Stop when total >= 50
+        """
+        from hush.core.nodes.flow.branch_node import Branch
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+
+        @code_node
+        def increment_counter(counter: int):
+            return {"new_counter": counter + 1}
+
+        @code_node
+        def add_ten(total: int):
+            return {"new_total": total + 10}
+
+        @code_node
+        def add_five(total: int):
+            return {"new_total": total + 5}
+
+        @code_node
+        def merge_totals(even_total=None, odd_total=None):
+            # One branch executes, the other returns None
+            return {"merged_total": even_total if even_total is not None else odd_total}
+
+        with GraphNode(name="while_branch_graph") as graph:
+            with WhileLoopNode(
+                name="main_loop",
+                inputs={"counter": 0, "total": 0},
+                stop_condition="total >= 50",
+                max_iterations=20
+            ) as loop:
+                # Increment counter first
+                inc = increment_counter(
+                    inputs={"counter": PARENT["counter"]}
+                )
+                PARENT["counter"] << inc["new_counter"]
+
+                # Branch based on counter parity using new fluent syntax
+                branch = (Branch("parity_check")
+                    .if_(inc["new_counter"].apply(lambda x: x % 2 == 0), "add_ten")
+                    .otherwise("add_five"))
+
+                # Even path: add 10
+                even_node = add_ten(
+                    inputs={"total": PARENT["total"]}
+                )
+
+                # Odd path: add 5
+                odd_node = add_five(
+                    inputs={"total": PARENT["total"]}
+                )
+
+                # Merge to update total using new << syntax
+                # Both branches output to separate inputs, merge picks the one that executed
+                merge = merge_totals(inputs={"even_total": even_node["new_total"],
+                                            "odd_total": odd_node["new_total"]})
+                                            
+                PARENT["total"] << merge["merged_total"]
+
+                # Note: Can't chain soft edges in single line due to Python's
+                # comparison chaining (a > b > c becomes (a>b) and (b>c))
+                START >> inc >> branch >> [even_node, odd_node] > merge
+                merge >> END
+
+            PARENT["final_total"] << loop["total"]
+            PARENT["final_counter"] << loop["counter"]
+            START >> loop >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+
+        result = await graph.run(state)
+
+        # counter: 1(odd,+5), 2(even,+10), 3(odd,+5), 4(even,+10), 5(odd,+5), 6(even,+10), 7(odd,+5)
+        # total: 5->15->20->30->35->45->50
+        assert result["final_total"] >= 50
+
+    @pytest.mark.asyncio
+    async def test_for_loop_with_while_loop_inside(self):
+        """ForLoop iterating items, with WhileLoop processing each item.
+
+        ForLoop: iterate over [10, 20, 30]
+        WhileLoop: for each item, divide by 2 until < 5
+        """
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def halve(value: int):
+            return {"new_value": value // 2}
+
+        with GraphNode(name="forloop_whileloop_graph") as graph:
+            with ForLoopNode(
+                name="outer_for",
+                inputs={"item": Each([10, 20, 30])}
+            ) as for_loop:
+                with WhileLoopNode(
+                    name="inner_while",
+                    inputs={"value": PARENT["item"]},
+                    stop_condition="value < 5",
+                    max_iterations=20
+                ) as while_loop:
+                    halve_node = halve(
+                        inputs={"value": PARENT["value"]}
+                    )
+                    PARENT["value"] << halve_node["new_value"]
+                    START >> halve_node >> END
+
+                PARENT[...] << while_loop[...]
+                START >> while_loop >> END
+
+            PARENT["results"] << for_loop["value"]
+            START >> for_loop >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={})
+
+        result = await graph.run(state)
+
+        # 10 -> 5 -> 2 (stops at 2)
+        # 20 -> 10 -> 5 -> 2 (stops at 2)
+        # 30 -> 15 -> 7 -> 3 (stops at 3)
+        expected = [2, 2, 3]
+        assert result["results"] == expected
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline_with_all_node_types(self):
+        """Complex pipeline: Input -> Transform -> Branch -> ForLoop/WhileLoop -> Aggregate.
+
+        1. CodeNode: Parse input and determine processing mode
+        2. BranchNode: Route based on mode
+        3. ForLoopNode: Batch processing path
+        4. WhileLoopNode: Iterative processing path
+        5. CodeNode: Aggregate results
+        """
+        from hush.core.nodes.flow.branch_node import Branch
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def parse_input(raw_input: dict):
+            return {
+                "mode": raw_input.get("mode", "batch"),
+                "items": raw_input.get("items", []),
+                "target": raw_input.get("target", 100)
+            }
+
+        @code_node
+        def process_item(item: int, multiplier: int):
+            return {"processed": item * multiplier}
+
+        @code_node
+        def iterative_accumulate(current: int, step: int):
+            return {"new_current": current + step}
+
+        @code_node
+        def aggregate_results(batch_result, iterative_result):
+            # One of these will be None depending on branch
+            if batch_result is not None:
+                return {"final": sum(batch_result) if isinstance(batch_result, list) else batch_result}
+            return {"final": iterative_result}
+
+        with GraphNode(name="full_pipeline") as graph:
+            # Step 1: Parse input
+            parser = parse_input(
+                inputs={"raw_input": PARENT["input"]}
+            )
+
+            # Step 2: Branch based on mode using new fluent syntax
+            router = (Branch("mode_router")
+                .if_(parser["mode"] == "batch", "batch_process")
+                .otherwise("iterative_process"))
+
+            # Step 3a: Batch processing with ForLoop
+            with ForLoopNode(
+                name="batch_process",
+                inputs={
+                    "item": Each(parser["items"]),
+                    "multiplier": 2
+                }
+            ) as batch_loop:
+                batch_node = process_item(
+                    inputs={
+                        "item": PARENT["item"],
+                        "multiplier": PARENT["multiplier"]
+                    }
+                )
+                PARENT[...] << batch_node[...]
+                START >> batch_node >> END
+
+            # Step 3b: Iterative processing with WhileLoop
+            with WhileLoopNode(
+                name="iterative_process",
+                inputs={
+                    "current": 0,
+                    "step": 10,
+                    "target": parser["target"]
+                },
+                stop_condition="current >= target",
+                max_iterations=50
+            ) as iter_loop:
+                iter_node = iterative_accumulate(
+                    inputs={
+                        "current": PARENT["current"],
+                        "step": PARENT["step"]
+                    }
+                )
+                PARENT["current"] << iter_node["new_current"]
+                START >> iter_node >> END
+
+            # Step 4: Aggregate using new << syntax
+            aggregator = aggregate_results(
+                inputs={}
+            )
+            aggregator["batch_result"] << batch_loop["processed"]
+            aggregator["iterative_result"] << iter_loop["current"]
+            PARENT[...] << aggregator[...]
+
+            # Wire up the graph
+            START >> parser >> router
+            router > batch_loop
+            router > iter_loop
+            batch_loop > aggregator
+            iter_loop > aggregator
+            aggregator >> END
+
+        graph.build()
+
+        # Test batch mode
+        schema = StateSchema(graph)
+        state1 = schema.create_state(inputs={
+            "input": {"mode": "batch", "items": [1, 2, 3, 4, 5]}
+        })
+        result1 = await graph.run(state1)
+        # Batch: [1*2, 2*2, 3*2, 4*2, 5*2] = [2, 4, 6, 8, 10], sum = 30
+        assert result1["final"] == 30
+
+        # Test iterative mode
+        state2 = schema.create_state(inputs={
+            "input": {"mode": "iterative", "target": 50}
+        })
+        result2 = await graph.run(state2)
+        # Iterative: 0->10->20->30->40->50, final = 50
+        assert result2["final"] == 50
+
+    @pytest.mark.asyncio
+    async def test_parallel_branches_with_different_loop_types(self):
+        """Parallel branches: one uses ForLoop, other uses WhileLoop, then merge.
+
+        Input: {"numbers": [1,2,3], "target": 20}
+        - Branch A (ForLoop): Sum all numbers * 2
+        - Branch B (WhileLoop): Count up to target by 5s
+        - Merge: Return both results
+        """
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def double(value: int):
+            return {"doubled": value * 2}
+
+        @code_node
+        def count_step(counter: int):
+            return {"new_counter": counter + 5}
+
+        @code_node
+        def merge_results(for_result, while_result):
+            total_doubled = sum(for_result) if for_result else 0
+            return {
+                "for_sum": total_doubled,
+                "while_count": while_result
+            }
+
+        with GraphNode(name="parallel_loops") as graph:
+            # Parallel ForLoop
+            with ForLoopNode(
+                name="double_loop",
+                inputs={"value": Each(PARENT["numbers"])}
+            ) as for_loop:
+                double_node = double(
+                    inputs={"value": PARENT["value"]}
+                )
+                PARENT[...] << double_node[...]
+                START >> double_node >> END
+
+            # Parallel WhileLoop
+            with WhileLoopNode(
+                name="count_loop",
+                inputs={
+                    "counter": 0,
+                    "target": PARENT["target"]
+                },
+                stop_condition="counter >= target",
+                max_iterations=20
+            ) as while_loop:
+                count_node = count_step(
+                    inputs={"counter": PARENT["counter"]}
+                )
+                PARENT["counter"] << count_node["new_counter"]
+                START >> count_node >> END
+
+            # Merge both results using new << syntax
+            merger = merge_results(inputs={})
+            merger["for_result"] << for_loop["doubled"]
+            merger["while_result"] << while_loop["counter"]
+            PARENT[...] << merger[...]
+
+            START >> [for_loop, while_loop] >> merger >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = schema.create_state(inputs={
+            "numbers": [1, 2, 3, 4, 5],
+            "target": 20
+        })
+
+        result = await graph.run(state)
+
+        # ForLoop: [2, 4, 6, 8, 10], sum = 30
+        assert result["for_sum"] == 30
+        # WhileLoop: 0->5->10->15->20, final = 20
+        assert result["while_count"] == 20
+
+    @pytest.mark.asyncio
+    async def test_nested_graph_with_all_types(self):
+        """Nested GraphNode containing Branch, ForLoop, and WhileLoop.
+
+        Outer graph calls inner graph which has all node types.
+        """
+        from hush.core.nodes.flow.branch_node import Branch
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def prepare_data(x: int):
+            return {
+                "should_loop": x > 5,
+                "items": list(range(1, x + 1)),
+                "limit": x * 2
+            }
+
+        @code_node
+        def square(value: int):
+            return {"squared": value * value}
+
+        @code_node
+        def increment(counter: int):
+            return {"new_counter": counter + 1}
+
+        # Inner graph with all node types
+        with GraphNode(name="inner_processor") as inner_graph:
+            prep = prepare_data(
+                inputs={"x": PARENT["x"]}
+            )
+
+            # Branch using new fluent syntax
+            branch = (Branch("process_router")
+                .if_(prep["should_loop"] == True, "for_process")
+                .otherwise("while_process"))
+
+            # ForLoop path
+            with ForLoopNode(
+                name="for_process",
+                inputs={"value": Each(prep["items"])}
+            ) as for_loop:
+                sq = square(
+                    inputs={"value": PARENT["value"]}
+                )
+                PARENT[...] << sq[...]
+                START >> sq >> END
+
+            # WhileLoop path
+            with WhileLoopNode(
+                name="while_process",
+                inputs={
+                    "counter": 0,
+                    "limit": prep["limit"]
+                },
+                stop_condition="counter >= limit",
+                max_iterations=50
+            ) as while_loop:
+                inc = increment(
+                    inputs={"counter": PARENT["counter"]}
+                )
+                PARENT["counter"] << inc["new_counter"]
+                START >> inc >> END
+
+            # Collect results using new << syntax
+            collector = CodeNode(
+                name="collector",
+                code_fn=lambda for_result, while_result: {
+                    "result": sum(for_result) if for_result else while_result
+                },
+                inputs={}
+            )
+            collector["for_result"] << for_loop["squared"]
+            collector["while_result"] << while_loop["counter"]
+            PARENT[...] << collector[...]
+
+            START >> prep >> branch
+            branch > for_loop
+            branch > while_loop
+            for_loop > collector
+            while_loop > collector
+            collector >> END
+
+        # Outer graph using inner graph
+        with GraphNode(name="outer_graph") as outer_graph:
+            # Use inner graph as a subgraph
+            inner = inner_graph(
+                inputs={"x": PARENT["input_value"]}
+            )
+            PARENT[...] << inner[...]
+            START >> inner >> END
+
+        outer_graph.build()
+
+        # Test with x=10 (should_loop=True, use ForLoop)
+        schema = StateSchema(outer_graph)
+        state1 = schema.create_state(inputs={"input_value": 10})
+        result1 = await outer_graph.run(state1)
+        # ForLoop: squares of 1..10 = 1+4+9+16+25+36+49+64+81+100 = 385
+        assert result1["result"] == 385
+
+        # Test with x=3 (should_loop=False, use WhileLoop)
+        state2 = schema.create_state(inputs={"input_value": 3})
+        result2 = await outer_graph.run(state2)
+        # WhileLoop: count to limit=6, result = 6
+        assert result2["result"] == 6
+
+
+# ============================================================
 # Run tests with pytest
 # ============================================================
 

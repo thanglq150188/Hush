@@ -360,6 +360,13 @@ class BaseNode(ABC):
 
         Dùng cho output của branch khi chỉ một nhánh được thực thi.
         Ví dụ: case_a > merge_node (merge chờ BẤT KỲ MỘT predecessor)
+
+        LƯU Ý: Python xử lý so sánh chuỗi đặc biệt!
+        `a > b > c` được hiểu là `(a > b) and (b > c)`, KHÔNG PHẢI `(a > b) > c`.
+        Do đó KHÔNG THỂ viết: `branch > [node1, node2] > merge >> END`
+        Phải tách ra:
+            branch > [node1, node2] > merge
+            merge >> END
         """
         edge_type = "condition" if self.type == "branch" else "normal"
         add_edge = getattr(self.father, "add_edge", None)
@@ -380,6 +387,9 @@ class BaseNode(ABC):
 
         Dùng cho output của branch khi chỉ một nhánh được thực thi.
         Ví dụ: merge_node < case_a (merge chờ BẤT KỲ MỘT predecessor)
+
+        Cũng được gọi bởi Python khi: [n1, n2] > self
+        (list.__gt__ returns NotImplemented, Python tries self.__lt__(list))
         """
         edge_type = "condition" if self.type == "branch" else "normal"
         add_edge = getattr(self.father, "add_edge", None)
@@ -388,7 +398,7 @@ class BaseNode(ABC):
             if add_edge is not None:
                 for node in other:
                     add_edge(node.name, self.name, edge_type, soft=True)
-            return other
+            return self  # Return self để chain tiếp: [a, b] > self > next
         elif getattr(other, 'name', None) is not None:
             if add_edge is not None:
                 add_edge(other.name, self.name, edge_type, soft=True)
@@ -415,14 +425,15 @@ class BaseNode(ABC):
         state = MemoryState(schema, inputs=kwargs)
 
         # Chạy đồng bộ
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Nếu đã trong async context, tạo loop mới
+        try:
+            loop = asyncio.get_running_loop()
+            # Nếu đã trong async context, chạy trong thread pool
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 result = pool.submit(asyncio.run, self.run(state)).result()
-        else:
-            result = loop.run_until_complete(self.run(state))
+        except RuntimeError:
+            # Không có running loop, dùng asyncio.run()
+            result = asyncio.run(self.run(state))
 
         return result
 
