@@ -5,18 +5,23 @@ A powerful async workflow orchestration framework.
 
 Example:
     ```python
-    from hush.core import Hush, START, END
+    from hush.core import Hush, GraphNode, START, END, PARENT
+    from hush.core.nodes import CodeNode
 
-    with Hush("my-workflow") as flow:
-        # Define your nodes and flow here
-        START >> your_node >> END
+    # Define graph
+    with GraphNode(name="my-workflow") as graph:
+        node = CodeNode(name="processor", ...)
+        START >> node >> END
 
-    flow.compile()
-    result = await flow.run(inputs={"key": "value"})
+    # Create engine and run
+    engine = Hush(graph)
+    result = await engine.run(inputs={"key": "value"})
+    print(result["output"])   # workflow output
+    print(result["$state"])   # access state for debugging
     ```
 """
 
-from hush.core.workflow import Hush
+from hush.core.engine import Hush
 from hush.core.nodes import (
     BaseNode,
     DummyNode,

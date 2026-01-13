@@ -24,7 +24,7 @@ class MemoryState:
         __getitem__: Nếu cached trả về, nếu input ref thì pull 1 hop và cache
     """
 
-    __slots__ = ("schema", "_cells", "_execution_order", "_user_id", "_session_id", "_request_id")
+    __slots__ = ("schema", "_cells", "_execution_order", "_trace_metadata", "_user_id", "_session_id", "_request_id")
 
     def __init__(
         self,
@@ -46,6 +46,7 @@ class MemoryState:
         self.schema = schema
         self._cells: List[Cell] = [Cell(v) for v in schema._values]
         self._execution_order: List[Dict[str, str]] = []
+        self._trace_metadata: Dict[str, Dict[str, Any]] = {}
         self._user_id = user_id or str(_uuid4())
         self._session_id = session_id or str(_uuid4())
         self._request_id = request_id or str(_uuid4())
@@ -162,6 +163,45 @@ class MemoryState:
             "context_id": context_id
         })
 
+    def record_trace_metadata(
+        self,
+        node_name: str,
+        context_id: Optional[str],
+        name: str,
+        input_vars: List[str],
+        output_vars: List[str],
+        contain_generation: bool = False,
+        model: Optional[str] = None,
+        usage: Optional[Dict[str, int]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Store trace metadata for a node execution.
+
+        This stores only metadata - input/output values are read from cells.
+        Called by nodes at the end of execution.
+
+        Args:
+            node_name: Full name of the node
+            context_id: Context ID for the execution
+            name: Display name for the trace
+            input_vars: List of input variable names
+            output_vars: List of output variable names
+            contain_generation: Whether this node contains LLM generation
+            model: Model name (for LLM nodes)
+            usage: Token usage dict with input/output/total (for LLM nodes)
+            metadata: Additional metadata dict
+        """
+        key = f"{node_name}:{context_id}" if context_id else node_name
+        self._trace_metadata[key] = {
+            "name": name,
+            "input_vars": input_vars,
+            "output_vars": output_vars,
+            "contain_generation": contain_generation,
+            "model": model,
+            "usage": usage,
+            "metadata": metadata or {},
+        }
+
     # =========================================================================
     # Properties
     # =========================================================================
@@ -175,6 +215,11 @@ class MemoryState:
     def execution_order(self) -> List[Dict[str, str]]:
         """Danh sách thứ tự thực thi các node."""
         return self._execution_order.copy()
+
+    @property
+    def trace_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """Get all trace metadata for observability."""
+        return self._trace_metadata.copy()
 
     @property
     def metadata(self) -> Dict[str, Any]:
