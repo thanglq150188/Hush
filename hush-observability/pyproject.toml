@@ -74,10 +74,12 @@ markers = [
 
 [tool.uv.sources]
 hush-core = { path = "../hush-core", editable = true }
+hush-providers = { path = "../hush-providers", editable = true }
 
 [dependency-groups]
 dev = [
     "langfuse>=2.6.0",
     "pytest>=9.0.1",
     "pytest-asyncio>=0.24.0",
+    "python-dotenv>=1.0.0",
 ]

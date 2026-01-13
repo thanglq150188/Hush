@@ -397,6 +397,7 @@ class GraphNode(BaseNode):
                             active_tasks[next_node] = task
 
             _outputs = self.get_outputs(state, context_id=context_id)
+            self.store_result(state, _outputs, context_id)
 
         except Exception as e:
             error_msg = traceback.format_exc()
@@ -410,6 +411,17 @@ class GraphNode(BaseNode):
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
+
+            # Record trace metadata for observability
+            state.record_trace_metadata(
+                node_name=self.full_name,
+                context_id=context_id,
+                name=self.name,
+                input_vars=list(self.inputs.keys()) if self.inputs else [],
+                output_vars=list(self.outputs.keys()) if self.outputs else [],
+                contain_generation=False,
+                metadata=self.metadata(),
+            )
             return _outputs
 
 

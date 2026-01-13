@@ -42,9 +42,14 @@ class LLMConfig(YamlModel):
         api_type: Type of LLM API to use
         completion: Configuration parameters for completion requests
         proxy (str | None, optional): Proxy URL for requests. Defaults to None.
+        cost_per_input_token: Cost in USD per input token (for manual cost tracking)
+        cost_per_output_token: Cost in USD per output token (for manual cost tracking)
     """
     api_type: LLMType
     proxy: str | None = None
+    # Cost per token in USD (for gateways/models without automatic pricing)
+    cost_per_input_token: float | None = None
+    cost_per_output_token: float | None = None
 
 
     @classmethod

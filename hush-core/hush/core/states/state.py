@@ -173,6 +173,7 @@ class MemoryState:
         contain_generation: bool = False,
         model: Optional[str] = None,
         usage: Optional[Dict[str, int]] = None,
+        cost: Optional[Dict[str, float]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store trace metadata for a node execution.
@@ -189,6 +190,7 @@ class MemoryState:
             contain_generation: Whether this node contains LLM generation
             model: Model name (for LLM nodes)
             usage: Token usage dict with input/output/total (for LLM nodes)
+            cost: Cost dict with input/output/total in USD (for LLM nodes)
             metadata: Additional metadata dict
         """
         key = f"{node_name}:{context_id}" if context_id else node_name
@@ -199,6 +201,7 @@ class MemoryState:
             "contain_generation": contain_generation,
             "model": model,
             "usage": usage,
+            "cost": cost,
             "metadata": metadata or {},
         }
 
