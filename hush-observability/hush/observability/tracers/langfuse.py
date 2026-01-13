@@ -197,6 +197,8 @@ class LangfuseTracer(BaseTracer):
                         name=workflow_name,
                         user_id=user_id,
                         session_id=session_id,
+                        start_time=trace_data.get("start_time"),
+                        end_time=trace_data.get("end_time"),
                         input=trace_data.get("input"),
                         output=trace_data.get("output"),
                         metadata=trace_data.get("metadata"),
@@ -214,8 +216,34 @@ class LangfuseTracer(BaseTracer):
                         continue
 
                     if contain_generation:
+                        # Transform usage to Langfuse format
+                        # OpenAI format: prompt_tokens, completion_tokens, total_tokens
+                        # Langfuse format: input, output, total
+                        usage = trace_data.pop("usage", None)
+                        if usage:
+                            langfuse_usage = {}
+                            if "prompt_tokens" in usage:
+                                langfuse_usage["input"] = usage["prompt_tokens"]
+                            if "completion_tokens" in usage:
+                                langfuse_usage["output"] = usage["completion_tokens"]
+                            if "total_tokens" in usage:
+                                langfuse_usage["total"] = usage["total_tokens"]
+                            if langfuse_usage:
+                                trace_data["usage"] = langfuse_usage
+
+                        # Extract cost - pass as metadata since SDK v2 doesn't support cost_details
+                        cost = trace_data.pop("cost", None)
+                        if cost:
+                            # Add cost to metadata for visibility
+                            if "metadata" not in trace_data or trace_data["metadata"] is None:
+                                trace_data["metadata"] = {}
+                            trace_data["metadata"]["cost_usd"] = cost
+
                         langfuse_objects[node_id] = parent.generation(**trace_data)
                     else:
+                        # Spans don't use cost or usage, remove them
+                        trace_data.pop("cost", None)
+                        trace_data.pop("usage", None)
                         langfuse_objects[node_id] = parent.span(**trace_data)
 
             # Ensure all traces are sent to Langfuse

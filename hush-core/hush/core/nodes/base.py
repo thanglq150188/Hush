@@ -558,6 +558,7 @@ class BaseNode(ABC):
                 input_vars=list(self.inputs.keys()) if self.inputs else [],
                 output_vars=list(self.outputs.keys()) if self.outputs else [],
                 contain_generation=self.contain_generation,
+                metadata=self.metadata(),
             )
             return _outputs
 

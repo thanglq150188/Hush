@@ -21,11 +21,66 @@ Example:
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, TYPE_CHECKING
-from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 
 if TYPE_CHECKING:
     from hush.core.states import MemoryState
+
+
+# Global worker process and queue
+_flush_queue: Optional[multiprocessing.Queue] = None
+_worker_process: Optional[multiprocessing.Process] = None
+
+
+def _flush_worker(queue: multiprocessing.Queue, config_path: Optional[str], dotenv_path: Optional[str] = None) -> None:
+    """Worker process that initializes ResourceHub and processes flush requests.
+
+    This worker stays alive and processes flush requests from the queue.
+    ResourceHub is initialized once when the worker starts.
+
+    Args:
+        queue: Queue to receive flush requests
+        config_path: Absolute path to resources.yaml (from main process)
+        dotenv_path: Absolute path to .env file (from main process)
+    """
+    import signal
+    import os
+
+    # Ignore SIGINT in worker - let main process handle it
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # Load .env file if provided
+    if dotenv_path:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(dotenv_path)
+        except ImportError:
+            pass
+
+    # Set HUSH_CONFIG env var so get_hub() finds the right config
+    if config_path:
+        os.environ['HUSH_CONFIG'] = config_path
+
+    # Initialize ResourceHub once in this process
+    try:
+        from hush.core.registry import get_hub
+        get_hub()  # This loads resources.yaml from HUSH_CONFIG
+    except Exception as e:
+        print(f"[FlushWorker] Failed to initialize ResourceHub: {e}")
+
+    while True:
+        try:
+            flush_data = queue.get()
+
+            # Sentinel value to stop worker
+            if flush_data is None:
+                break
+
+            _dispatch_flush(flush_data)
+
+        except Exception as e:
+            import traceback
+            print(f"[FlushWorker] Error processing flush: {e}\n{traceback.format_exc()}")
 
 
 class BaseTracer(ABC):
@@ -35,26 +90,66 @@ class BaseTracer(ABC):
         - flush(): The actual tracing logic that runs in a subprocess
         - _get_tracer_config(): Returns tracer-specific config for serialization
 
-    The tracer uses a ProcessPoolExecutor with "spawn" context to ensure
-    trace flushing doesn't block the main workflow execution.
+    The tracer uses a persistent worker process with ResourceHub initialized.
+    Flush requests are sent via a queue and processed asynchronously.
     """
 
-    _executor: Optional[ProcessPoolExecutor] = None
-
     @classmethod
-    def get_executor(cls) -> ProcessPoolExecutor:
-        """Get or create the global process pool executor for flush operations."""
-        if cls._executor is None:
+    def _ensure_worker(cls) -> multiprocessing.Queue:
+        """Ensure the flush worker process is running and return the queue."""
+        global _flush_queue, _worker_process
+
+        if _worker_process is None or not _worker_process.is_alive():
+            import os
+            from pathlib import Path
+
+            # Get config path from current hub's storage
+            config_path = None
+            try:
+                from hush.core.registry import get_hub
+                hub = get_hub()
+                if hasattr(hub._storage, '_file_path'):
+                    config_path = str(hub._storage._file_path.resolve())
+            except Exception:
+                pass
+
+            # Find .env file near config or in current directory
+            dotenv_path = None
+            if config_path:
+                env_file = Path(config_path).parent / ".env"
+                if env_file.exists():
+                    dotenv_path = str(env_file.resolve())
+            if not dotenv_path:
+                cwd_env = Path.cwd() / ".env"
+                if cwd_env.exists():
+                    dotenv_path = str(cwd_env.resolve())
+
             ctx = multiprocessing.get_context("spawn")
-            cls._executor = ProcessPoolExecutor(max_workers=2, mp_context=ctx)
-        return cls._executor
+            _flush_queue = ctx.Queue()
+            _worker_process = ctx.Process(
+                target=_flush_worker,
+                args=(_flush_queue, config_path, dotenv_path),
+                daemon=True,
+            )
+            _worker_process.start()
+
+        return _flush_queue
 
     @classmethod
     def shutdown_executor(cls) -> None:
-        """Shutdown the global process pool executor."""
-        if cls._executor is not None:
-            cls._executor.shutdown(wait=True)
-            cls._executor = None
+        """Shutdown the flush worker process."""
+        global _flush_queue, _worker_process
+
+        if _worker_process is not None and _worker_process.is_alive():
+            # Send sentinel to stop worker
+            _flush_queue.put(None)
+            _worker_process.join(timeout=5)
+
+            if _worker_process.is_alive():
+                _worker_process.terminate()
+
+        _flush_queue = None
+        _worker_process = None
 
     @abstractmethod
     def _get_tracer_config(self) -> Dict[str, Any]:
@@ -115,13 +210,20 @@ class BaseTracer(ABC):
             for var in metadata.get("output_vars", []):
                 output_data[var] = state.get(node_name, var, context_id)
 
+            # Get start/end times from state
+            start_time = state.get(node_name, "start_time", context_id)
+            end_time = state.get(node_name, "end_time", context_id)
+
             # Build trace_data for this node
             trace_data = {
                 "name": metadata.get("name", node_name),
+                "start_time": start_time,
+                "end_time": end_time,
                 "input": input_data,
                 "output": output_data,
                 "model": metadata.get("model"),
                 "usage": metadata.get("usage"),
+                "cost": metadata.get("cost"),
                 "metadata": metadata.get("metadata", {}),
             }
 
@@ -136,7 +238,7 @@ class BaseTracer(ABC):
         return flush_data
 
     def flush_in_background(self, workflow_name: str, state: 'MemoryState') -> None:
-        """Submit flush task to process pool without blocking the main flow.
+        """Submit flush task to worker process without blocking the main flow.
 
         Args:
             workflow_name: Name of the workflow
@@ -146,8 +248,8 @@ class BaseTracer(ABC):
 
         try:
             flush_data = self.prepare_flush_data(workflow_name, state)
-            executor = self.get_executor()
-            executor.submit(_dispatch_flush, flush_data)
+            queue = self._ensure_worker()
+            queue.put(flush_data)
 
         except Exception as e:
             import traceback

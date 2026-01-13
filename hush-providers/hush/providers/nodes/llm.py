@@ -72,11 +72,11 @@ class LLMNode(BaseNode):
         self.contain_generation = True
 
         # Define input/output schema
+        # Note: stream_options is only used when streaming, added dynamically
         input_schema = {
             "messages": Param(type=list, required=True),
             "temperature": Param(type=float, default=0.0),
             "max_tokens": Param(type=int, default=None),
-            "stream_options": Param(type=dict, default={"include_usage": True}),
         }
 
         output_schema = {
@@ -241,9 +241,46 @@ class LLMNode(BaseNode):
             state[self.full_name, "error", context_id] = error_msg
 
         finally:
+            end_time = datetime.now()
             perf_end = perf_counter()
             latency_ms = (perf_end - perf_start) * 1000
             self._log(request_id, context_id, _inputs, _outputs, latency_ms)
+
+            # Store timing to state (critical for tracing)
+            state[self.full_name, "start_time", context_id] = start_time
+            state[self.full_name, "end_time", context_id] = end_time
+
+            # Calculate cost from LLM config if cost_per_token is configured
+            cost = None
+            if self._llm and hasattr(self._llm, 'config'):
+                config = self._llm.config
+                cost_input = getattr(config, 'cost_per_input_token', None)
+                cost_output = getattr(config, 'cost_per_output_token', None)
+                if cost_input is not None or cost_output is not None:
+                    tokens = _outputs.get("tokens_used", {})
+                    input_tokens = tokens.get("prompt_tokens", 0)
+                    output_tokens = tokens.get("completion_tokens", 0)
+                    input_cost = input_tokens * (cost_input or 0)
+                    output_cost = output_tokens * (cost_output or 0)
+                    cost = {
+                        "input": input_cost,
+                        "output": output_cost,
+                        "total": input_cost + output_cost,
+                    }
+
+            # Record trace metadata for observability (with model/usage/cost)
+            state.record_trace_metadata(
+                node_name=self.full_name,
+                context_id=context_id,
+                name=self.name,
+                input_vars=list(self.inputs.keys()) if self.inputs else [],
+                output_vars=list(self.outputs.keys()) if self.outputs else [],
+                contain_generation=self.contain_generation,
+                model=_outputs.get("model_used") or self.resource_key,
+                usage=_outputs.get("tokens_used"),
+                cost=cost,
+                metadata=self.metadata(),
+            )
 
         return _outputs
 
