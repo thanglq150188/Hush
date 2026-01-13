@@ -48,7 +48,11 @@ def parse_json(text: str) -> Dict[str, Any]:
 
 
 def parse_xml(text: str) -> Dict[str, Any]:
-    """Parse XML text thành dictionary."""
+    """Parse XML text thành dictionary.
+
+    Handles both single-root and multiple top-level elements.
+    For multiple elements like <a>1</a><b>2</b>, wraps in <root> and flattens.
+    """
     def xml_to_dict(element):
         result = {}
         for child in element:
@@ -69,8 +73,15 @@ def parse_xml(text: str) -> Dict[str, Any]:
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
 
-    root = ET.fromstring(text)
-    return {root.tag: xml_to_dict(root)} if len(root) > 0 else {root.tag: root.text}
+    # Try parsing as-is first
+    try:
+        root = ET.fromstring(text)
+        return {root.tag: xml_to_dict(root)} if len(root) > 0 else {root.tag: root.text}
+    except ET.ParseError:
+        # Multiple root elements - wrap in <root> and flatten result
+        wrapped = f"<root>{text}</root>"
+        root = ET.fromstring(wrapped)
+        return xml_to_dict(root)
 
 
 def parse_yaml(text: str) -> Dict[str, Any]:

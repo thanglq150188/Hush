@@ -549,6 +549,16 @@ class BaseNode(ABC):
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
+
+            # Record trace metadata for observability (no input/output duplication)
+            state.record_trace_metadata(
+                node_name=self.full_name,
+                context_id=context_id,
+                name=self.name,
+                input_vars=list(self.inputs.keys()) if self.inputs else [],
+                output_vars=list(self.outputs.keys()) if self.outputs else [],
+                contain_generation=self.contain_generation,
+            )
             return _outputs
 
     def get_input_variables(self) -> List[str]:

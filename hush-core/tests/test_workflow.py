@@ -1,98 +1,46 @@
-"""Tests for the Hush workflow orchestrator."""
+"""Tests for the Hush workflow engine."""
 
 import pytest
-from hush.core import Hush, START, END, CodeNode, PARENT
+from hush.core import Hush, GraphNode, START, END, CodeNode, PARENT
 
 
 class TestHushBasic:
-    """Basic Hush workflow tests."""
+    """Basic Hush engine tests."""
 
     def test_hush_creation(self):
-        """Test Hush can be created."""
-        flow = Hush("test-workflow")
-        assert flow.name == "test-workflow"
-        assert flow.compiled is False
-        assert flow.schema is None
+        """Test Hush can be created with a GraphNode."""
+        with GraphNode(name="test-workflow") as graph:
+            node = CodeNode(name="dummy", code_fn=lambda: {"x": 1})
+            START >> node >> END
 
-    def test_hush_with_description(self):
-        """Test Hush with description."""
-        flow = Hush("test", description="A test workflow")
-        assert flow.description == "A test workflow"
+        engine = Hush(graph)
+        assert engine.name == "test-workflow"
+        assert engine.schema is not None
 
     def test_hush_repr(self):
         """Test Hush string representation."""
-        flow = Hush("test")
-        assert "test" in repr(flow)
-        assert "not compiled" in repr(flow)
-
-        with flow:
-            node = CodeNode(name="dummy", code_fn=lambda: None)
+        with GraphNode(name="test") as graph:
+            node = CodeNode(name="dummy", code_fn=lambda: {"x": 1})
             START >> node >> END
 
-        flow.compile()
-        assert "compiled" in repr(flow)
+        engine = Hush(graph)
+        assert "test" in repr(engine)
+        assert "engine" in repr(engine)
 
 
-class TestHushContextManager:
-    """Test Hush context manager behavior."""
+class TestHushSchema:
+    """Test Hush schema creation."""
 
-    def test_context_manager_enters_and_exits(self):
-        """Test context manager properly enters and exits."""
-        flow = Hush("test")
-
-        with flow:
-            # Inside context, graph should be in building mode
-            assert flow.graph._is_building is True
-
-        # After exiting, we can still access the graph
-        assert flow.graph is not None
-
-    def test_nodes_registered_in_context(self):
-        """Test nodes are registered when created in context."""
-        with Hush("test") as flow:
-            node1 = CodeNode(name="node1", code_fn=lambda: {"x": 1})
-            node2 = CodeNode(name="node2", code_fn=lambda x: {"y": x + 1})
-            START >> node1 >> node2 >> END
-
-        assert "node1" in flow.graph._nodes
-        assert "node2" in flow.graph._nodes
-
-
-class TestHushCompile:
-    """Test Hush compilation."""
-
-    def test_compile_creates_schema(self):
-        """Test compile creates StateSchema."""
-        with Hush("test") as flow:
+    def test_schema_created_on_init(self):
+        """Test schema is created during Hush initialization."""
+        with GraphNode(name="test") as graph:
             node = CodeNode(name="node", code_fn=lambda: {"out": 1})
             START >> node >> END
 
-        flow.compile()
+        engine = Hush(graph)
 
-        assert flow.compiled is True
-        assert flow.schema is not None
-        assert "test:workflow" in flow.schema.name
-
-    def test_compile_returns_self(self):
-        """Test compile returns self for chaining."""
-        with Hush("test") as flow:
-            node = CodeNode(name="node", code_fn=lambda: {"out": 1})
-            START >> node >> END
-
-        result = flow.compile()
-        assert result is flow
-
-    def test_compile_warns_orphan_node(self):
-        """Test compile warns about orphan nodes."""
-        with Hush("test") as flow:
-            # No START >> node connection, but have another valid path
-            orphan = CodeNode(name="orphan", code_fn=lambda: {})
-            valid = CodeNode(name="valid", code_fn=lambda: {})
-            START >> valid >> END
-
-        flow.compile()
-        # Should compile but warn about orphan
-        assert flow.compiled is True
+        assert engine.schema is not None
+        assert engine.schema.name == "test"
 
 
 class TestHushRun:
@@ -101,7 +49,7 @@ class TestHushRun:
     @pytest.mark.asyncio
     async def test_run_simple_workflow(self):
         """Test running a simple workflow that returns constant."""
-        with Hush("test") as flow:
+        with GraphNode(name="test") as graph:
             node = CodeNode(
                 name="constant",
                 code_fn=lambda: {"result": 42},
@@ -109,61 +57,56 @@ class TestHushRun:
             )
             START >> node >> END
 
-        flow.compile()
-        result = await flow.run(inputs={})
+        engine = Hush(graph)
+        result = await engine.run(inputs={})
 
-        assert result == {"result": 42}
-
-    @pytest.mark.asyncio
-    async def test_run_without_compile_raises(self):
-        """Test run raises if not compiled."""
-        with Hush("test") as flow:
-            node = CodeNode(name="node", code_fn=lambda: {})
-            START >> node >> END
-
-        with pytest.raises(RuntimeError, match="not been compiled"):
-            await flow.run(inputs={})
+        assert result["result"] == 42
+        assert "$state" in result
 
     @pytest.mark.asyncio
     async def test_run_generates_ids(self):
         """Test run generates IDs if not provided."""
-        with Hush("test") as flow:
+        with GraphNode(name="test") as graph:
             passthrough = CodeNode(
                 name="passthrough",
                 code_fn=lambda: {}
             )
             START >> passthrough >> END
 
-        flow.compile()
+        engine = Hush(graph)
 
         # Should not raise
-        result = await flow.run(inputs={})
-        assert result == {}
+        result = await engine.run(inputs={})
+        assert "$state" in result
 
     @pytest.mark.asyncio
     async def test_run_with_custom_ids(self):
         """Test run with custom IDs."""
-        with Hush("test") as flow:
+        with GraphNode(name="test") as graph:
             passthrough = CodeNode(
                 name="passthrough",
                 code_fn=lambda: {}
             )
             START >> passthrough >> END
 
-        flow.compile()
+        engine = Hush(graph)
 
-        result = await flow.run(
+        result = await engine.run(
             inputs={},
             user_id="user-123",
             session_id="session-456",
             request_id="request-789"
         )
-        assert result == {}
+
+        state = result["$state"]
+        assert state.user_id == "user-123"
+        assert state.session_id == "session-456"
+        assert state.request_id == "request-789"
 
     @pytest.mark.asyncio
     async def test_run_multi_node_pipeline(self):
         """Test running a multi-node pipeline with constant outputs."""
-        with Hush("pipeline") as flow:
+        with GraphNode(name="pipeline") as graph:
             step1 = CodeNode(
                 name="step1",
                 code_fn=lambda: {"value": 10}
@@ -175,10 +118,44 @@ class TestHushRun:
             )
             START >> step1 >> step2 >> END
 
-        flow.compile()
-        result = await flow.run(inputs={})
+        engine = Hush(graph)
+        result = await engine.run(inputs={})
 
-        assert result == {"final": 20}
+        assert result["final"] == 20
+
+    @pytest.mark.asyncio
+    async def test_run_with_inputs(self):
+        """Test running workflow with input data."""
+        with GraphNode(name="with-inputs") as graph:
+            node = CodeNode(
+                name="doubler",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(inputs={"x": 21})
+
+        assert result["result"] == 42
+
+    @pytest.mark.asyncio
+    async def test_callable_syntax(self):
+        """Test engine(inputs) callable syntax."""
+        with GraphNode(name="callable") as graph:
+            node = CodeNode(
+                name="adder",
+                code_fn=lambda a, b: {"sum": a + b},
+                inputs={"a": PARENT["a"], "b": PARENT["b"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine({"a": 10, "b": 5})
+
+        assert result["sum"] == 15
 
 
 class TestHushWithTracer:
@@ -187,17 +164,17 @@ class TestHushWithTracer:
     @pytest.mark.asyncio
     async def test_run_with_none_tracer(self):
         """Test run with tracer=None works."""
-        with Hush("test") as flow:
+        with GraphNode(name="test") as graph:
             node = CodeNode(
                 name="node",
                 code_fn=lambda: {"ok": True}
             )
             START >> node >> END
 
-        flow.compile()
-        result = await flow.run(inputs={}, tracer=None)
+        engine = Hush(graph)
+        result = await engine.run(inputs={}, tracer=None)
 
-        assert result == {}  # No outputs mapped to PARENT
+        assert "$state" in result
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -210,21 +187,14 @@ class TestHushWithTracer:
         import time
 
         try:
-            from hush.observability.langfuse import LangfuseTracer, LangfuseConfig
+            from hush.observability import LangfuseTracer
         except ImportError:
             pytest.skip("hush-observability not installed")
 
-        # Langfuse config from resources.yaml
-        tracer = LangfuseTracer(
-            config=LangfuseConfig(
-                public_key="pk-lf-ecd32a21-4c71-4276-b753-dfb8481aa062",
-                secret_key="sk-lf-a53719f5-856d-418c-86bf-98c7a09f7105",
-                host="https://cloud.langfuse.com"
-            )
-        )
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank")
 
         # Create a multi-step workflow
-        with Hush("hush-integration-test") as flow:
+        with GraphNode(name="hush-integration-test") as graph:
             step1 = CodeNode(
                 name="process_input",
                 code_fn=lambda: {"processed": "Hello from Hush!"},
@@ -241,9 +211,9 @@ class TestHushWithTracer:
             )
             START >> step1 >> step2 >> step3 >> END
 
-        flow.compile()
+        engine = Hush(graph)
 
-        result = await flow.run(
+        result = await engine.run(
             inputs={},
             tracer=tracer,
             user_id="test-user",
@@ -253,29 +223,115 @@ class TestHushWithTracer:
         # Wait for background flush to complete
         time.sleep(2)
 
-        assert result == {"processed": "Hello from Hush!", "result": "Workflow complete!"}
+        assert result["processed"] == "Hello from Hush!"
+        assert result["result"] == "Workflow complete!"
         print(f"\nTrace pushed to Langfuse: https://cloud.langfuse.com")
 
 
 class TestHushShow:
     """Test Hush show/debug methods."""
 
-    def test_show_not_compiled(self, capsys):
-        """Test show before compile."""
-        flow = Hush("test")
-        flow.show()
-
-        captured = capsys.readouterr()
-        assert "not compiled" in captured.out
-
-    def test_show_compiled(self, capsys):
-        """Test show after compile."""
-        with Hush("test") as flow:
+    def test_show(self, capsys):
+        """Test show displays workflow structure."""
+        with GraphNode(name="test") as graph:
             node = CodeNode(name="node", code_fn=lambda: {})
             START >> node >> END
 
-        flow.compile()
-        flow.show()
+        engine = Hush(graph)
+        engine.show()
 
         captured = capsys.readouterr()
-        assert "Workflow: test" in captured.out
+        assert "Hush Engine: test" in captured.out
+
+
+class TestHushStateAccess:
+    """Test accessing state via $state key."""
+
+    @pytest.mark.asyncio
+    async def test_state_contains_execution_order(self):
+        """Test $state contains execution order."""
+        with GraphNode(name="test") as graph:
+            a = CodeNode(name="step_a", code_fn=lambda: {"a": 1})
+            b = CodeNode(name="step_b", code_fn=lambda: {"b": 2})
+            START >> a >> b >> END
+
+        engine = Hush(graph)
+        result = await engine.run(inputs={})
+
+        state = result["$state"]
+        execution_order = state.execution_order
+
+        # Should have recorded executions
+        assert len(execution_order) >= 2
+
+    @pytest.mark.asyncio
+    async def test_state_contains_trace_metadata(self):
+        """Test $state contains trace metadata."""
+        with GraphNode(name="test") as graph:
+            node = CodeNode(
+                name="processor",
+                code_fn=lambda x: {"y": x * 2},
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(inputs={"x": 5})
+
+        state = result["$state"]
+        trace_metadata = state.trace_metadata
+
+        # Should have trace metadata for processor node
+        processor_found = any("processor" in key for key in trace_metadata.keys())
+        assert processor_found
+
+    @pytest.mark.asyncio
+    async def test_state_metadata_contains_ids(self):
+        """Test state metadata contains user/session/request IDs."""
+        with GraphNode(name="test") as graph:
+            node = CodeNode(name="node", code_fn=lambda: {})
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={},
+            user_id="uid",
+            session_id="sid",
+            request_id="rid"
+        )
+
+        state = result["$state"]
+        assert state.user_id == "uid"
+        assert state.session_id == "sid"
+        assert state.request_id == "rid"
+
+
+class TestHushMultipleRuns:
+    """Test running the same engine multiple times."""
+
+    @pytest.mark.asyncio
+    async def test_multiple_runs_independent(self):
+        """Test each run creates fresh state."""
+        with GraphNode(name="counter") as graph:
+            node = CodeNode(
+                name="echo",
+                code_fn=lambda n: {"value": n},
+                inputs={"n": PARENT["n"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+
+        result1 = await engine.run(inputs={"n": 1})
+        result2 = await engine.run(inputs={"n": 2})
+        result3 = await engine.run(inputs={"n": 3})
+
+        assert result1["value"] == 1
+        assert result2["value"] == 2
+        assert result3["value"] == 3
+
+        # Each run should have different request IDs
+        assert result1["$state"].request_id != result2["$state"].request_id
+        assert result2["$state"].request_id != result3["$state"].request_id

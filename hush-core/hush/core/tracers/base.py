@@ -74,6 +74,10 @@ class BaseTracer(ABC):
     ) -> Dict[str, Any]:
         """Prepare serializable data for the subprocess.
 
+        This method reads trace metadata and values from state to build
+        the flush_data dictionary. Input/output values are read directly
+        from state cells (no duplication in trace_metadata).
+
         Args:
             workflow_name: Name of the workflow
             state: MemoryState object containing execution data
@@ -93,19 +97,40 @@ class BaseTracer(ABC):
         }
 
         for execution in state.execution_order:
-            node_id = execution["node"]
+            node_name = execution["node"]
+            parent_name = execution["parent"]
             context_id = execution["context_id"]
-            node = state._indexer._nodes[node_id]
 
-            trace_data = node.trace_data(state, context_id)
-            key = f"{node_id}:{context_id}" if context_id else node_id
+            # Build key for trace_metadata lookup
+            key = f"{node_name}:{context_id}" if context_id else node_name
+            metadata = state._trace_metadata.get(key, {})
+
+            # Build input dict from state cells
+            input_data = {}
+            for var in metadata.get("input_vars", []):
+                input_data[var] = state.get(node_name, var, context_id)
+
+            # Build output dict from state cells
+            output_data = {}
+            for var in metadata.get("output_vars", []):
+                output_data[var] = state.get(node_name, var, context_id)
+
+            # Build trace_data for this node
+            trace_data = {
+                "name": metadata.get("name", node_name),
+                "input": input_data,
+                "output": output_data,
+                "model": metadata.get("model"),
+                "usage": metadata.get("usage"),
+                "metadata": metadata.get("metadata", {}),
+            }
+
             flush_data["nodes_trace_data"][key] = trace_data
-
             flush_data["execution_order"].append({
-                "node": execution["node"],
-                "parent": execution["parent"],
+                "node": node_name,
+                "parent": parent_name,
                 "context_id": context_id,
-                "contain_generation": node.contain_generation,
+                "contain_generation": metadata.get("contain_generation", False),
             })
 
         return flush_data
