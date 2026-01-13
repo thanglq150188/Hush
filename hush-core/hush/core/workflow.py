@@ -211,22 +211,6 @@ class Hush:
 
         return result
 
-    def get_state(self, request_id: str) -> Optional["MemoryState"]:
-        """Get workflow state by request ID.
-
-        Args:
-            request_id: The request ID to look up
-
-        Returns:
-            MemoryState if found, None otherwise
-
-        Note:
-            This requires a state registry implementation.
-            Currently returns None as placeholder.
-        """
-        # TODO: Implement state registry lookup
-        return None
-
     def show(self) -> None:
         """Display workflow structure for debugging."""
         if not self._compiled:
