@@ -88,6 +88,72 @@ langfuse:vpbank:
   enabled: true
   sample_rate: 1.0
 
+# Opik - Comet cloud
+opik:default:
+  _class: OpikConfig
+  api_key: your-opik-api-key-here
+  workspace: your-workspace-name
+  project_name: your-project-name
+  enabled: true
+  sample_rate: 1.0
+
+# Opik - Self-hosted (uncomment to use)
+# opik:local:
+#   _class: OpikConfig
+#   host: http://localhost:5173
+#   project_name: your-project-name
+#   enabled: true
+#   sample_rate: 1.0
+
+# OpenTelemetry - Jaeger (gRPC)
+otel:jaeger:
+  _class: OTELConfig
+  endpoint: http://localhost:4317
+  protocol: grpc
+  service_name: hush-workflow
+  insecure: true
+  enabled: true
+  sample_rate: 1.0
+
+# OpenTelemetry - Jaeger (HTTP) (uncomment to use)
+# otel:jaeger-http:
+#   _class: OTELConfig
+#   endpoint: http://localhost:4318/v1/traces
+#   protocol: http
+#   service_name: hush-workflow
+#   insecure: true
+#   enabled: true
+#   sample_rate: 1.0
+
+# OpenTelemetry - Grafana Tempo (uncomment to use)
+# otel:tempo:
+#   _class: OTELConfig
+#   endpoint: http://localhost:4317
+#   protocol: grpc
+#   service_name: hush-workflow
+#   insecure: true
+#   enabled: true
+#   sample_rate: 1.0
+
+# Arize Phoenix - Local (default port 6006)
+phoenix:local:
+  _class: PhoenixConfig
+  endpoint: http://localhost:4317
+  project_name: hush-workflow
+  batch: true
+  enabled: true
+  sample_rate: 1.0
+
+# Arize Phoenix - Cloud (uncomment to use)
+# phoenix:cloud:
+#   _class: PhoenixConfig
+#   endpoint: https://app.phoenix.arize.com/v1/traces
+#   api_key: your-phoenix-api-key-here
+#   project_name: hush-workflow
+#   batch: true
+#   enabled: true
+#   sample_rate: 1.0
+
 # Cache (Optional)
 # redis:vpbank:
 #   _class: RedisConfig

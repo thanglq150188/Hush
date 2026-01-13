@@ -3,14 +3,16 @@
 This test verifies that the LangfuseTracer can successfully connect
 to Langfuse cloud and create traces.
 """
+
 import uuid
 from datetime import datetime
 from typing import Any, Dict
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 
-# Langfuse cloud credentials (from beeflow resources.yaml)
+# Langfuse cloud credentials (for integration tests)
 LANGFUSE_CONFIG = {
     "public_key": "pk-lf-ecd32a21-4c71-4276-b753-dfb8481aa062",
     "secret_key": "sk-lf-a53719f5-856d-418c-86bf-98c7a09f7105",
@@ -63,16 +65,18 @@ class MockMemoryState:
         """Add an execution to the order."""
         node = MockNode(node_id)
         self._indexer.add_node(node)
-        self.execution_order.append({
-            "node": node_id,
-            "parent": parent_id,
-            "context_id": context_id,
-        })
+        self.execution_order.append(
+            {
+                "node": node_id,
+                "parent": parent_id,
+                "context_id": context_id,
+            }
+        )
 
 
 def test_langfuse_config_creation():
     """Test LangfuseConfig can be created."""
-    from hush.observability.langfuse import LangfuseConfig
+    from hush.observability import LangfuseConfig
 
     config = LangfuseConfig(**LANGFUSE_CONFIG)
     assert config.public_key == LANGFUSE_CONFIG["public_key"]
@@ -80,34 +84,41 @@ def test_langfuse_config_creation():
     assert config.host == LANGFUSE_CONFIG["host"]
 
 
-def test_langfuse_tracer_creation():
-    """Test LangfuseTracer can be created."""
-    from hush.observability.langfuse import LangfuseConfig, LangfuseTracer
+def test_langfuse_client_creation():
+    """Test LangfuseClient can be created."""
+    from hush.observability import LangfuseClient, LangfuseConfig
 
     config = LangfuseConfig(**LANGFUSE_CONFIG)
-    tracer = LangfuseTracer(config=config)
+    client = LangfuseClient(config)
 
-    assert tracer.config == config
-    assert repr(tracer) == f"<LangfuseTracer host={config.host}>"
+    assert client.config == config
+    assert repr(client) == f"<LangfuseClient host={config.host}>"
+
+
+def test_langfuse_tracer_creation():
+    """Test LangfuseTracer can be created with resource_key."""
+    from hush.observability import LangfuseTracer
+
+    tracer = LangfuseTracer(resource_key="langfuse:vpbank")
+
+    assert tracer.resource_key == "langfuse:vpbank"
+    assert repr(tracer) == "<LangfuseTracer resource_key=langfuse:vpbank>"
 
 
 def test_tracer_config_serialization():
-    """Test tracer config can be serialized."""
-    from hush.observability.langfuse import LangfuseConfig, LangfuseTracer
+    """Test tracer config returns resource_key for subprocess."""
+    from hush.observability import LangfuseTracer
 
-    config = LangfuseConfig(**LANGFUSE_CONFIG)
-    tracer = LangfuseTracer(config=config)
+    tracer = LangfuseTracer(resource_key="langfuse:vpbank")
 
     tracer_config = tracer._get_tracer_config()
-    assert tracer_config["public_key"] == config.public_key
-    assert tracer_config["secret_key"] == config.secret_key
-    assert tracer_config["host"] == config.host
+    assert tracer_config["resource_key"] == "langfuse:vpbank"
 
 
 def test_langfuse_tracer_registered():
-    """Test LangfuseTracer is registered."""
+    """Test LangfuseTracer is registered in tracer registry."""
     from hush.core.tracers import get_registered_tracers
-    from hush.observability.langfuse import LangfuseTracer  # noqa: F401
+    from hush.observability import LangfuseTracer  # noqa: F401
 
     tracers = get_registered_tracers()
     assert "LangfuseTracer" in tracers
@@ -120,7 +131,7 @@ def test_langfuse_cloud_connection():
     This test creates a real trace in Langfuse cloud.
     Run with: pytest -m integration
     """
-    from hush.observability.langfuse import LangfuseConfig, LangfuseTracer
+    from hush.observability import LangfuseClient, LangfuseConfig
 
     try:
         from langfuse import Langfuse
@@ -128,13 +139,7 @@ def test_langfuse_cloud_connection():
         pytest.skip("langfuse package not installed")
 
     config = LangfuseConfig(**LANGFUSE_CONFIG)
-
-    # Create Langfuse client directly to test connection
-    client = Langfuse(
-        public_key=config.public_key,
-        secret_key=config.secret_key,
-        host=config.host,
-    )
+    client = LangfuseClient(config)
 
     # Create a test trace
     trace = client.trace(
@@ -142,7 +147,7 @@ def test_langfuse_cloud_connection():
         user_id="test-user",
         session_id="test-session",
         metadata={"test": True, "source": "hush-observability-tests"},
-        input={"message": "Testing LangfuseTracer integration"},
+        input={"message": "Testing LangfuseClient integration"},
         output={"status": "success"},
     )
 
@@ -165,23 +170,30 @@ def test_langfuse_cloud_connection():
 
 
 @pytest.mark.integration
-def test_langfuse_tracer_flush():
-    """Test LangfuseTracer.flush() method directly.
+def test_langfuse_tracer_flush_with_resource_hub():
+    """Test LangfuseTracer.flush() method with ResourceHub.
 
     This test calls the static flush method with mock data.
+    Requires ResourceHub to be configured with langfuse:test key.
     """
-    from hush.observability.langfuse import LangfuseConfig, LangfuseTracer
+    from hush.observability import LangfuseTracer
 
     try:
         import langfuse  # noqa: F401
     except ImportError:
         pytest.skip("langfuse package not installed")
 
+    # Mock ResourceHub to return a LangfuseClient
+    from hush.observability import LangfuseClient, LangfuseConfig
+
+    mock_config = LangfuseConfig(**LANGFUSE_CONFIG)
+    mock_client = LangfuseClient(mock_config)
+
     # Prepare mock flush data
     request_id = str(uuid.uuid4())
     flush_data = {
         "tracer_type": "LangfuseTracer",
-        "tracer_config": LANGFUSE_CONFIG,
+        "tracer_config": {"resource_key": "langfuse:test"},
         "workflow_name": "test-workflow",
         "request_id": request_id,
         "user_id": "test-user",
@@ -209,16 +221,12 @@ def test_langfuse_tracer_flush():
         "nodes_trace_data": {
             "root": {
                 "name": "root",
-                "start_time": datetime.now(),
-                "end_time": datetime.now(),
                 "input": {"workflow": "test"},
                 "output": {"status": "completed"},
                 "metadata": {"version": "1.0"},
             },
             "child-1": {
                 "name": "child-1",
-                "start_time": datetime.now(),
-                "end_time": datetime.now(),
                 "input": {"step": 1},
                 "output": {"processed": True},
                 "metadata": {},
@@ -226,8 +234,6 @@ def test_langfuse_tracer_flush():
             "llm-node": {
                 "name": "llm-node",
                 "model": "gpt-4",
-                "start_time": datetime.now(),
-                "end_time": datetime.now(),
                 "input": {"prompt": "Test prompt"},
                 "output": {"completion": "Test response"},
                 "metadata": {"temperature": 0.7},
@@ -240,11 +246,16 @@ def test_langfuse_tracer_flush():
         },
     }
 
-    # Call flush directly (this runs synchronously for testing)
-    LangfuseTracer.flush(flush_data)
+    # Mock get_hub to return our mock client
+    mock_hub = MagicMock()
+    mock_hub.langfuse.return_value = mock_client
+
+    with patch("hush.core.registry.get_hub", return_value=mock_hub):
+        # Call flush directly (this runs synchronously for testing)
+        LangfuseTracer.flush(flush_data)
 
     print(f"\nTrace created with request_id: {request_id}")
-    print(f"Check Langfuse dashboard: https://cloud.langfuse.com")
+    print("Check Langfuse dashboard: https://cloud.langfuse.com")
 
 
 if __name__ == "__main__":
@@ -256,28 +267,32 @@ if __name__ == "__main__":
     test_langfuse_config_creation()
     print("   PASSED")
 
-    print("\n2. Testing LangfuseTracer creation...")
+    print("\n2. Testing LangfuseClient creation...")
+    test_langfuse_client_creation()
+    print("   PASSED")
+
+    print("\n3. Testing LangfuseTracer creation...")
     test_langfuse_tracer_creation()
     print("   PASSED")
 
-    print("\n3. Testing tracer config serialization...")
+    print("\n4. Testing tracer config serialization...")
     test_tracer_config_serialization()
     print("   PASSED")
 
-    print("\n4. Testing LangfuseTracer registration...")
+    print("\n5. Testing LangfuseTracer registration...")
     test_langfuse_tracer_registered()
     print("   PASSED")
 
-    print("\n5. Testing Langfuse cloud connection...")
+    print("\n6. Testing Langfuse cloud connection...")
     try:
         test_langfuse_cloud_connection()
         print("   PASSED")
     except Exception as e:
         print(f"   FAILED: {e}")
 
-    print("\n6. Testing LangfuseTracer.flush()...")
+    print("\n7. Testing LangfuseTracer.flush() with ResourceHub...")
     try:
-        test_langfuse_tracer_flush()
+        test_langfuse_tracer_flush_with_resource_hub()
         print("   PASSED")
     except Exception as e:
         print(f"   FAILED: {e}")
