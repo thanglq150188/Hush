@@ -1,9 +1,11 @@
-"""ForLoopNode - sequential iteration node for processing items one at a time."""
+"""MapNode - parallel iteration node applying function to each item in a collection."""
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from time import perf_counter
+import asyncio
 import traceback
+import os
 
 from hush.core.configs.node_config import NodeType
 from hush.core.nodes.iteration.base import BaseIterationNode, Each
@@ -15,14 +17,13 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
-class ForLoopNode(BaseIterationNode):
-    """Sequential iteration node - processes items one at a time in order.
+class MapNode(BaseIterationNode):
+    """Parallel iteration node - applies function to each item concurrently.
 
-    Use ForLoopNode when:
-        - Iterations may depend on results from previous iterations
-        - You need predictable sequential execution
-        - Memory constraints require processing one item at a time
-        - Nested loops where inner loop depends on outer loop variables
+    Use MapNode when:
+        - Items are independent and can be processed in parallel
+        - Order of execution doesn't matter (results are collected in order)
+        - You want maximum throughput for I/O-bound operations
 
     API (unified inputs với Each wrapper):
         - `inputs`: Dict tất cả variables. Dùng Each() wrapper cho iteration sources.
@@ -30,18 +31,18 @@ class ForLoopNode(BaseIterationNode):
           - Regular values: Broadcast cho tất cả iterations (cùng value)
 
     Example:
-        with ForLoopNode(
-            name="process_loop",
+        with MapNode(
+            name="process_map",
             inputs={
                 "x": Each([1, 2, 3]),           # iterate
                 "y": Each([10, 20, 30]),        # iterate (zipped với x)
                 "multiplier": 10                 # broadcast
             }
-        ) as loop:
+        ) as map_node:
             node = calc(inputs={"x": PARENT["x"], "y": PARENT["y"], "multiplier": PARENT["multiplier"]})
             START >> node >> END
 
-        # Tạo 3 iterations (chạy tuần tự):
+        # Tạo 3 iterations (chạy song song):
         #   iteration 0: {"x": 1, "y": 10, "multiplier": 10}
         #   iteration 1: {"x": 2, "y": 20, "multiplier": 10}
         #   iteration 2: {"x": 3, "y": 30, "multiplier": 10}
@@ -50,26 +51,29 @@ class ForLoopNode(BaseIterationNode):
         #   {"result": [r1, r2, r3], "iteration_metrics": {...}}
 
     Note:
-        For parallel iteration where items are independent,
-        use MapNode instead for better performance.
+        For sequential iteration where each step depends on the previous,
+        use MapNode instead.
     """
 
-    type: NodeType = "for"
+    type: NodeType = "map"
 
-    __slots__ = ['_each', '_broadcast_inputs', '_raw_outputs', '_raw_inputs']
+    __slots__ = ['_max_concurrency', '_each', '_broadcast_inputs', '_raw_outputs', '_raw_inputs']
 
     def __init__(
         self,
         inputs: Optional[Dict[str, Any]] = None,
+        max_concurrency: Optional[int] = None,
         **kwargs
     ):
-        """Khởi tạo ForLoopNode.
+        """Khởi tạo MapNode.
 
         Args:
             inputs: Dict mapping variable names đến values hoặc Each(source).
                     - Each(source): Được iterate (zipped nếu nhiều)
                     - Other values: Broadcast cho tất cả iterations
                     Values có thể là literals hoặc Refs đến upstream nodes.
+            max_concurrency: Số concurrent tasks tối đa được chạy.
+                Mặc định là số CPU cores nếu không chỉ định.
         """
         # Lưu raw outputs và inputs trước khi super().__init__ normalize chúng
         self._raw_outputs = kwargs.get('outputs')
@@ -87,6 +91,8 @@ class ForLoopNode(BaseIterationNode):
                 self._each[var_name] = value.source
             else:
                 self._broadcast_inputs[var_name] = value
+
+        self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
     def _post_build(self):
         """Thiết lập inputs/outputs sau khi inner graph được build.
@@ -189,7 +195,7 @@ class ForLoopNode(BaseIterationNode):
         lengths = {var: len(lst) for var, lst in each_values.items()}
         if len(set(lengths.values())) > 1:
             LOGGER.error(
-                f"ForLoopNode '{self.full_name}': 'each' variables have different lengths: {lengths}"
+                f"MapNode '{self.full_name}': 'each' variables have different lengths: {lengths}"
             )
             raise ValueError(
                 f"All 'each' variables must have the same length. Got: {lengths}"
@@ -210,7 +216,7 @@ class ForLoopNode(BaseIterationNode):
         state: 'MemoryState',
         context_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Thực thi for loop qua iteration data tuần tự."""
+        """Thực thi for loop qua iteration data song song."""
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -227,36 +233,45 @@ class ForLoopNode(BaseIterationNode):
 
             # Build iteration data
             iteration_data = self._build_iteration_data(each_values, broadcast_values)
-
+            
             # Lưu inputs để logging
             _inputs = {**each_values, **broadcast_values}
 
             # Cảnh báo nếu không có iterations
             if not iteration_data:
                 LOGGER.warning(
-                    f"ForLoopNode '{self.full_name}': no iteration data. No iterations will be executed."
+                    f"MapNode '{self.full_name}': no iteration data. No iterations will be executed."
                 )
 
-            # Execute iterations sequentially
-            latencies_ms: List[float] = []
-            final_results: List[Dict[str, Any]] = []
-            success_count = 0
+            # Tạo semaphore để giới hạn concurrency
+            semaphore = asyncio.Semaphore(self._max_concurrency)
 
-            for i, loop_data in enumerate(iteration_data):
-                task_id = f"for[{i}]" if not context_id else f"{context_id}.for[{i}]"
-                iter_start = perf_counter()
-
+            async def execute_iteration(task_id: str, loop_data: Dict[str, Any]) -> Dict[str, Any]:
+                """Thực thi single iteration, trả về result với metadata."""
+                start = perf_counter()
                 try:
-                    self.inject_inputs(state, loop_data, task_id)
-                    result = await self._graph.run(state, task_id)
-                    final_results.append(result)
-                    success_count += 1
+                    async with semaphore:
+                        self.inject_inputs(state, loop_data, task_id)
+                        result = await self._graph.run(state, task_id)
+                    return {"result": result, "latency_ms": (perf_counter() - start) * 1000, "success": True}
                 except Exception as e:
-                    final_results.append({"error": str(e), "error_type": type(e).__name__})
+                    return {"result": {"error": str(e), "error_type": type(e).__name__}, "latency_ms": (perf_counter() - start) * 1000, "success": False}
 
-                latencies_ms.append((perf_counter() - iter_start) * 1000)
+            # Chạy tất cả iterations song song
+            raw_results = await asyncio.gather(*[
+                execute_iteration(f"for[{i}]", data)
+                for i, data in enumerate(iteration_data)
+            ])
 
-            error_count = len(iteration_data) - success_count
+            # Extract metrics và results trong single pass
+            latencies_ms = []
+            final_results = []
+            success_count = 0
+            for r in raw_results:
+                latencies_ms.append(r["latency_ms"])
+                final_results.append(r["result"])
+                success_count += r["success"]
+            error_count = len(raw_results) - success_count
 
             # Tính iteration metrics
             iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
@@ -269,7 +284,7 @@ class ForLoopNode(BaseIterationNode):
             # Cảnh báo nếu error rate cao (>10%)
             if iteration_data and error_count / len(iteration_data) > 0.1:
                 LOGGER.warning(
-                    f"ForLoopNode '{self.full_name}': high error rate ({error_count / len(iteration_data):.1%}). "
+                    f"MapNode '{self.full_name}': high error rate ({error_count / len(iteration_data):.1%}). "
                     f"{error_count}/{len(iteration_data)} iterations failed."
                 )
 
@@ -300,6 +315,7 @@ class ForLoopNode(BaseIterationNode):
     def specific_metadata(self) -> Dict[str, Any]:
         """Trả về metadata đặc thù của subclass."""
         return {
+            "max_concurrency": self._max_concurrency,
             "each": list(self._each.keys()),
             "inputs": list(self._broadcast_inputs.keys())
         }

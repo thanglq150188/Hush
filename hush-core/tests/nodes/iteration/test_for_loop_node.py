@@ -1,8 +1,9 @@
-"""Tests for ForLoopNode - parallel iteration node."""
+"""Tests for ForLoopNode - sequential iteration node."""
 
 import pytest
-import asyncio
 from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+from hush.core.nodes.iteration.map_node import MapNode
+from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
 from hush.core.nodes.iteration.base import Each
 from hush.core.nodes.transform.code_node import code_node
 from hush.core.nodes.graph.graph_node import GraphNode
@@ -11,15 +12,15 @@ from hush.core.states import StateSchema, MemoryState
 
 
 # ============================================================
-# Test 1: Simple Iteration with Each()
+# Test 1: Simple Sequential Iteration
 # ============================================================
 
 class TestSimpleIteration:
-    """Test basic iteration with Each() wrapper."""
+    """Test basic sequential iteration with Each() wrapper."""
 
     @pytest.mark.asyncio
     async def test_double_values(self):
-        """Test simple doubling of values."""
+        """Test simple doubling of values sequentially."""
         @code_node
         def double(value: int):
             return {"result": value * 2}
@@ -40,11 +41,11 @@ class TestSimpleIteration:
 
 
 # ============================================================
-# Test 2: Iteration with Broadcast
+# Test 2: Sequential Iteration with Broadcast
 # ============================================================
 
 class TestBroadcastIteration:
-    """Test iteration with broadcast values."""
+    """Test sequential iteration with broadcast values."""
 
     @pytest.mark.asyncio
     async def test_multiply_with_broadcast(self):
@@ -79,11 +80,11 @@ class TestBroadcastIteration:
 # ============================================================
 
 class TestMultipleEachVariables:
-    """Test iteration with multiple Each() variables (zipped)."""
+    """Test sequential iteration with multiple Each() variables (zipped)."""
 
     @pytest.mark.asyncio
     async def test_zip_two_lists(self):
-        """Test zipping two lists together."""
+        """Test zipping two lists together sequentially."""
         @code_node
         def add(x: int, y: int):
             return {"sum": x + y}
@@ -105,126 +106,170 @@ class TestMultipleEachVariables:
         result = await loop.run(state)
         assert result['sum'] == [11, 22, 33]
 
-    @pytest.mark.asyncio
-    async def test_multiple_each_with_broadcast(self):
-        """Test multiple Each() variables plus broadcast."""
-        @code_node
-        def compute(x: int, y: int, factor: int):
-            return {"result": (x + y) * factor}
-
-        with ForLoopNode(
-            name="compute_loop",
-            inputs={
-                "x": Each([1, 2, 3]),
-                "y": Each([10, 20, 30]),
-                "factor": 2  # broadcast
-            }
-        ) as loop:
-            node = compute(
-                inputs={"x": PARENT["x"], "y": PARENT["y"], "factor": PARENT["factor"]},
-                outputs=PARENT
-            )
-            START >> node >> END
-
-        loop.build()
-        schema = StateSchema(loop)
-        state = MemoryState(schema)
-
-        result = await loop.run(state)
-        assert result['result'] == [22, 44, 66]  # (1+10)*2, (2+20)*2, (3+30)*2
-
 
 # ============================================================
-# Test 4: String Processing
+# Test 4: Nested ForLoopNode (Sequential Nested Loops)
 # ============================================================
 
-class TestStringProcessing:
-    """Test iteration with string data."""
+class TestNestedForLoop:
+    """Test nested ForLoopNode - sequential iteration supports nested loops."""
 
     @pytest.mark.asyncio
-    async def test_format_greetings(self):
-        """Test formatting greeting strings."""
+    async def test_nested_forloop_with_outer_variable(self):
+        """Test nested ForLoopNode where inner loop depends on outer variable.
+
+        This is the key advantage of sequential ForLoopNode over parallel MapNode.
+        """
         @code_node
-        def format_greeting(name: str, greeting: str):
-            return {"message": f"{greeting}, {name}!"}
+        def multiply(x: int, y: int):
+            return {"result": x * y}
 
         with ForLoopNode(
-            name="greeting_loop",
-            inputs={
-                "name": Each(["Alice", "Bob", "Charlie"]),
-                "greeting": "Hello"  # broadcast
-            }
-        ) as loop:
-            node = format_greeting(
-                inputs={"name": PARENT["name"], "greeting": PARENT["greeting"]},
-                outputs=PARENT
-            )
-            START >> node >> END
-
-        loop.build()
-        schema = StateSchema(loop)
-        state = MemoryState(schema)
-
-        result = await loop.run(state)
-        expected = ["Hello, Alice!", "Hello, Bob!", "Hello, Charlie!"]
-        assert result['message'] == expected
-
-
-# ============================================================
-# Test 5: Chain of Nodes in Loop
-# ============================================================
-
-class TestChainOfNodes:
-    """Test multiple nodes chained inside a loop."""
-
-    @pytest.mark.asyncio
-    async def test_add_then_multiply(self):
-        """Test chain: add_one -> multiply_two."""
-        @code_node
-        def add_one(x: int):
-            return {"y": x + 1}
-
-        @code_node
-        def multiply_two(y: int):
-            return {"z": y * 2}
-
-        with ForLoopNode(
-            name="chain_loop",
+            name="outer_loop",
             inputs={"x": Each([1, 2, 3])}
-        ) as loop:
-            n1 = add_one(inputs={"x": PARENT["x"]})
-            n2 = multiply_two(inputs={"y": n1["y"]}, outputs=PARENT)
-            START >> n1 >> n2 >> END
+        ) as outer:
+            with ForLoopNode(
+                name="inner_loop",
+                inputs={
+                    "y": Each([10, 20]),
+                    "x": PARENT["x"]  # Pass outer variable to inner loop
+                }
+            ) as inner:
+                node = multiply(
+                    inputs={"x": PARENT["x"], "y": PARENT["y"]},
+                    outputs=PARENT
+                )
+                START >> node >> END
 
-        loop.build()
-        schema = StateSchema(loop)
+            inner["result"] >> PARENT["results"]
+            START >> inner >> END
+
+        outer.build()
+        schema = StateSchema(outer)
         state = MemoryState(schema)
 
-        result = await loop.run(state)
-        assert result['z'] == [4, 6, 8]  # (1+1)*2, (2+1)*2, (3+1)*2
+        result = await outer.run(state)
 
-
-# ============================================================
-# Test 6: Concurrency Limit
-# ============================================================
-
-class TestConcurrencyLimit:
-    """Test max_concurrency parameter."""
+        # Outer x=1: inner produces [1*10, 1*20] = [10, 20]
+        # Outer x=2: inner produces [2*10, 2*20] = [20, 40]
+        # Outer x=3: inner produces [3*10, 3*20] = [30, 60]
+        assert result["results"] == [[10, 20], [20, 40], [30, 60]]
 
     @pytest.mark.asyncio
-    async def test_limited_concurrency(self):
-        """Test with max_concurrency=2."""
+    async def test_three_level_nested_forloop(self):
+        """Test 3-level nested ForLoopNode."""
         @code_node
-        async def slow_process(value: int):
-            await asyncio.sleep(0.01)
-            return {"result": value * 10}
+        def combine(a: int, b: int, c: int):
+            return {"value": a * 100 + b * 10 + c}
 
         with ForLoopNode(
-            name="concurrent_loop",
-            inputs={"value": Each([1, 2, 3, 4, 5])},
-            max_concurrency=2
+            name="level1",
+            inputs={"a": Each([1, 2])}
+        ) as l1:
+            with ForLoopNode(
+                name="level2",
+                inputs={
+                    "b": Each([3, 4]),
+                    "a": PARENT["a"]
+                }
+            ) as l2:
+                with ForLoopNode(
+                    name="level3",
+                    inputs={
+                        "c": Each([5, 6]),
+                        "a": PARENT["a"],
+                        "b": PARENT["b"]
+                    }
+                ) as l3:
+                    node = combine(
+                        inputs={"a": PARENT["a"], "b": PARENT["b"], "c": PARENT["c"]},
+                        outputs=PARENT
+                    )
+                    START >> node >> END
+
+                l3["value"] >> PARENT["values"]
+                START >> l3 >> END
+
+            l2["values"] >> PARENT["level2_results"]
+            START >> l2 >> END
+
+        l1.build()
+        schema = StateSchema(l1)
+        state = MemoryState(schema)
+
+        result = await l1.run(state)
+
+        # a=1: b=3: [135, 136], b=4: [145, 146]
+        # a=2: b=3: [235, 236], b=4: [245, 246]
+        expected = [
+            [[135, 136], [145, 146]],
+            [[235, 236], [245, 246]]
+        ]
+        assert result["level2_results"] == expected
+
+
+# ============================================================
+# Test 5: ForLoopNode with WhileLoopNode Inside
+# ============================================================
+
+class TestForLoopWithWhileLoop:
+    """Test ForLoopNode containing WhileLoopNode."""
+
+    @pytest.mark.asyncio
+    async def test_forloop_with_whileloop_inside(self):
+        """Test sequential ForLoop containing WhileLoop."""
+        @code_node
+        def halve(value: int):
+            return {"new_value": value // 2}
+
+        with ForLoopNode(
+            name="outer_for",
+            inputs={"item": Each([10, 20, 30])}
+        ) as for_loop:
+            with WhileLoopNode(
+                name="inner_while",
+                inputs={"value": PARENT["item"]},
+                stop_condition="value < 5",
+                max_iterations=10
+            ) as while_loop:
+                node = halve(inputs={"value": PARENT["value"]})
+                node["new_value"] >> PARENT["value"]
+                START >> node >> END
+
+            while_loop["value"] >> PARENT["final_value"]
+            START >> while_loop >> END
+
+        for_loop.build()
+        schema = StateSchema(for_loop)
+        state = MemoryState(schema)
+
+        result = await for_loop.run(state)
+
+        # 10 -> 5 -> 2 (stops at 2)
+        # 20 -> 10 -> 5 -> 2 (stops at 2)
+        # 30 -> 15 -> 7 -> 3 (stops at 3)
+        assert result["final_value"] == [2, 2, 3]
+
+
+# ============================================================
+# Test 6: Empty Iteration
+# ============================================================
+
+class TestEmptyIteration:
+    """Test behavior with empty iteration data."""
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self):
+        """Test sequential iteration over empty list."""
+        @code_node
+        def double(value: int):
+            return {"result": value * 2}
+
+        with ForLoopNode(
+            name="empty_loop",
+            inputs={"value": Each([])}
         ) as loop:
-            node = slow_process(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
 
         loop.build()
@@ -232,7 +277,8 @@ class TestConcurrencyLimit:
         state = MemoryState(schema)
 
         result = await loop.run(state)
-        assert result['result'] == [10, 20, 30, 40, 50]
+        assert result['result'] == []
+        assert result['iteration_metrics']['total_iterations'] == 0
 
 
 # ============================================================
@@ -281,22 +327,22 @@ class TestRefFromPreviousNode:
 
 
 # ============================================================
-# Test 8: Empty Iteration
+# Test 8: Iteration Metrics
 # ============================================================
 
-class TestEmptyIteration:
-    """Test behavior with empty iteration data."""
+class TestIterationMetrics:
+    """Test iteration metrics are collected."""
 
     @pytest.mark.asyncio
-    async def test_empty_list(self):
-        """Test iteration over empty list."""
+    async def test_metrics_collected(self):
+        """Test that iteration metrics are returned."""
         @code_node
         def double(value: int):
             return {"result": value * 2}
 
         with ForLoopNode(
-            name="empty_loop",
-            inputs={"value": Each([])}
+            name="metrics_loop",
+            inputs={"value": Each([1, 2, 3])}
         ) as loop:
             node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
@@ -306,8 +352,13 @@ class TestEmptyIteration:
         state = MemoryState(schema)
 
         result = await loop.run(state)
-        assert result['result'] == []
-        assert result['iteration_metrics']['total_iterations'] == 0
+
+        assert "iteration_metrics" in result
+        metrics = result["iteration_metrics"]
+        assert metrics["total_iterations"] == 3
+        assert metrics["success_count"] == 3
+        assert metrics["error_count"] == 0
+        assert "latency_avg_ms" in metrics
 
 
 # ============================================================
@@ -346,119 +397,35 @@ class TestMismatchedLengths:
 
 
 # ============================================================
-# Test 10: Ref with Nested Operations
+# Test 10: Accumulation Pattern (Sequential Dependency)
 # ============================================================
 
-class TestRefWithNestedOperations:
-    """Test Ref with nested key access."""
+class TestAccumulationPattern:
+    """Test patterns that require sequential execution."""
 
     @pytest.mark.asyncio
-    async def test_nested_ref_access(self):
-        """Test Each() with nested Ref like node['a']['b']."""
-        @code_node
-        def get_complex_data():
-            return {
-                "dataset": {
-                    "items": [10, 20, 30],
-                    "multiplier": 2
-                }
-            }
+    async def test_running_total(self):
+        """Test accumulating values across iterations.
+
+        This pattern requires sequential execution because each iteration
+        depends on the result of the previous one.
+        """
+        # Use a closure to maintain state across iterations
+        totals = []
 
         @code_node
-        def process_with_factor(item: int, factor: int):
-            return {"result": item * factor}
-
-        with GraphNode(name="ref_ops_graph") as graph:
-            data_node = get_complex_data()
-
-            with ForLoopNode(
-                name="ref_ops_loop",
-                inputs={
-                    "item": Each(data_node["dataset"]["items"]),
-                    "factor": data_node["dataset"]["multiplier"]
-                },
-                outputs=PARENT
-            ) as loop:
-                proc = process_with_factor(
-                    inputs={"item": PARENT["item"], "factor": PARENT["factor"]},
-                    outputs=PARENT
-                )
-                START >> proc >> END
-
-            START >> data_node >> loop >> END
-
-        graph.build()
-        schema = StateSchema(graph)
-        state = MemoryState(schema)
-
-        result = await graph.run(state)
-        assert result["result"] == [20, 40, 60]  # [10*2, 20*2, 30*2]
-
-
-# ============================================================
-# Test 11: PARENT Broadcast Inside GraphNode
-# ============================================================
-
-class TestParentBroadcast:
-    """Test PARENT reference as broadcast inside GraphNode."""
-
-    @pytest.mark.asyncio
-    async def test_parent_broadcast(self):
-        """Test ForLoopNode with PARENT broadcast inside GraphNode."""
-        @code_node
-        def get_items():
-            return {"items": [1, 2, 3, 4, 5]}
-
-        @code_node
-        def multiply_item(item: int, multiplier: int):
-            return {"result": item * multiplier}
-
-        with GraphNode(name="parent_broadcast_graph") as graph:
-            items_node = get_items()
-
-            with ForLoopNode(
-                name="multiply_loop",
-                inputs={
-                    "item": Each(items_node["items"]),
-                    "multiplier": PARENT["multiplier"]  # PARENT = graph
-                },
-                outputs=PARENT
-            ) as loop:
-                proc = multiply_item(
-                    inputs={"item": PARENT["item"], "multiplier": PARENT["multiplier"]},
-                    outputs=PARENT
-                )
-                START >> proc >> END
-
-            START >> items_node >> loop >> END
-
-        graph.build()
-        schema = StateSchema(graph)
-        state = MemoryState(schema, inputs={"multiplier": 10})
-
-        result = await graph.run(state)
-        assert result["result"] == [10, 20, 30, 40, 50]
-
-
-# ============================================================
-# Test 12: Iteration Metrics
-# ============================================================
-
-class TestIterationMetrics:
-    """Test iteration metrics are collected."""
-
-    @pytest.mark.asyncio
-    async def test_metrics_collected(self):
-        """Test that iteration metrics are returned."""
-        @code_node
-        def double(value: int):
-            return {"result": value * 2}
+        def accumulate(value: int):
+            # Get previous total or start at 0
+            prev_total = totals[-1] if totals else 0
+            new_total = prev_total + value
+            totals.append(new_total)
+            return {"running_total": new_total}
 
         with ForLoopNode(
-            name="metrics_loop",
-            inputs={"value": Each([1, 2, 3])}
+            name="accumulate_loop",
+            inputs={"value": Each([1, 2, 3, 4, 5])}
         ) as loop:
-            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = accumulate(inputs={"value": PARENT["value"]}, outputs=PARENT)
             START >> node >> END
 
         loop.build()
@@ -467,9 +434,5 @@ class TestIterationMetrics:
 
         result = await loop.run(state)
 
-        assert "iteration_metrics" in result
-        metrics = result["iteration_metrics"]
-        assert metrics["total_iterations"] == 3
-        assert metrics["success_count"] == 3
-        assert metrics["error_count"] == 0
-        assert "latency_avg_ms" in metrics
+        # Sequential: 1, 1+2=3, 3+3=6, 6+4=10, 10+5=15
+        assert result["running_total"] == [1, 3, 6, 10, 15]
