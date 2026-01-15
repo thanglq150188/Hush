@@ -86,8 +86,8 @@ class WhileLoopNode(BaseIterationNode):
         # Lưu user-provided inputs trước khi merge
         user_inputs = self.inputs.copy()
 
-        # Preserve output mappings set via << syntax before _post_build
-        # e.g., PARENT["final_total"] << loop["total"] sets loop.outputs["total"].value
+        # Preserve output mappings set via >> syntax before _post_build
+        # e.g., loop["total"] >> PARENT["final_total"] sets loop.outputs["total"].value
         existing_outputs = self.outputs or {}
 
         # Bắt đầu với inner graph's inputs/outputs
@@ -147,7 +147,8 @@ class WhileLoopNode(BaseIterationNode):
             should_stop = self._evaluate_stop_condition(step_inputs)
 
             while not should_stop and step_count < self._max_iterations:
-                step_name = f"while-{step_count}"
+                # Tạo context_id duy nhất, bao gồm parent context nếu có
+                step_name = f"{context_id}.while-{step_count}" if context_id else f"while-{step_count}"
                 iter_start = perf_counter()
 
                 self.inject_inputs(state, step_inputs, step_name)

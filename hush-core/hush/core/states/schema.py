@@ -22,7 +22,7 @@ class StateSchema:
         _refs: [Ref, ...] - Ref với idx=source_idx (None nếu không phải ref)
     """
 
-    __slots__ = ("name", "_indexer", "_values", "_refs")
+    __slots__ = ("name", "_indexer", "_values", "_refs", "_output_refs")
 
     def __init__(self, node=None, name: str = None):
         """Khởi tạo schema.
@@ -33,7 +33,8 @@ class StateSchema:
         """
         self._indexer: Dict[Tuple[str, str], int] = {}
         self._values: List[Any] = []
-        self._refs: List[Optional[Ref]] = []  # Ref với idx=source_idx, hoặc None
+        self._refs: List[Optional[Ref]] = []  # Input refs với idx=source_idx, hoặc None
+        self._output_refs: List[Optional[Ref]] = []  # Output refs riêng biệt
 
         self.name = name
         if node is not None:
@@ -71,7 +72,7 @@ class StateSchema:
                 ref = param.value
                 if ref.has_ops:
                     raise ValueError(f"Output ref {node_name}.{var_name} -> {ref.node}.{ref.var} không được có operation")
-                self._register(node_name, var_name, Ref(ref.node, ref.var, is_output=True))
+                self._register_output(node_name, var_name, Ref(ref.node, ref.var, is_output=True))
             elif (node_name, var_name) not in self._indexer:
                 # Không phải output ref, đăng ký với default
                 self._register(node_name, var_name, param.default)
@@ -111,10 +112,27 @@ class StateSchema:
         self._indexer[key] = idx
         self._values.append(value)  # Có thể là Ref, được resolve trong _build()
         self._refs.append(None)
+        self._output_refs.append(None)
+
+    def _register_output(self, node: str, var: str, ref: Ref) -> None:
+        """Đăng ký output ref riêng biệt (không overwrite input ref)."""
+        key = (node, var)
+        if key not in self._indexer:
+            # Biến chưa tồn tại - đăng ký mới và set output ref
+            idx = len(self._values)
+            self._indexer[key] = idx
+            self._values.append(None)  # Không có default value
+            self._refs.append(None)  # Không có input ref
+            self._output_refs.append(ref)
+            return
+        # Biến đã tồn tại - lưu output ref riêng
+        idx = self._indexer[key]
+        self._output_refs[idx] = ref
 
     def _build(self) -> None:
         """Resolve tất cả giá trị Ref sang source index và lưu vào _refs."""
         for key, idx in self._indexer.items():
+            # Resolve input refs
             value = self._values[idx]
             if isinstance(value, Ref):
                 source_key = (value.node, value.var)
@@ -122,6 +140,13 @@ class StateSchema:
                 value.idx = source_idx  # Set source index trên Ref
                 self._refs[idx] = value
                 self._values[idx] = None  # Xóa Ref, giá trị lấy từ source
+
+            # Resolve output refs
+            output_ref = self._output_refs[idx]
+            if output_ref is not None:
+                target_key = (output_ref.node, output_ref.var)
+                target_idx = self._indexer.get(target_key, -1)
+                output_ref.idx = target_idx
 
     # =========================================================================
     # Các Method Phân Giải Core (O(1))
@@ -138,9 +163,15 @@ class StateSchema:
         return None
 
     def get_ref(self, idx: int) -> Optional[Ref]:
-        """Lấy object Ref cho một index (None nếu không phải tham chiếu)."""
+        """Lấy input Ref cho một index (None nếu không phải tham chiếu)."""
         if 0 <= idx < len(self._refs):
             return self._refs[idx]
+        return None
+
+    def get_output_ref(self, idx: int) -> Optional[Ref]:
+        """Lấy output Ref cho một index (None nếu không có output ref)."""
+        if 0 <= idx < len(self._output_refs):
+            return self._output_refs[idx]
         return None
 
     def get_source(self, idx: int) -> Tuple[int, Optional[Callable]]:

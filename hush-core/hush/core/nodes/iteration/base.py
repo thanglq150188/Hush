@@ -156,9 +156,10 @@ class BaseIterationNode(BaseNode):
             inputs: Dict {var_name: value} cần inject
             context_id: Context ID cho iteration này
 
-        Note: Values được lưu tại vị trí của iteration node.
-        Schema link inner_graph.var -> iteration_node.var nên
-        PARENT["var"] trong inner nodes resolve đúng qua refs.
+        Note: Values được lưu tại cả iteration node và inner graph.
+        Điều này cho phép nested iteration nodes truy cập PARENT values.
         """
+        inner_graph_name = self._graph.full_name
         for var_name, value in inputs.items():
             state[self.full_name, var_name, context_id] = value
+            state[inner_graph_name, var_name, context_id] = value

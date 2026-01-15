@@ -21,8 +21,9 @@ if TYPE_CHECKING:
 class StarRef:
     """Đại diện cho node[...] - tất cả outputs của một node.
 
-    Dùng với << để forward tất cả outputs:
-        PARENT[...] << merge[...]  → set merge.outputs = PARENT
+    Dùng với >> để forward tất cả outputs:
+        producer[...] >> PARENT[...]  → forward tất cả outputs đến graph parent
+        producer[...] >> consumer[...] → forward tất cả outputs đến consumer inputs
 
     Cú pháp: node[...] (dùng Ellipsis, không phải *)
     """
@@ -32,24 +33,35 @@ class StarRef:
     def __init__(self, node: 'BaseNode'):
         self._node = node
 
-    def __lshift__(self, other: 'StarRef'):
-        """PARENT[...] << merge[...]
+    def __rshift__(self, other: 'StarRef'):
+        """producer[...] >> target[...]
 
-        Khi PARENT[...] << merge[...]:
-        - self là StarRef của PARENT
-        - other là StarRef của merge
-        - Forward tất cả outputs của merge đến PARENT
+        Khi producer[...] >> target[...]:
+        - self là StarRef của producer (source)
+        - other là StarRef của target (PARENT hoặc consumer node)
+        - Forward tất cả outputs của producer đến target
         """
         if isinstance(other, StarRef):
-            # self._node là PARENT (DummyNode), other._node là source node
-            if hasattr(self._node, 'name') and self._node.name == "__PARENT__":
-                source_node = other._node
+            source_node = self._node
+            target_node = other._node
+
+            # Case 1: target là PARENT[...]
+            if hasattr(target_node, 'name') and target_node.name == "__PARENT__":
                 father = source_node.father
                 # Forward mỗi output key đến PARENT
                 for key in list(source_node.outputs.keys()):
                     param = source_node.outputs[key]
                     # Set value là Ref đến father (graph cha)
                     param.value = Ref(father, key)
+            # Case 2: target là consumer node[...]
+            else:
+                # Forward producer outputs đến consumer inputs với cùng key names
+                if source_node.outputs is None:
+                    source_node.outputs = {}
+                for key in list(source_node.outputs.keys()):
+                    param = source_node.outputs[key]
+                    # Set value là Ref đến consumer node với cùng key
+                    param.value = Ref(target_node, key)
         return other
 
 
@@ -146,7 +158,7 @@ class BaseNode(ABC):
                     f"Node '{self.name}' có key trùng giữa input/output: {overlapping_keys}. "
                     "Tên biến input và output phải khác nhau."
                 )
-
+    
     def _resolve_value(self, key: str, value: Any) -> Any:
         """Chuyển đổi value thành Ref hoặc giữ nguyên literal.
 
@@ -306,7 +318,7 @@ class BaseNode(ABC):
         """Cho phép cú pháp node["var"] hoặc node[*] để tham chiếu output.
 
         - node["var"] → Ref đến output cụ thể
-        - node[*] → StarRef đại diện tất cả outputs (dùng với << để forward)
+        - node[...] → StarRef đại diện tất cả outputs (dùng với >> để forward)
         """
         if item is Ellipsis:  # node[...]
             return StarRef(self)
@@ -329,8 +341,8 @@ class BaseNode(ABC):
             return other
         return NotImplemented
 
-    def __lshift__(self, other):
-        """node << other: kết nối other đến node này."""
+    def __rrshift__(self, other):
+        """[n1, n2] >> self: kết nối list nodes đến self."""
         edge_type = "condition" if self.type == "branch" else "normal"
         add_edge = getattr(self.father, "add_edge", None)
 
@@ -338,21 +350,6 @@ class BaseNode(ABC):
             if add_edge is not None:
                 for node in other:
                     add_edge(node.name, self.name, edge_type)
-            return other
-        elif getattr(other, 'name', None) is not None:
-            if add_edge is not None:
-                add_edge(other.name, self.name, edge_type)
-            return self
-        return NotImplemented
-
-    def __rrshift__(self, other):
-        """[n1, n2] >> self"""
-        self.__lshift__(other)
-        return self
-
-    def __rlshift__(self, other):
-        """[n1, n2] << self"""
-        self.__rshift__(other)
         return self
 
     def __gt__(self, other):
@@ -455,6 +452,7 @@ class BaseNode(ABC):
         for var_name, param in self.inputs.items():
             # Luôn đọc từ state trước (có thể có giá trị từ MemoryState inputs hoặc Ref)
             value = state[self.full_name, var_name, context_id]
+
             if value is not None:
                 result[var_name] = value
             elif param.value is not None and not isinstance(param.value, Ref):

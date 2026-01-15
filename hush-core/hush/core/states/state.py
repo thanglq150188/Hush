@@ -77,10 +77,10 @@ class MemoryState:
         ctx_key = ctx if ctx is not None else DEFAULT_CONTEXT
         self._cells[idx][ctx_key] = value
 
-        # Output ref? Push 1 hop
-        ref = self.schema._refs[idx]
-        if ref and ref.is_output and ref.idx >= 0:
-            self._cells[ref.idx][ctx_key] = ref._fn(value)
+        # Output ref? Push 1 hop (sử dụng _output_refs riêng biệt)
+        output_ref = self.schema._output_refs[idx]
+        if output_ref and output_ref.idx >= 0:
+            self._cells[output_ref.idx][ctx_key] = output_ref._fn(value)
 
     def __getitem__(self, key: Tuple[str, str, Optional[str]]) -> Any:
         """Get value. Resolve input ref if needed (1 hop only).

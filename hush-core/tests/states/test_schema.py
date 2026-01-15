@@ -62,7 +62,7 @@ class TestSimpleLinearGraph:
 
         # node_a.result should be output ref to linear_graph.result
         idx = schema.get_index("linear_graph.node_a", "result")
-        ref = schema._refs[idx]
+        ref = schema.get_output_ref(idx)
         assert isinstance(ref, Ref)
         assert ref.is_output is True
         assert ref.node == "linear_graph"
@@ -258,7 +258,7 @@ class TestNestedGraph:
         assert isinstance(schema._refs[schema.get_index("outer.inner", "x")], Ref)
 
         # inner.result should be output ref to outer.inner_result
-        inner_result_ref = schema._refs[schema.get_index("outer.inner", "result")]
+        inner_result_ref = schema.get_output_ref(schema.get_index("outer.inner", "result"))
         assert isinstance(inner_result_ref, Ref)
         assert inner_result_ref.is_output is True
 
