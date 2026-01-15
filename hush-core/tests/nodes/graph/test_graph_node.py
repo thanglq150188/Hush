@@ -1202,20 +1202,20 @@ class TestSoftEdgeBehavior:
 
 
 # ============================================================
-# Test 11: Output Mapping Syntax (PARENT[...] << node[...])
+# Test 11: Output Mapping Syntax (node[...] >> PARENT[...])
 # ============================================================
 
 class TestOutputMappingSyntax:
-    """Test cú pháp output mapping mới với <<.
+    """Test cú pháp output mapping mới với >>.
 
     Cú pháp mới:
-    - PARENT[...] << node[...]  → forward tất cả outputs của node đến PARENT
-    - PARENT["key"] << node["key"]  → map output cụ thể
+    - node[...] >> PARENT[...]  → forward tất cả outputs của node đến PARENT
+    - node["key"] >> PARENT["key"]  → map output cụ thể
     """
 
     @pytest.mark.asyncio
     async def test_forward_all_outputs_with_ellipsis(self):
-        """PARENT[...] << node[...] forwards tất cả outputs."""
+        """node[...] >> PARENT[...] forwards tất cả outputs."""
         with GraphNode(name="ellipsis_forward") as graph:
             node = CodeNode(
                 name="compute",
@@ -1223,7 +1223,7 @@ class TestOutputMappingSyntax:
                 inputs={"x": PARENT["x"]}
             )
             # Cú pháp mới: forward tất cả outputs
-            PARENT[...] << node[...]
+            node[...] >> PARENT[...]
 
             START >> node >> END
 
@@ -1238,7 +1238,7 @@ class TestOutputMappingSyntax:
 
     @pytest.mark.asyncio
     async def test_specific_output_mapping(self):
-        """PARENT["key"] << node["key"] maps output cụ thể."""
+        """node["key"] >> PARENT["key"] maps output cụ thể."""
         with GraphNode(name="specific_mapping") as graph:
             node = CodeNode(
                 name="compute",
@@ -1246,8 +1246,8 @@ class TestOutputMappingSyntax:
                 inputs={"x": PARENT["x"]}
             )
             # Map chỉ a và c đến PARENT
-            PARENT["result_a"] << node["a"]
-            PARENT["result_c"] << node["c"]
+            node["a"] >> PARENT["result_a"]
+            node["c"] >> PARENT["result_c"]
 
             START >> node >> END
 
@@ -1263,7 +1263,7 @@ class TestOutputMappingSyntax:
 
     @pytest.mark.asyncio
     async def test_mixed_old_and_new_syntax(self):
-        """Có thể dùng cả outputs=PARENT và PARENT[...] << node[...]."""
+        """Có thể dùng cả outputs=PARENT và node[...] >> PARENT[...]."""
         with GraphNode(name="mixed_syntax") as graph:
             # Node 1 dùng cú pháp cũ
             node1 = CodeNode(
@@ -1278,7 +1278,7 @@ class TestOutputMappingSyntax:
                 code_fn=lambda v: {"result": v + 100},
                 inputs={"v": node1["value"]}
             )
-            PARENT[...] << node2[...]  # Cú pháp mới
+            node2[...] >> PARENT[...]  # Cú pháp mới
 
             START >> node1 >> node2 >> END
 
@@ -1293,20 +1293,20 @@ class TestOutputMappingSyntax:
 
 
 # ============================================================
-# Test 12: Node-to-Node Output Mapping (node1[...] << node2[...])
+# Test 12: Node-to-Node Output Mapping (producer[...] >> consumer[...])
 # ============================================================
 
 class TestNodeToNodeOutputMapping:
     """Test output mapping syntax từ node đến node (không phải PARENT).
 
     Cú pháp:
-    - node1["x"] << node2["y"]  → node2's "y" output maps to node1's "x" input
-    - Tương đương với: node2.outputs = {"y": node1["x"]}
+    - producer["y"] >> consumer["x"]  → producer's "y" output maps to consumer's "x" input
+    - Tương đương với: producer.outputs = {"y": consumer["x"]}
     """
 
     @pytest.mark.asyncio
     async def test_node_to_node_single_output(self):
-        """node1['x'] << node2['y'] maps node2's y output to node1's x input."""
+        """producer['y'] >> consumer['x'] maps producer's y output to consumer's x input."""
         with GraphNode(name="node_to_node") as graph:
             # node1 produces a value
             node1 = CodeNode(
@@ -1314,14 +1314,14 @@ class TestNodeToNodeOutputMapping:
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": PARENT["x"]}
             )
-            # node2 receives from node1 via << syntax
+            # node2 receives from node1 via >> syntax
             node2 = CodeNode(
                 name="consumer",
                 code_fn=lambda value: {"final": value + 100},
-                inputs={}  # inputs will be set via << syntax
+                inputs={}  # inputs will be set via >> syntax
             )
             # Map node1's "result" to node2's "value" input
-            node2["value"] << node1["result"]
+            node1["result"] >> node2["value"]
 
             # node3 outputs to PARENT
             node3 = CodeNode(
@@ -1352,7 +1352,7 @@ class TestNodeToNodeOutputMapping:
                 code_fn=lambda x: {"a": x + 1, "b": x + 2},
                 inputs={"x": PARENT["x"]}
             )
-            # Consumer receives both outputs via << syntax
+            # Consumer receives both outputs via >> syntax
             consumer = CodeNode(
                 name="consumer",
                 code_fn=lambda val_a, val_b: {"sum": val_a + val_b},
@@ -1360,8 +1360,8 @@ class TestNodeToNodeOutputMapping:
                 outputs=PARENT
             )
             # Map producer's outputs to consumer's inputs
-            consumer["val_a"] << producer["a"]
-            consumer["val_b"] << producer["b"]
+            producer["a"] >> consumer["val_a"]
+            producer["b"] >> consumer["val_b"]
 
             START >> producer >> consumer >> END
 
@@ -1376,7 +1376,7 @@ class TestNodeToNodeOutputMapping:
 
     @pytest.mark.asyncio
     async def test_node_to_node_ellipsis_forward(self):
-        """node1[...] << node2[...] forwards all outputs to node1's inputs."""
+        """producer[...] >> consumer[...] forwards all outputs to consumer's inputs."""
         with GraphNode(name="node_ellipsis") as graph:
             producer = CodeNode(
                 name="producer",
@@ -1390,7 +1390,7 @@ class TestNodeToNodeOutputMapping:
                 outputs=PARENT
             )
             # Forward all producer outputs to consumer inputs
-            consumer[...] << producer[...]
+            producer[...] >> consumer[...]
 
             START >> producer >> consumer >> END
 
@@ -1405,7 +1405,7 @@ class TestNodeToNodeOutputMapping:
 
     @pytest.mark.asyncio
     async def test_node_to_node_chain(self):
-        """Chain of node-to-node mappings: A -> B -> C using << syntax."""
+        """Chain of node-to-node mappings: A -> B -> C using >> syntax."""
         with GraphNode(name="chain_mapping") as graph:
             node_a = CodeNode(
                 name="node_a",
@@ -1424,9 +1424,9 @@ class TestNodeToNodeOutputMapping:
                 outputs=PARENT
             )
 
-            # Chain mappings using << syntax
-            node_b["inp"] << node_a["value"]
-            node_c["inp"] << node_b["value"]
+            # Chain mappings using >> syntax
+            node_a["value"] >> node_b["inp"]
+            node_b["value"] >> node_c["inp"]
 
             START >> node_a >> node_b >> node_c >> END
 
@@ -1454,11 +1454,11 @@ class TestNodeToNodeOutputMapping:
                 inputs={}
             )
             # Map producer["a"] to consumer input
-            consumer["val"] << producer["a"]
+            producer["a"] >> consumer["val"]
             # Map producer["b"] directly to PARENT
-            PARENT["direct_b"] << producer["b"]
+            producer["b"] >> PARENT["direct_b"]
             # Map consumer output to PARENT
-            PARENT["processed"] << consumer["processed"]
+            consumer["processed"] >> PARENT["processed"]
 
             START >> producer >> consumer >> END
 
@@ -1473,7 +1473,7 @@ class TestNodeToNodeOutputMapping:
 
     @pytest.mark.asyncio
     async def test_node_to_node_parallel_merge(self):
-        """Parallel nodes output to a merge node via << syntax."""
+        """Parallel nodes output to a merge node via >> syntax."""
         with GraphNode(name="parallel_merge_mapping") as graph:
             branch_a = CodeNode(
                 name="branch_a",
@@ -1492,9 +1492,9 @@ class TestNodeToNodeOutputMapping:
                 outputs=PARENT
             )
 
-            # Map parallel branches to merge inputs via << syntax
-            merge["a"] << branch_a["result"]
-            merge["b"] << branch_b["result"]
+            # Map parallel branches to merge inputs via >> syntax
+            branch_a["result"] >> merge["a"]
+            branch_b["result"] >> merge["b"]
 
             START >> [branch_a, branch_b] >> merge >> END
 
@@ -1518,12 +1518,12 @@ class TestComplexGraphWithAllNodeTypes:
     These tests demonstrate real-world scenarios where multiple node types
     work together in a single workflow using new syntax:
     - Branch("name").if_(condition, target).otherwise(default)
-    - node1["key"] << node2["key"] for output mapping
+    - producer["key"] >> consumer["key"] for output mapping
     """
 
     @pytest.mark.asyncio
     async def test_forloop_with_new_syntax(self):
-        """Test ForLoopNode using << syntax inside and to PARENT."""
+        """Test ForLoopNode using >> syntax inside and to PARENT."""
         from hush.core.nodes.iteration.for_loop_node import ForLoopNode
         from hush.core.nodes.iteration.base import Each
 
@@ -1539,11 +1539,11 @@ class TestComplexGraphWithAllNodeTypes:
                 node = double_number(
                     inputs={"value": PARENT["value"]}
                 )
-                PARENT[...] << node[...]
+                node[...] >> PARENT[...]
                 START >> node >> END
 
             # Map loop result to graph output
-            PARENT["final_result"] << loop["result"]
+            loop["result"] >> PARENT["final_result"]
             START >> loop >> END
 
         graph.build()
@@ -1594,7 +1594,7 @@ class TestComplexGraphWithAllNodeTypes:
                 inc = increment_counter(
                     inputs={"counter": PARENT["counter"]}
                 )
-                PARENT["counter"] << inc["new_counter"]
+                inc["new_counter"] >> PARENT["counter"]
 
                 # Branch based on counter parity using new fluent syntax
                 branch = (Branch("parity_check")
@@ -1611,20 +1611,20 @@ class TestComplexGraphWithAllNodeTypes:
                     inputs={"total": PARENT["total"]}
                 )
 
-                # Merge to update total using new << syntax
+                # Merge to update total using new >> syntax
                 # Both branches output to separate inputs, merge picks the one that executed
                 merge = merge_totals(inputs={"even_total": even_node["new_total"],
                                             "odd_total": odd_node["new_total"]})
-                                            
-                PARENT["total"] << merge["merged_total"]
+
+                merge["merged_total"] >> PARENT["total"]
 
                 # Note: Can't chain soft edges in single line due to Python's
                 # comparison chaining (a > b > c becomes (a>b) and (b>c))
                 START >> inc >> branch >> [even_node, odd_node] > merge
                 merge >> END
 
-            PARENT["final_total"] << loop["total"]
-            PARENT["final_counter"] << loop["counter"]
+            loop["total"] >> PARENT["final_total"]
+            loop["counter"] >> PARENT["final_counter"]
             START >> loop >> END
 
         graph.build()
@@ -1666,13 +1666,13 @@ class TestComplexGraphWithAllNodeTypes:
                     halve_node = halve(
                         inputs={"value": PARENT["value"]}
                     )
-                    PARENT["value"] << halve_node["new_value"]
+                    halve_node["new_value"] >> PARENT["value"]
                     START >> halve_node >> END
 
-                PARENT[...] << while_loop[...]
+                while_loop["value"] >> PARENT["value"]
                 START >> while_loop >> END
 
-            PARENT["results"] << for_loop["value"]
+            for_loop["value"] >> PARENT["results"]
             START >> for_loop >> END
 
         graph.build()
@@ -1750,7 +1750,7 @@ class TestComplexGraphWithAllNodeTypes:
                         "multiplier": PARENT["multiplier"]
                     }
                 )
-                PARENT[...] << batch_node[...]
+                batch_node[...] >> PARENT[...]
                 START >> batch_node >> END
 
             # Step 3b: Iterative processing with WhileLoop
@@ -1770,16 +1770,16 @@ class TestComplexGraphWithAllNodeTypes:
                         "step": PARENT["step"]
                     }
                 )
-                PARENT["current"] << iter_node["new_current"]
+                iter_node["new_current"] >> PARENT["current"]
                 START >> iter_node >> END
 
-            # Step 4: Aggregate using new << syntax
+            # Step 4: Aggregate using new >> syntax
             aggregator = aggregate_results(
                 inputs={}
             )
-            aggregator["batch_result"] << batch_loop["processed"]
-            aggregator["iterative_result"] << iter_loop["current"]
-            PARENT[...] << aggregator[...]
+            batch_loop["processed"] >> aggregator["batch_result"]
+            iter_loop["current"] >> aggregator["iterative_result"]
+            aggregator[...] >> PARENT[...]
 
             # Wire up the graph
             START >> parser >> router
@@ -1846,7 +1846,7 @@ class TestComplexGraphWithAllNodeTypes:
                 double_node = double(
                     inputs={"value": PARENT["value"]}
                 )
-                PARENT[...] << double_node[...]
+                double_node[...] >> PARENT[...]
                 START >> double_node >> END
 
             # Parallel WhileLoop
@@ -1862,14 +1862,14 @@ class TestComplexGraphWithAllNodeTypes:
                 count_node = count_step(
                     inputs={"counter": PARENT["counter"]}
                 )
-                PARENT["counter"] << count_node["new_counter"]
+                count_node["new_counter"] >> PARENT["counter"]
                 START >> count_node >> END
 
-            # Merge both results using new << syntax
+            # Merge both results using new >> syntax
             merger = merge_results(inputs={})
-            merger["for_result"] << for_loop["doubled"]
-            merger["while_result"] << while_loop["counter"]
-            PARENT[...] << merger[...]
+            for_loop["doubled"] >> merger["for_result"]
+            while_loop["counter"] >> merger["while_result"]
+            merger[...] >> PARENT[...]
 
             START >> [for_loop, while_loop] >> merger >> END
 
@@ -1933,7 +1933,7 @@ class TestComplexGraphWithAllNodeTypes:
                 sq = square(
                     inputs={"value": PARENT["value"]}
                 )
-                PARENT[...] << sq[...]
+                sq[...] >> PARENT[...]
                 START >> sq >> END
 
             # WhileLoop path
@@ -1949,10 +1949,10 @@ class TestComplexGraphWithAllNodeTypes:
                 inc = increment(
                     inputs={"counter": PARENT["counter"]}
                 )
-                PARENT["counter"] << inc["new_counter"]
+                inc["new_counter"] >> PARENT["counter"]
                 START >> inc >> END
 
-            # Collect results using new << syntax
+            # Collect results using new >> syntax
             collector = CodeNode(
                 name="collector",
                 code_fn=lambda for_result, while_result: {
@@ -1960,9 +1960,9 @@ class TestComplexGraphWithAllNodeTypes:
                 },
                 inputs={}
             )
-            collector["for_result"] << for_loop["squared"]
-            collector["while_result"] << while_loop["counter"]
-            PARENT[...] << collector[...]
+            for_loop["squared"] >> collector["for_result"]
+            while_loop["counter"] >> collector["while_result"]
+            collector[...] >> PARENT[...]
 
             START >> prep >> branch
             branch > for_loop
@@ -1977,7 +1977,7 @@ class TestComplexGraphWithAllNodeTypes:
             inner = inner_graph(
                 inputs={"x": PARENT["input_value"]}
             )
-            PARENT[...] << inner[...]
+            inner[...] >> PARENT[...]
             START >> inner >> END
 
         outer_graph.build()

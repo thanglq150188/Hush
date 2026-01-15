@@ -116,8 +116,8 @@ class ForLoopNode(BaseIterationNode):
         }
         parsed_outputs["iteration_metrics"] = Param(type=Dict, required=False)
 
-        # Preserve output mappings set via << syntax before _post_build
-        # e.g., PARENT["final_result"] << loop["result"] sets loop.outputs["result"].value
+        # Preserve output mappings set via >> syntax before _post_build
+        # e.g., loop["result"] >> PARENT["final_result"] sets loop.outputs["result"].value
         existing_outputs = self.outputs or {}
 
         # Merge với user-provided outputs nếu có
@@ -126,7 +126,7 @@ class ForLoopNode(BaseIterationNode):
         else:
             self.outputs = parsed_outputs
 
-        # Restore .value references from existing outputs (set by << syntax)
+        # Restore .value references from existing outputs (set by >> syntax)
         for key, existing_param in existing_outputs.items():
             if key in self.outputs and existing_param.value is not None:
                 self.outputs[key].value = existing_param.value
@@ -224,7 +224,7 @@ class ForLoopNode(BaseIterationNode):
 
             # Build iteration data
             iteration_data = self._build_iteration_data(each_values, broadcast_values)
-
+            
             # Lưu inputs để logging
             _inputs = {**each_values, **broadcast_values}
 

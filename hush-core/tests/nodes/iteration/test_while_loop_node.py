@@ -245,17 +245,17 @@ class TestSchemaExtraction:
 
 
 # ============================================================
-# Test 7: New Output Mapping Syntax with <<
+# Test 7: New Output Mapping Syntax with >>
 # ============================================================
 
 class TestWhileLoopNewOutputSyntax:
-    """Test WhileLoopNode with new PARENT[...] << node[...] syntax."""
+    """Test WhileLoopNode with new node[...] >> PARENT[...] syntax."""
 
     @pytest.mark.asyncio
     async def test_ellipsis_forward_all_outputs(self):
-        """Test PARENT[...] << node[...] forwards all outputs in WhileLoop.
+        """Test node[...] >> PARENT[...] forwards all outputs in WhileLoop.
 
-        When using PARENT[...] << node[...], all node outputs are mapped to
+        When using node[...] >> PARENT[...], all node outputs are mapped to
         parent outputs with the same key names.
         """
         @code_node
@@ -274,10 +274,10 @@ class TestWhileLoopNewOutputSyntax:
                 inputs={"counter": PARENT["counter"], "total": PARENT["total"]}
             )
             # Forward all outputs to parent with same key names
-            PARENT[...] << node[...]
+            node[...] >> PARENT[...]
             # Map outputs to loop iteration variables (counter and total)
-            PARENT["counter"] << node["new_counter"]
-            PARENT["total"] << node["new_total"]
+            node["new_counter"] >> PARENT["counter"]
+            node["new_total"] >> PARENT["total"]
             START >> node >> END
 
         loop.build()
@@ -289,14 +289,14 @@ class TestWhileLoopNewOutputSyntax:
         # Counter: 0->1->2->3->4->5, stops at 5 iterations
         assert result.get('iteration_metrics', {}).get('total_iterations') == 5
         # Total: 0+0=0, 0+1=1, 1+2=3, 3+3=6, 6+4=10
-        # The outputs are mapped via PARENT["counter"]<<node["new_counter"],
+        # The outputs are mapped via node["new_counter"] >> PARENT["counter"],
         # so the loop output key is "counter" not "new_counter"
         assert result.get('total') == 10
         assert result.get('counter') == 5
 
     @pytest.mark.asyncio
     async def test_specific_key_mapping(self):
-        """Test PARENT["key"] << node["key"] for specific mapping in WhileLoop.
+        """Test node["key"] >> PARENT["key"] for specific mapping in WhileLoop.
 
         Maps node output "new_a" to parent output "a" (for loop variable update),
         and also creates explicit parent outputs "result_a" and "result_b".
@@ -317,8 +317,8 @@ class TestWhileLoopNewOutputSyntax:
                 inputs={"a": PARENT["a"], "b": PARENT["b"]}
             )
             # Map to loop iteration variables
-            PARENT["a"] << node["new_a"]
-            PARENT["b"] << node["new_b"]
+            node["new_a"] >> PARENT["a"]
+            node["new_b"] >> PARENT["b"]
             START >> node >> END
 
         loop.build()
@@ -336,7 +336,7 @@ class TestWhileLoopNewOutputSyntax:
 
     @pytest.mark.asyncio
     async def test_new_syntax_replaces_old_outputs(self):
-        """Test new << syntax completely replaces old outputs= syntax."""
+        """Test new >> syntax completely replaces old outputs= syntax."""
         @code_node
         def double_step(value: int):
             doubled = value * 2
@@ -352,7 +352,7 @@ class TestWhileLoopNewOutputSyntax:
                 inputs={"value": PARENT["value"]}
             )
             # New syntax only: map doubled output to loop's value variable
-            PARENT["value"] << node["doubled"]
+            node["doubled"] >> PARENT["value"]
             START >> node >> END
 
         loop.build()

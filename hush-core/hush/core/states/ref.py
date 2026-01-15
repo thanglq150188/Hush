@@ -128,18 +128,6 @@ class Ref:
             case 'neg': return lambda x, f=fn: -f(x)
             case 'pos': return lambda x, f=fn: +f(x)
             case 'abs': return lambda x, f=fn: abs(f(x))
-            case 'invert': return lambda x, f=fn: ~f(x)
-            # Bitwise
-            case 'and': return lambda x, f=fn, v=a: f(x) & v
-            case 'rand': return lambda x, f=fn, v=a: v & f(x)
-            case 'or': return lambda x, f=fn, v=a: f(x) | v
-            case 'ror': return lambda x, f=fn, v=a: v | f(x)
-            case 'xor': return lambda x, f=fn, v=a: f(x) ^ v
-            case 'rxor': return lambda x, f=fn, v=a: v ^ f(x)
-            case 'lshift': return lambda x, f=fn, v=a: f(x) << v
-            case 'rlshift': return lambda x, f=fn, v=a: v << f(x)
-            case 'rshift': return lambda x, f=fn, v=a: f(x) >> v
-            case 'rrshift': return lambda x, f=fn, v=a: v >> f(x)
             # So sánh
             case 'eq': return lambda x, f=fn, v=a: f(x) == v
             case 'ne': return lambda x, f=fn, v=a: f(x) != v
@@ -215,48 +203,58 @@ class Ref:
     def __neg__(self): return self._with_op('neg')
     def __pos__(self): return self._with_op('pos')
     def __abs__(self): return self._with_op('abs')
-    def __invert__(self): return self._with_op('invert')
 
     # =========================================================================
-    # Bitwise
+    # Output Mapping (>>)
     # =========================================================================
-    def __and__(self, other): return self._with_op('and', other)
-    def __rand__(self, other): return self._with_op('rand', other)
-    def __or__(self, other): return self._with_op('or', other)
-    def __ror__(self, other): return self._with_op('ror', other)
-    def __xor__(self, other): return self._with_op('xor', other)
-    def __rxor__(self, other): return self._with_op('rxor', other)
-    def __lshift__(self, other):
-        """PARENT["key"] << node["key"] hoặc bitwise lshift.
+    def __rshift__(self, other: "Ref") -> "Ref":
+        """producer["output"] >> consumer["input"] hoặc producer["output"] >> PARENT["dest"].
 
-        Nếu self là Ref đến PARENT và other là Ref → set output mapping.
-        Ngược lại → bitwise lshift operation.
+        Dùng để map output từ producer node (self) đến consumer node hoặc PARENT.
+        - node["src"] >> PARENT["dest"]: map node's src output đến graph output dest
+        - producer["output"] >> consumer["input"]: map producer's output đến consumer's input
+
+        Args:
+            other: Ref đến input của consumer node hoặc PARENT
+
+        Returns:
+            other (consumer Ref) để có thể chain tiếp
         """
-        # Kiểm tra nếu self là PARENT["key"]
-        self_node = self.raw_node
-        if hasattr(self_node, 'name') and self_node.name == "__PARENT__":
-            if isinstance(other, Ref):
-                # self là PARENT["dest_key"], other là node["src_key"]
-                # Set node.outputs[src_key].value = Ref(father, dest_key)
-                source_node = other.raw_node
-                if hasattr(source_node, 'outputs') and hasattr(source_node, 'father'):
-                    from hush.core.utils.common import Param
-                    if source_node.outputs is None:
-                        source_node.outputs = {}
-                    # Tạo Ref đến father (graph cha) với key đích
-                    father_ref = Ref(source_node.father, self.var)
-                    if other.var in source_node.outputs:
-                        source_node.outputs[other.var].value = father_ref
-                    else:
-                        source_node.outputs[other.var] = Param(value=father_ref)
-                return other
-        return self._with_op('lshift', other)
+        if not isinstance(other, Ref):
+            raise TypeError(f">> operator chỉ hỗ trợ Ref, không hỗ trợ {type(other).__name__}")
 
-    def __rlshift__(self, other):
-        """Bitwise rlshift operation."""
-        return self._with_op('rlshift', other)
-    def __rshift__(self, other): return self._with_op('rshift', other)
-    def __rrshift__(self, other): return self._with_op('rrshift', other)
+        source_node = self.raw_node  # producer node
+        target_node = other.raw_node  # consumer node hoặc PARENT
+
+        # Kiểm tra nếu target là PARENT["key"]
+        if hasattr(target_node, 'name') and target_node.name == "__PARENT__":
+            # self là node["src_key"], other là PARENT["dest_key"]
+            # Set node.outputs[src_key].value = Ref(father, dest_key)
+            if hasattr(source_node, 'outputs') and hasattr(source_node, 'father'):
+                from hush.core.utils.common import Param
+                if source_node.outputs is None:
+                    source_node.outputs = {}
+                # Tạo Ref đến father (graph cha) với key đích
+                father_ref = Ref(source_node.father, other.var)
+                if self.var in source_node.outputs:
+                    source_node.outputs[self.var].value = father_ref
+                else:
+                    source_node.outputs[self.var] = Param(value=father_ref)
+            return other
+
+        # producer["output"] >> consumer["input"]
+        # Set producer.outputs[output].value = Ref(consumer, input)
+        if hasattr(source_node, 'outputs'):
+            from hush.core.utils.common import Param
+            if source_node.outputs is None:
+                source_node.outputs = {}
+            # Tạo Ref đến consumer node với key đích
+            consumer_ref = Ref(target_node, other.var)
+            if self.var in source_node.outputs:
+                source_node.outputs[self.var].value = consumer_ref
+            else:
+                source_node.outputs[self.var] = Param(value=consumer_ref)
+        return other
 
     # =========================================================================
     # So sánh

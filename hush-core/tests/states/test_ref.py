@@ -200,49 +200,9 @@ class TestUnaryOperations:
         ref = Ref("n", "num")
         assert abs(ref).execute(-5) == 5
 
-    def test_invert(self):
-        """Test bitwise invert."""
-        ref = Ref("n", "num")
-        assert (~ref).execute(5) == ~5
-
 
 # ============================================================
-# Test 7: Bitwise Operations
-# ============================================================
-
-class TestBitwiseOperations:
-    """Test bitwise operations."""
-
-    def test_and(self):
-        """Test bitwise AND."""
-        ref = Ref("n", "bits")
-        assert (ref & 0b1100).execute(0b1010) == 0b1000
-        assert (0b1100 & ref).execute(0b1010) == 0b1000
-
-    def test_or(self):
-        """Test bitwise OR."""
-        ref = Ref("n", "bits")
-        assert (ref | 0b1100).execute(0b1010) == 0b1110
-        assert (0b1100 | ref).execute(0b1010) == 0b1110
-
-    def test_xor(self):
-        """Test bitwise XOR."""
-        ref = Ref("n", "bits")
-        assert (ref ^ 0b1100).execute(0b1010) == 0b0110
-
-    def test_lshift(self):
-        """Test left shift."""
-        ref = Ref("n", "bits")
-        assert (ref << 2).execute(0b0011) == 0b1100
-
-    def test_rshift(self):
-        """Test right shift."""
-        ref = Ref("n", "bits")
-        assert (ref >> 2).execute(0b1100) == 0b0011
-
-
-# ============================================================
-# Test 8: Comparison Operations
+# Test 7: Comparison Operations
 # ============================================================
 
 class TestComparisonOperations:
@@ -283,7 +243,7 @@ class TestComparisonOperations:
 
 
 # ============================================================
-# Test 9: Contains Operation
+# Test 8: Contains Operation
 # ============================================================
 
 class TestContainsOperation:
@@ -306,7 +266,7 @@ class TestContainsOperation:
 
 
 # ============================================================
-# Test 10: Apply Operation
+# Test 9: Apply Operation
 # ============================================================
 
 class TestApplyOperation:
@@ -344,7 +304,7 @@ class TestApplyOperation:
 
 
 # ============================================================
-# Test 11: Complex Chains
+# Test 10: Complex Chains
 # ============================================================
 
 class TestComplexChains:
@@ -370,7 +330,7 @@ class TestComplexChains:
 
 
 # ============================================================
-# Test 12: Immutability
+# Test 11: Immutability
 # ============================================================
 
 class TestImmutability:
@@ -388,7 +348,7 @@ class TestImmutability:
 
 
 # ============================================================
-# Test 13: Hash and is_same_ref
+# Test 12: Hash and is_same_ref
 # ============================================================
 
 class TestHashAndIsSameRef:
@@ -431,7 +391,7 @@ class TestHashAndIsSameRef:
 
 
 # ============================================================
-# Test 14: Clone
+# Test 13: Clone
 # ============================================================
 
 class TestClone:
@@ -461,7 +421,7 @@ class TestClone:
 
 
 # ============================================================
-# Test 15: Deserialization
+# Test 14: Deserialization
 # ============================================================
 
 class TestDeserialization:
@@ -476,7 +436,7 @@ class TestDeserialization:
 
 
 # ============================================================
-# Test 16: Error Handling
+# Test 15: Error Handling
 # ============================================================
 
 class TestErrorHandling:
@@ -491,7 +451,7 @@ class TestErrorHandling:
 
 
 # ============================================================
-# Test 17: Repr
+# Test 16: Repr
 # ============================================================
 
 class TestRepr:
