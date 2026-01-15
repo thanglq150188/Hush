@@ -44,7 +44,7 @@ class MemoryState:
             request_id: ID yêu cầu (tự động tạo nếu không cung cấp)
         """
         self.schema = schema
-        self._cells: List[Cell] = [Cell(v) for v in schema._values]
+        self._cells: List[Cell] = [Cell(v) for v in schema._defaults]
         self._execution_order: List[Dict[str, str]] = []
         self._trace_metadata: Dict[str, Dict[str, Any]] = {}
         self._user_id = user_id or str(_uuid4())
@@ -63,7 +63,7 @@ class MemoryState:
     # =========================================================================
 
     def __setitem__(self, key: Tuple[str, str, Optional[str]], value: Any) -> None:
-        """Store value. Push to output ref if exists (1 hop only).
+        """Store value. Push to target if push_ref exists (1 hop only).
 
         Args:
             key: Tuple (node, var, ctx)
@@ -77,13 +77,13 @@ class MemoryState:
         ctx_key = ctx if ctx is not None else DEFAULT_CONTEXT
         self._cells[idx][ctx_key] = value
 
-        # Output ref? Push 1 hop (sử dụng _output_refs riêng biệt)
-        output_ref = self.schema._output_refs[idx]
-        if output_ref and output_ref.idx >= 0:
-            self._cells[output_ref.idx][ctx_key] = output_ref._fn(value)
+        # Push ref? Push 1 hop to target
+        push_ref = self.schema._push_refs[idx]
+        if push_ref and push_ref.idx >= 0:
+            self._cells[push_ref.idx][ctx_key] = push_ref._fn(value)
 
     def __getitem__(self, key: Tuple[str, str, Optional[str]]) -> Any:
-        """Get value. Resolve input ref if needed (1 hop only).
+        """Get value. Pull from source if pull_ref exists (1 hop only).
 
         Args:
             key: Tuple (node, var, ctx)
@@ -103,12 +103,12 @@ class MemoryState:
         if ctx_key in cell:
             return cell[ctx_key]
 
-        # Input ref? Pull 1 hop and cache
-        ref = self.schema._refs[idx]
-        if ref and not ref.is_output and ref.idx >= 0:
-            source_cell = self._cells[ref.idx]
+        # Pull ref? Pull 1 hop from source and cache
+        pull_ref = self.schema._pull_refs[idx]
+        if pull_ref and not pull_ref.is_output and pull_ref.idx >= 0:
+            source_cell = self._cells[pull_ref.idx]
             if ctx_key in source_cell:
-                result = ref._fn(source_cell[ctx_key])
+                result = pull_ref._fn(source_cell[ctx_key])
                 cell[ctx_key] = result  # Cache
                 return result
 
@@ -292,12 +292,12 @@ class MemoryState:
         for node, var in self.schema:
             idx = self.schema.get_index(node, var)
             cell = self._cells[idx]
-            ref = self.schema._refs[idx]
+            pull_ref = self.schema._pull_refs[idx]
 
             if not cell.contexts:
                 # Chưa có giá trị
-                if ref:
-                    print(f"{node}.{var} -> ref[{ref.idx}] (chưa có giá trị)")
+                if pull_ref:
+                    print(f"{node}.{var} -> pull_ref[{pull_ref.idx}] (chưa có giá trị)")
                 else:
                     print(f"{node}.{var} -> {cell.default_value}")
             elif len(cell.contexts) == 1:
