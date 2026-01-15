@@ -249,50 +249,7 @@ class TestSchemaExtraction:
 # ============================================================
 
 class TestWhileLoopNewOutputSyntax:
-    """Test WhileLoopNode with new node[...] >> PARENT[...] syntax."""
-
-    @pytest.mark.asyncio
-    async def test_ellipsis_forward_all_outputs(self):
-        """Test node[...] >> PARENT[...] forwards all outputs in WhileLoop.
-
-        When using node[...] >> PARENT[...], all node outputs are mapped to
-        parent outputs with the same key names.
-        """
-        @code_node
-        def compute_step(counter: int, total: int):
-            new_counter = counter + 1
-            new_total = total + counter
-            return {"new_counter": new_counter, "new_total": new_total}
-
-        with WhileLoopNode(
-            name="ellipsis_while_loop",
-            inputs={"counter": 0, "total": 0},
-            stop_condition="counter >= 5",
-            max_iterations=10
-        ) as loop:
-            node = compute_step(
-                inputs={"counter": PARENT["counter"], "total": PARENT["total"]}
-            )
-            # Forward all outputs to parent with same key names
-            node[...] >> PARENT[...]
-            # Map outputs to loop iteration variables (counter and total)
-            node["new_counter"] >> PARENT["counter"]
-            node["new_total"] >> PARENT["total"]
-            START >> node >> END
-
-        loop.build()
-        schema = StateSchema(loop)
-        state = MemoryState(schema)
-
-        result = await loop.run(state)
-
-        # Counter: 0->1->2->3->4->5, stops at 5 iterations
-        assert result.get('iteration_metrics', {}).get('total_iterations') == 5
-        # Total: 0+0=0, 0+1=1, 1+2=3, 3+3=6, 6+4=10
-        # The outputs are mapped via node["new_counter"] >> PARENT["counter"],
-        # so the loop output key is "counter" not "new_counter"
-        assert result.get('total') == 10
-        assert result.get('counter') == 5
+    """Test WhileLoopNode with node["key"] >> PARENT["key"] syntax."""
 
     @pytest.mark.asyncio
     async def test_specific_key_mapping(self):

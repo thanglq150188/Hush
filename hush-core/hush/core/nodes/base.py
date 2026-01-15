@@ -18,53 +18,6 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
-class StarRef:
-    """Đại diện cho node[...] - tất cả outputs của một node.
-
-    Dùng với >> để forward tất cả outputs:
-        producer[...] >> PARENT[...]  → forward tất cả outputs đến graph parent
-        producer[...] >> consumer[...] → forward tất cả outputs đến consumer inputs
-
-    Cú pháp: node[...] (dùng Ellipsis, không phải *)
-    """
-
-    __slots__ = ('_node',)
-
-    def __init__(self, node: 'BaseNode'):
-        self._node = node
-
-    def __rshift__(self, other: 'StarRef'):
-        """producer[...] >> target[...]
-
-        Khi producer[...] >> target[...]:
-        - self là StarRef của producer (source)
-        - other là StarRef của target (PARENT hoặc consumer node)
-        - Forward tất cả outputs của producer đến target
-        """
-        if isinstance(other, StarRef):
-            source_node = self._node
-            target_node = other._node
-
-            # Case 1: target là PARENT[...]
-            if hasattr(target_node, 'name') and target_node.name == "__PARENT__":
-                father = source_node.father
-                # Forward mỗi output key đến PARENT
-                for key in list(source_node.outputs.keys()):
-                    param = source_node.outputs[key]
-                    # Set value là Ref đến father (graph cha)
-                    param.value = Ref(father, key)
-            # Case 2: target là consumer node[...]
-            else:
-                # Forward producer outputs đến consumer inputs với cùng key names
-                if source_node.outputs is None:
-                    source_node.outputs = {}
-                for key in list(source_node.outputs.keys()):
-                    param = source_node.outputs[key]
-                    # Set value là Ref đến consumer node với cùng key
-                    param.value = Ref(target_node, key)
-        return other
-
-
 class BaseNode(ABC):
     """Base class cho tất cả các node trong workflow.
 
@@ -315,13 +268,10 @@ class BaseNode(ABC):
         return f"{self.full_name}[{context_id or 'main'}]"
 
     def __getitem__(self, item) -> 'Ref':
-        """Cho phép cú pháp node["var"] hoặc node[*] để tham chiếu output.
+        """Cho phép cú pháp node["var"] để tham chiếu output.
 
         - node["var"] → Ref đến output cụ thể
-        - node[...] → StarRef đại diện tất cả outputs (dùng với >> để forward)
         """
-        if item is Ellipsis:  # node[...]
-            return StarRef(self)
         return Ref(self, item)
 
     def __rshift__(self, other):

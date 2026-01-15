@@ -1202,39 +1202,15 @@ class TestSoftEdgeBehavior:
 
 
 # ============================================================
-# Test 11: Output Mapping Syntax (node[...] >> PARENT[...])
+# Test 11: Output Mapping Syntax (node["key"] >> PARENT["key"])
 # ============================================================
 
 class TestOutputMappingSyntax:
     """Test cú pháp output mapping mới với >>.
 
-    Cú pháp mới:
-    - node[...] >> PARENT[...]  → forward tất cả outputs của node đến PARENT
+    Cú pháp:
     - node["key"] >> PARENT["key"]  → map output cụ thể
     """
-
-    @pytest.mark.asyncio
-    async def test_forward_all_outputs_with_ellipsis(self):
-        """node[...] >> PARENT[...] forwards tất cả outputs."""
-        with GraphNode(name="ellipsis_forward") as graph:
-            node = CodeNode(
-                name="compute",
-                code_fn=lambda x: {"double": x * 2, "triple": x * 3},
-                inputs={"x": PARENT["x"]}
-            )
-            # Cú pháp mới: forward tất cả outputs
-            node[...] >> PARENT[...]
-
-            START >> node >> END
-
-        graph.build()
-
-        schema = StateSchema(graph)
-        state = schema.create_state(inputs={"x": 5})
-        result = await graph.run(state)
-
-        assert result["double"] == 10
-        assert result["triple"] == 15
 
     @pytest.mark.asyncio
     async def test_specific_output_mapping(self):
@@ -1263,7 +1239,7 @@ class TestOutputMappingSyntax:
 
     @pytest.mark.asyncio
     async def test_mixed_old_and_new_syntax(self):
-        """Có thể dùng cả outputs=PARENT và node[...] >> PARENT[...]."""
+        """Có thể dùng cả outputs=PARENT và node["key"] >> PARENT["key"]."""
         with GraphNode(name="mixed_syntax") as graph:
             # Node 1 dùng cú pháp cũ
             node1 = CodeNode(
@@ -1278,7 +1254,7 @@ class TestOutputMappingSyntax:
                 code_fn=lambda v: {"result": v + 100},
                 inputs={"v": node1["value"]}
             )
-            node2[...] >> PARENT[...]  # Cú pháp mới
+            node2["result"] >> PARENT["result"]  # Cú pháp mới
 
             START >> node1 >> node2 >> END
 
@@ -1293,7 +1269,7 @@ class TestOutputMappingSyntax:
 
 
 # ============================================================
-# Test 12: Node-to-Node Output Mapping (producer[...] >> consumer[...])
+# Test 12: Node-to-Node Output Mapping (producer["key"] >> consumer["key"])
 # ============================================================
 
 class TestNodeToNodeOutputMapping:
@@ -1373,35 +1349,6 @@ class TestNodeToNodeOutputMapping:
 
         # (10+1) + (10+2) = 11 + 12 = 23
         assert result["sum"] == 23
-
-    @pytest.mark.asyncio
-    async def test_node_to_node_ellipsis_forward(self):
-        """producer[...] >> consumer[...] forwards all outputs to consumer's inputs."""
-        with GraphNode(name="node_ellipsis") as graph:
-            producer = CodeNode(
-                name="producer",
-                code_fn=lambda x: {"double": x * 2, "triple": x * 3},
-                inputs={"x": PARENT["x"]}
-            )
-            consumer = CodeNode(
-                name="consumer",
-                code_fn=lambda double, triple: {"result": double + triple},
-                inputs={},
-                outputs=PARENT
-            )
-            # Forward all producer outputs to consumer inputs
-            producer[...] >> consumer[...]
-
-            START >> producer >> consumer >> END
-
-        graph.build()
-
-        schema = StateSchema(graph)
-        state = schema.create_state(inputs={"x": 5})
-        result = await graph.run(state)
-
-        # (5*2) + (5*3) = 10 + 15 = 25
-        assert result["result"] == 25
 
     @pytest.mark.asyncio
     async def test_node_to_node_chain(self):
@@ -1539,7 +1486,7 @@ class TestComplexGraphWithAllNodeTypes:
                 node = double_number(
                     inputs={"value": PARENT["value"]}
                 )
-                node[...] >> PARENT[...]
+                node["result"] >> PARENT["result"]
                 START >> node >> END
 
             # Map loop result to graph output
@@ -1719,7 +1666,7 @@ class TestComplexGraphWithAllNodeTypes:
             return {"new_current": current + step}
 
         @code_node
-        def aggregate_results(batch_result, iterative_result):
+        def aggregate_results(batch_result = None, iterative_result = None):
             # One of these will be None depending on branch
             if batch_result is not None:
                 return {"final": sum(batch_result) if isinstance(batch_result, list) else batch_result}
@@ -1750,7 +1697,7 @@ class TestComplexGraphWithAllNodeTypes:
                         "multiplier": PARENT["multiplier"]
                     }
                 )
-                batch_node[...] >> PARENT[...]
+                batch_node["processed"] >> PARENT["processed"]
                 START >> batch_node >> END
 
             # Step 3b: Iterative processing with WhileLoop
@@ -1775,18 +1722,16 @@ class TestComplexGraphWithAllNodeTypes:
 
             # Step 4: Aggregate using new >> syntax
             aggregator = aggregate_results(
-                inputs={}
+                inputs={
+                    "batch_result": batch_loop["processed"],
+                    "iterative_result": iter_loop["current"]
+                }
             )
-            batch_loop["processed"] >> aggregator["batch_result"]
-            iter_loop["current"] >> aggregator["iterative_result"]
-            aggregator[...] >> PARENT[...]
+
+            aggregator["final"] >> PARENT["final"]
 
             # Wire up the graph
-            START >> parser >> router
-            router > batch_loop
-            router > iter_loop
-            batch_loop > aggregator
-            iter_loop > aggregator
+            START >> parser >> router >> [batch_loop, iter_loop] > aggregator 
             aggregator >> END
 
         graph.build()
@@ -1846,7 +1791,7 @@ class TestComplexGraphWithAllNodeTypes:
                 double_node = double(
                     inputs={"value": PARENT["value"]}
                 )
-                double_node[...] >> PARENT[...]
+                double_node["doubled"] >> PARENT["doubled"]
                 START >> double_node >> END
 
             # Parallel WhileLoop
@@ -1869,7 +1814,8 @@ class TestComplexGraphWithAllNodeTypes:
             merger = merge_results(inputs={})
             for_loop["doubled"] >> merger["for_result"]
             while_loop["counter"] >> merger["while_result"]
-            merger[...] >> PARENT[...]
+            merger["for_sum"] >> PARENT["for_sum"]
+            merger["while_count"] >> PARENT["while_count"]
 
             START >> [for_loop, while_loop] >> merger >> END
 
@@ -1914,71 +1860,65 @@ class TestComplexGraphWithAllNodeTypes:
         def increment(counter: int):
             return {"new_counter": counter + 1}
 
-        # Inner graph with all node types
-        with GraphNode(name="inner_processor") as inner_graph:
-            prep = prepare_data(
-                inputs={"x": PARENT["x"]}
-            )
-
-            # Branch using new fluent syntax
-            branch = (Branch("process_router")
-                .if_(prep["should_loop"] == True, "for_process")
-                .otherwise("while_process"))
-
-            # ForLoop path
-            with ForLoopNode(
-                name="for_process",
-                inputs={"value": Each(prep["items"])}
-            ) as for_loop:
-                sq = square(
-                    inputs={"value": PARENT["value"]}
-                )
-                sq[...] >> PARENT[...]
-                START >> sq >> END
-
-            # WhileLoop path
-            with WhileLoopNode(
-                name="while_process",
-                inputs={
-                    "counter": 0,
-                    "limit": prep["limit"]
-                },
-                stop_condition="counter >= limit",
-                max_iterations=50
-            ) as while_loop:
-                inc = increment(
-                    inputs={"counter": PARENT["counter"]}
-                )
-                inc["new_counter"] >> PARENT["counter"]
-                START >> inc >> END
-
-            # Collect results using new >> syntax
-            collector = CodeNode(
-                name="collector",
-                code_fn=lambda for_result, while_result: {
-                    "result": sum(for_result) if for_result else while_result
-                },
-                inputs={}
-            )
-            for_loop["squared"] >> collector["for_result"]
-            while_loop["counter"] >> collector["while_result"]
-            collector[...] >> PARENT[...]
-
-            START >> prep >> branch
-            branch > for_loop
-            branch > while_loop
-            for_loop > collector
-            while_loop > collector
-            collector >> END
-
-        # Outer graph using inner graph
+        # Outer graph containing inner graph with all node types
         with GraphNode(name="outer_graph") as outer_graph:
-            # Use inner graph as a subgraph
-            inner = inner_graph(
-                inputs={"x": PARENT["input_value"]}
-            )
-            inner[...] >> PARENT[...]
-            START >> inner >> END
+            # Inner graph with all node types (nested inside outer_graph)
+            with GraphNode(name="inner_processor", inputs={"x": PARENT["input_value"]}) as inner_graph:
+                prep = prepare_data(
+                    inputs={"x": PARENT["x"]}
+                )
+
+                # Branch using new fluent syntax
+                branch = (Branch("process_router")
+                    .if_(prep["should_loop"] == True, "for_process")
+                    .otherwise("while_process"))
+
+                # ForLoop path
+                with ForLoopNode(
+                    name="for_process",
+                    inputs={"value": Each(prep["items"])}
+                ) as for_loop:
+                    sq = square(
+                        inputs={"value": PARENT["value"]}
+                    )
+                    sq["squared"] >> PARENT["squared"]
+                    START >> sq >> END
+
+                # WhileLoop path
+                with WhileLoopNode(
+                    name="while_process",
+                    inputs={
+                        "counter": 0,
+                        "limit": prep["limit"]
+                    },
+                    stop_condition="counter >= limit",
+                    max_iterations=50
+                ) as while_loop:
+                    inc = increment(
+                        inputs={"counter": PARENT["counter"]}
+                    )
+                    inc["new_counter"] >> PARENT["counter"]
+                    START >> inc >> END
+
+                # Collect results using new >> syntax
+                collector = CodeNode(
+                    name="collector",
+                    code_fn=lambda for_result=None, while_result=None: {
+                        "result": sum(for_result) if for_result else while_result
+                    },
+                    inputs={"for_result": for_loop["squared"],
+                            "while_result": while_loop["counter"]},
+                )
+
+                collector["result"] >> PARENT["result"]
+
+                START >> prep >> branch >> [for_loop, 
+                                            while_loop] > collector
+                collector >> END
+
+            # Wire inner graph to outer graph
+            inner_graph["result"] >> PARENT["result"]
+            START >> inner_graph >> END
 
         outer_graph.build()
 
