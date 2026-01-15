@@ -1,4 +1,4 @@
-"""StateSchema v2 - thiết kế đơn giản với index riêng cho mỗi biến."""
+"""StateSchema - định nghĩa cấu trúc state của workflow."""
 
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type, TYPE_CHECKING
 
@@ -11,18 +11,20 @@ __all__ = ["StateSchema"]
 
 
 class StateSchema:
-    """Định nghĩa cấu trúc state của workflow với độ phân giải O(1) dựa trên index.
+    """Định nghĩa cấu trúc state của workflow với độ phân giải O(1).
 
-    Mỗi cặp (node, var) có index duy nhất riêng. Các tham chiếu được lưu dưới dạng
-    object Ref với idx trỏ đến source_idx.
+    Mỗi cặp (node, var) có slot duy nhất. Refs định nghĩa luồng dữ liệu:
+        - pull_ref: Khi đọc biến, pull giá trị từ source (1 hop)
+        - push_ref: Khi ghi biến, push giá trị đến target (1 hop)
 
     Cấu trúc dữ liệu:
-        _indexer: {(node, var): idx} - ánh xạ biến sang index
-        _values: [value, ...] - giá trị mặc định theo index
-        _refs: [Ref, ...] - Ref với idx=source_idx (None nếu không phải ref)
+        _var_to_idx: {(node, var): idx} - ánh xạ biến sang index
+        _defaults: [value, ...] - giá trị mặc định theo index
+        _pull_refs: [Ref, ...] - pull data từ source khi đọc (None nếu không pull)
+        _push_refs: [Ref, ...] - push data đến target khi ghi (None nếu không push)
     """
 
-    __slots__ = ("name", "_indexer", "_values", "_refs", "_output_refs")
+    __slots__ = ("name", "_var_to_idx", "_defaults", "_pull_refs", "_push_refs")
 
     def __init__(self, node=None, name: str = None):
         """Khởi tạo schema.
@@ -31,10 +33,10 @@ class StateSchema:
             node: Node tùy chọn để load các connection
             name: Tên workflow tùy chọn (suy ra từ node nếu không cung cấp)
         """
-        self._indexer: Dict[Tuple[str, str], int] = {}
-        self._values: List[Any] = []
-        self._refs: List[Optional[Ref]] = []  # Input refs với idx=source_idx, hoặc None
-        self._output_refs: List[Optional[Ref]] = []  # Output refs riêng biệt
+        self._var_to_idx: Dict[Tuple[str, str], int] = {}
+        self._defaults: List[Any] = []
+        self._pull_refs: List[Optional[Ref]] = []  # Pull data từ source khi đọc
+        self._push_refs: List[Optional[Ref]] = []  # Push data đến target khi ghi
 
         self.name = name
         if node is not None:
@@ -68,13 +70,13 @@ class StateSchema:
         # Đăng ký các biến output
         for var_name, param in outputs.items():
             if isinstance(param.value, Ref):
-                # Output ref: node.var -> target.var (push value to target)
+                # Push ref: node.var -> target.var (push value to target khi ghi)
                 ref = param.value
                 if ref.has_ops:
-                    raise ValueError(f"Output ref {node_name}.{var_name} -> {ref.node}.{ref.var} không được có operation")
-                self._register_output(node_name, var_name, Ref(ref.node, ref.var, is_output=True))
-            elif (node_name, var_name) not in self._indexer:
-                # Không phải output ref, đăng ký với default
+                    raise ValueError(f"Push ref {node_name}.{var_name} -> {ref.node}.{ref.var} không được có operation")
+                self._register_push_ref(node_name, var_name, Ref(ref.node, ref.var, is_output=True))
+            elif (node_name, var_name) not in self._var_to_idx:
+                # Không phải push ref, đăng ký với default
                 self._register(node_name, var_name, param.default)
 
         # Đăng ký các biến metadata
@@ -99,54 +101,54 @@ class StateSchema:
     def _register(self, node: str, var: str, value: Any) -> None:
         """Đăng ký một biến (có thể gọi nhiều lần, Ref luôn được ưu tiên)."""
         key = (node, var)
-        if key in self._indexer:
+        if key in self._var_to_idx:
             # Đã đăng ký - cập nhật nếu giá trị mới là Ref hoặc giá trị hiện tại là None
-            idx = self._indexer[key]
-            current = self._values[idx]
+            idx = self._var_to_idx[key]
+            current = self._defaults[idx]
             if isinstance(value, Ref) or (current is None and value is not None):
-                self._values[idx] = value
+                self._defaults[idx] = value
             return
 
         # Biến mới - gán index
-        idx = len(self._values)
-        self._indexer[key] = idx
-        self._values.append(value)  # Có thể là Ref, được resolve trong _build()
-        self._refs.append(None)
-        self._output_refs.append(None)
+        idx = len(self._defaults)
+        self._var_to_idx[key] = idx
+        self._defaults.append(value)  # Có thể là Ref, được resolve trong _build()
+        self._pull_refs.append(None)
+        self._push_refs.append(None)
 
-    def _register_output(self, node: str, var: str, ref: Ref) -> None:
-        """Đăng ký output ref riêng biệt (không overwrite input ref)."""
+    def _register_push_ref(self, node: str, var: str, ref: Ref) -> None:
+        """Đăng ký push ref (không overwrite pull ref)."""
         key = (node, var)
-        if key not in self._indexer:
-            # Biến chưa tồn tại - đăng ký mới và set output ref
-            idx = len(self._values)
-            self._indexer[key] = idx
-            self._values.append(None)  # Không có default value
-            self._refs.append(None)  # Không có input ref
-            self._output_refs.append(ref)
+        if key not in self._var_to_idx:
+            # Biến chưa tồn tại - đăng ký mới và set push ref
+            idx = len(self._defaults)
+            self._var_to_idx[key] = idx
+            self._defaults.append(None)  # Không có default value
+            self._pull_refs.append(None)  # Không có pull ref
+            self._push_refs.append(ref)
             return
-        # Biến đã tồn tại - lưu output ref riêng
-        idx = self._indexer[key]
-        self._output_refs[idx] = ref
+        # Biến đã tồn tại - lưu push ref riêng
+        idx = self._var_to_idx[key]
+        self._push_refs[idx] = ref
 
     def _build(self) -> None:
-        """Resolve tất cả giá trị Ref sang source index và lưu vào _refs."""
-        for key, idx in self._indexer.items():
-            # Resolve input refs
-            value = self._values[idx]
+        """Resolve tất cả Ref sang index."""
+        for key, idx in self._var_to_idx.items():
+            # Resolve pull refs (Refs trong _defaults)
+            value = self._defaults[idx]
             if isinstance(value, Ref):
                 source_key = (value.node, value.var)
-                source_idx = self._indexer.get(source_key, -1)
+                source_idx = self._var_to_idx.get(source_key, -1)
                 value.idx = source_idx  # Set source index trên Ref
-                self._refs[idx] = value
-                self._values[idx] = None  # Xóa Ref, giá trị lấy từ source
+                self._pull_refs[idx] = value
+                self._defaults[idx] = None  # Xóa Ref, giá trị lấy từ source
 
-            # Resolve output refs
-            output_ref = self._output_refs[idx]
-            if output_ref is not None:
-                target_key = (output_ref.node, output_ref.var)
-                target_idx = self._indexer.get(target_key, -1)
-                output_ref.idx = target_idx
+            # Resolve push refs
+            push_ref = self._push_refs[idx]
+            if push_ref is not None:
+                target_key = (push_ref.node, push_ref.var)
+                target_idx = self._var_to_idx.get(target_key, -1)
+                push_ref.idx = target_idx
 
     # =========================================================================
     # Các Method Phân Giải Core (O(1))
@@ -154,33 +156,33 @@ class StateSchema:
 
     def get_index(self, node: str, var: str) -> int:
         """Lấy storage index của một biến. Trả về -1 nếu không tìm thấy."""
-        return self._indexer.get((node, var), -1)
+        return self._var_to_idx.get((node, var), -1)
 
     def get_default(self, idx: int) -> Any:
         """Lấy giá trị mặc định cho một index."""
-        if 0 <= idx < len(self._values):
-            return self._values[idx]
+        if 0 <= idx < len(self._defaults):
+            return self._defaults[idx]
         return None
 
-    def get_ref(self, idx: int) -> Optional[Ref]:
-        """Lấy input Ref cho một index (None nếu không phải tham chiếu)."""
-        if 0 <= idx < len(self._refs):
-            return self._refs[idx]
+    def get_pull_ref(self, idx: int) -> Optional[Ref]:
+        """Lấy pull Ref cho một index (None nếu không pull)."""
+        if 0 <= idx < len(self._pull_refs):
+            return self._pull_refs[idx]
         return None
 
-    def get_output_ref(self, idx: int) -> Optional[Ref]:
-        """Lấy output Ref cho một index (None nếu không có output ref)."""
-        if 0 <= idx < len(self._output_refs):
-            return self._output_refs[idx]
+    def get_push_ref(self, idx: int) -> Optional[Ref]:
+        """Lấy push Ref cho một index (None nếu không push)."""
+        if 0 <= idx < len(self._push_refs):
+            return self._push_refs[idx]
         return None
 
     def get_source(self, idx: int) -> Tuple[int, Optional[Callable]]:
-        """Lấy source index và function transform cho một tham chiếu.
+        """Lấy source index và function transform cho pull ref.
 
         Returns:
-            (source_idx, fn) - source_idx là -1 nếu không phải tham chiếu
+            (source_idx, fn) - source_idx là -1 nếu không có pull ref
         """
-        ref = self._refs[idx] if 0 <= idx < len(self._refs) else None
+        ref = self._pull_refs[idx] if 0 <= idx < len(self._pull_refs) else None
         if ref:
             return ref.idx, ref._fn
         return -1, None
@@ -188,7 +190,7 @@ class StateSchema:
     @property
     def num_indices(self) -> int:
         """Số lượng storage index."""
-        return len(self._values)
+        return len(self._defaults)
 
     # =========================================================================
     # Các Method Xây Dựng Thủ Công
@@ -197,9 +199,9 @@ class StateSchema:
     def set(self, node: str, var: str, value: Any) -> "StateSchema":
         """Set giá trị mặc định cho một biến."""
         key = (node, var)
-        if key in self._indexer:
-            idx = self._indexer[key]
-            self._values[idx] = value
+        if key in self._var_to_idx:
+            idx = self._var_to_idx[key]
+            self._defaults[idx] = value
         else:
             self._register(node, var, value)
         return self
@@ -227,25 +229,26 @@ class StateSchema:
 
     def __iter__(self) -> Iterator[Tuple[str, str]]:
         """Duyệt qua tất cả cặp (node, var)."""
-        return iter(self._indexer.keys())
+        return iter(self._var_to_idx.keys())
 
     def __getitem__(self, key: Tuple[str, str]) -> int:
         """Lấy index của (node, var). Raise KeyError nếu không tìm thấy."""
-        if key in self._indexer:
-            return self._indexer[key]
+        if key in self._var_to_idx:
+            return self._var_to_idx[key]
         raise KeyError(f"{key} không tìm thấy trong schema: {self.name}")
 
     def __contains__(self, key: Tuple[str, str]) -> bool:
         """Kiểm tra (node, var) đã được đăng ký chưa."""
-        return key in self._indexer
+        return key in self._var_to_idx
 
     def __len__(self) -> int:
         """Số lượng biến đã đăng ký."""
-        return len(self._indexer)
+        return len(self._var_to_idx)
 
     def __repr__(self) -> str:
-        refs = sum(1 for ref in self._refs if ref is not None)
-        return f"StateSchema(name='{self.name}', vars={len(self._indexer)}, refs={refs})"
+        pull = sum(1 for ref in self._pull_refs if ref is not None)
+        push = sum(1 for ref in self._push_refs if ref is not None)
+        return f"StateSchema(name='{self.name}', vars={len(self._var_to_idx)}, pull={pull}, push={push})"
 
     # =========================================================================
     # Debug
@@ -291,23 +294,28 @@ class StateSchema:
         print(f"\n=== StateSchema: {self.name} ===")
 
         # Xây dựng reverse index cho hiển thị
-        idx_to_key = {idx: key for key, idx in self._indexer.items()}
+        idx_to_key = {idx: key for key, idx in self._var_to_idx.items()}
 
         for node, var in self:
-            idx = self._indexer[(node, var)]
-            ref = self._refs[idx]
-            value = self._values[idx]
+            idx = self._var_to_idx[(node, var)]
+            pull_ref = self._pull_refs[idx]
+            push_ref = self._push_refs[idx]
+            default = self._defaults[idx]
 
-            if ref is not None:
-                # Tham chiếu: hiển thị source với ops và cờ is_output
-                source_key = idx_to_key.get(ref.idx, ("?", "?"))
-                ops_str = ""
-                if ref.has_ops:
-                    ops_str = f" {self._ops_to_str(ref._ops)}"
-                output_str = " (output)" if ref.is_output else ""
-                print(f"{node}.{var} -> [{idx}] -> {source_key[0]}.{source_key[1]}[{ref.idx}]{ops_str}{output_str}")
-            else:
-                # Terminal: hiển thị giá trị
-                print(f"{node}.{var} -> [{idx}] = {value}")
+            parts = [f"{node}.{var} [{idx}]"]
 
-        print(f"Tổng: {len(self._values)} biến")
+            if pull_ref is not None:
+                source_key = idx_to_key.get(pull_ref.idx, ("?", "?"))
+                ops_str = f" {self._ops_to_str(pull_ref._ops)}" if pull_ref.has_ops else ""
+                parts.append(f"<- pull {source_key[0]}.{source_key[1]}[{pull_ref.idx}]{ops_str}")
+
+            if push_ref is not None:
+                target_key = idx_to_key.get(push_ref.idx, ("?", "?"))
+                parts.append(f"-> push {target_key[0]}.{target_key[1]}[{push_ref.idx}]")
+
+            if pull_ref is None and push_ref is None:
+                parts.append(f"= {default}")
+
+            print(" ".join(parts))
+
+        print(f"Tổng: {len(self._defaults)} biến")

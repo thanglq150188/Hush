@@ -44,7 +44,7 @@ class TestSimpleLinearGraph:
 
         # node_a.x should ref to linear_graph.x
         idx = schema.get_index("linear_graph.node_a", "x")
-        assert isinstance(schema._refs[idx], Ref)
+        assert isinstance(schema._pull_refs[idx], Ref)
 
     def test_output_ref_created(self):
         """Test that output refs are created correctly."""
@@ -60,9 +60,9 @@ class TestSimpleLinearGraph:
         graph.build()
         schema = StateSchema(graph)
 
-        # node_a.result should be output ref to linear_graph.result
+        # node_a.result should be push ref to linear_graph.result
         idx = schema.get_index("linear_graph.node_a", "result")
-        ref = schema.get_output_ref(idx)
+        ref = schema.get_push_ref(idx)
         assert isinstance(ref, Ref)
         assert ref.is_output is True
         assert ref.node == "linear_graph"
@@ -118,7 +118,7 @@ class TestRefWithOperations:
         # Test the fn extracts items correctly
         items_idx = schema.get_index("ref_ops_graph.extract_items", "items")
         test_data = {"items": [1, 2, 3], "name": "hello"}
-        assert schema._refs[items_idx]._fn(test_data) == [1, 2, 3]
+        assert schema._pull_refs[items_idx]._fn(test_data) == [1, 2, 3]
 
     def test_method_call_operations(self):
         """Test ref with method call operations."""
@@ -141,7 +141,7 @@ class TestRefWithOperations:
         # Test the fn applies upper() correctly
         name_idx = schema.get_index("ref_ops_graph.transform_name", "name")
         test_data = {"name": "hello"}
-        assert schema._refs[name_idx]._fn(test_data) == "HELLO"
+        assert schema._pull_refs[name_idx]._fn(test_data) == "HELLO"
 
 
 # ============================================================
@@ -171,7 +171,7 @@ class TestRefWithApply:
 
         test_numbers = [5, 2, 8, 1, 9, 3]
         length_idx = schema.get_index("ref_apply_graph.get_length", "length")
-        assert schema._refs[length_idx]._fn(test_numbers) == 6
+        assert schema._pull_refs[length_idx]._fn(test_numbers) == 6
 
     def test_apply_sorted(self):
         """Test ref with apply(sorted)."""
@@ -193,7 +193,7 @@ class TestRefWithApply:
 
         test_numbers = [5, 2, 8, 1, 9, 3]
         sorted_idx = schema.get_index("ref_apply_graph.sort_numbers", "sorted_nums")
-        assert schema._refs[sorted_idx]._fn(test_numbers) == [1, 2, 3, 5, 8, 9]
+        assert schema._pull_refs[sorted_idx]._fn(test_numbers) == [1, 2, 3, 5, 8, 9]
 
 
 # ============================================================
@@ -222,7 +222,7 @@ class TestArithmeticOperations:
         schema = StateSchema(graph)
 
         x_idx = schema.get_index("arithmetic_graph.compute", "x")
-        assert schema._refs[x_idx]._fn(10) == 30  # (10 + 5) * 2
+        assert schema._pull_refs[x_idx]._fn(10) == 30  # (10 + 5) * 2
 
 
 # ============================================================
@@ -255,10 +255,10 @@ class TestNestedGraph:
 
         # outer.inner.x should ref to outer.x
         assert ("outer", "x") in schema
-        assert isinstance(schema._refs[schema.get_index("outer.inner", "x")], Ref)
+        assert isinstance(schema._pull_refs[schema.get_index("outer.inner", "x")], Ref)
 
-        # inner.result should be output ref to outer.inner_result
-        inner_result_ref = schema.get_output_ref(schema.get_index("outer.inner", "result"))
+        # inner.result should be push ref to outer.inner_result
+        inner_result_ref = schema.get_push_ref(schema.get_index("outer.inner", "result"))
         assert isinstance(inner_result_ref, Ref)
         assert inner_result_ref.is_output is True
 
@@ -297,9 +297,9 @@ class TestDeeplyNestedGraphs:
         schema = StateSchema(level1)
 
         # Verify deep nesting refs
-        assert isinstance(schema._refs[schema.get_index("level1.level2", "x")], Ref)
-        assert isinstance(schema._refs[schema.get_index("level1.level2.level3", "x")], Ref)
-        assert isinstance(schema._refs[schema.get_index("level1.level2.level3.core", "x")], Ref)
+        assert isinstance(schema._pull_refs[schema.get_index("level1.level2", "x")], Ref)
+        assert isinstance(schema._pull_refs[schema.get_index("level1.level2.level3", "x")], Ref)
+        assert isinstance(schema._pull_refs[schema.get_index("level1.level2.level3.core", "x")], Ref)
 
 
 # ============================================================
@@ -332,7 +332,7 @@ class TestIterationNode:
 
         # inner_graph.counter should ref to loop.counter
         inner_counter_idx = schema.get_index("counter_loop.__inner__", "counter")
-        inner_counter_ref = schema._refs[inner_counter_idx]
+        inner_counter_ref = schema._pull_refs[inner_counter_idx]
         assert inner_counter_ref is not None
         assert inner_counter_ref.node == "counter_loop"
         assert inner_counter_ref.var == "counter"
