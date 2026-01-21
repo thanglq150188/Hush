@@ -1,11 +1,9 @@
 """Factory resource mở rộng để tạo instance từ config."""
 
-import logging
 from typing import Any, Callable, Dict, Optional, Type
 
+from hush.core.loggings import LOGGER
 from hush.core.utils.yaml_model import YamlModel
-
-logger = logging.getLogger(__name__)
 
 
 # Registry các config class: class_name -> class
@@ -30,7 +28,7 @@ def register_config_class(cls: Type[YamlModel]):
         register_config_class(MyConfig)
     """
     CLASS_NAME_MAP[cls.__name__] = cls
-    logger.debug(f"Đã đăng ký config class: {cls.__name__}")
+    LOGGER.debug(f"Đã đăng ký config class: {cls.__name__}")
 
 
 def register_config_classes(*classes: Type[YamlModel]):
@@ -66,7 +64,7 @@ def register_factory_handler(
         register_factory_handler(LLMConfig, LLMFactory.create)
     """
     FACTORY_HANDLERS[config_class] = handler
-    logger.debug(f"Đã đăng ký factory handler cho: {config_class.__name__}")
+    LOGGER.debug(f"Đã đăng ký factory handler cho: {config_class.__name__}")
 
 
 def get_config_class(class_name: str) -> Optional[Type[YamlModel]]:
@@ -130,5 +128,5 @@ class ResourceFactory:
         try:
             return handler(config)
         except Exception as e:
-            logger.error(f"Không thể tạo resource cho {config_type.__name__}: {e}")
+            LOGGER.error(f"Không thể tạo resource cho {config_type.__name__}: {e}")
             return None

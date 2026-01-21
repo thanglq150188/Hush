@@ -2,17 +2,15 @@
 
 import hashlib
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
+from hush.core.loggings import LOGGER
 from hush.core.utils.yaml_model import YamlModel
 
 from .storage import ConfigStorage, YamlConfigStorage
 from .resource_factory import ResourceFactory, get_config_class
-
-logger = logging.getLogger(__name__)
 
 
 # Instance hub global - khởi tạo lazy
@@ -59,7 +57,7 @@ def _get_global_hub() -> Optional['ResourceHub']:
                 )
 
         except Exception as e:
-            logger.error(f"Không thể khởi tạo global hub: {e}")
+            LOGGER.error(f"Không thể khởi tạo global hub: {e}")
             return None
 
     return _GLOBAL_HUB
@@ -209,12 +207,12 @@ class ResourceHub:
 
         config_class_name = config_data.get('_class')
         if not config_class_name:
-            logger.warning(f"Thiếu field '_class' cho key: {key}")
+            LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
             return None
 
         config_class = get_config_class(config_class_name)
         if not config_class:
-            logger.warning(f"Config class không xác định: {config_class_name}")
+            LOGGER.warning(f"Config class không xác định: {config_class_name}")
             return None
 
         try:
@@ -224,7 +222,7 @@ class ResourceHub:
             self._configs[key] = config
             return config
         except Exception as e:
-            logger.error(f"Không thể parse config '{key}': {e}")
+            LOGGER.error(f"Không thể parse config '{key}': {e}")
             return None
 
     def _hash_of(self, config: YamlModel) -> str:
@@ -264,7 +262,7 @@ class ResourceHub:
                             data = {k: v for k, v in config_data.items() if k != '_class'}
                             self._configs[key] = config_class.model_validate(data)
                         except Exception as e:
-                            logger.error(f"Không thể parse config '{key}': {e}")
+                            LOGGER.error(f"Không thể parse config '{key}': {e}")
 
         return list(self._configs.keys())
 
@@ -302,7 +300,7 @@ class ResourceHub:
             raise RuntimeError(f"Không thể tạo resource cho '{key}'")
 
         self._instances[key] = instance
-        logger.info(f"Đã lazy load resource: {key}")
+        LOGGER.debug(f"Đã lazy load resource: {key}")
 
         return self._instances[key]
 
@@ -349,7 +347,7 @@ class ResourceHub:
         config_dict['_class'] = type(config).__name__
         self._storage.save(registry_key, config_dict)
 
-        logger.info(f"Đã đăng ký: {registry_key}")
+        LOGGER.debug(f"Đã đăng ký: {registry_key}")
         return registry_key
 
     def remove(self, key: str) -> bool:
@@ -372,7 +370,7 @@ class ResourceHub:
             del self._configs[key]
 
         self._storage.remove(key)
-        logger.info(f"Đã xóa: {key}")
+        LOGGER.debug(f"Đã xóa: {key}")
         return True
 
     def clear(self):
@@ -382,7 +380,7 @@ class ResourceHub:
         self._configs.clear()
         for key in keys:
             self._storage.remove(key)
-        logger.info("Đã xóa tất cả resource")
+        LOGGER.debug("Đã xóa tất cả resource")
 
     def close(self):
         """Đóng kết nối storage và dọn dẹp."""

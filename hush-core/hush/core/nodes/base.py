@@ -455,7 +455,7 @@ class BaseNode(ABC):
             _context_id = context_id or "main"
             _request_id = request_id or "unknown"
             LOGGER.info(
-                "%s - %s: %s\\[%s] (%.1fms) %s -> %s",
+                "[title]\\[%s][/title] [bold]%s[/bold]: [highlight]%s[/highlight] [muted]\\[%s][/muted] [muted](%.1fms)[/muted] %s -> %s",
                 _request_id, str(self.type).upper(), self.full_name, _context_id,
                 duration_ms, format_log_data(inputs), format_log_data(outputs)
             )
@@ -487,7 +487,7 @@ class BaseNode(ABC):
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.name}: {str(e)}")
+            LOGGER.error("[title]\\[%s][/title] Error in node [highlight]%s[/highlight]: %s", request_id, self.name, str(e))
             LOGGER.error(error_msg)
             state[self.full_name, "error", context_id] = error_msg
 

@@ -29,74 +29,84 @@ def log_break(text: str = "") -> str:
     return f"\n{LOG_INDENT}{text}"
 
 
-def format_log_data(data: Any, max_length: int = 400, max_items: int = 3) -> str:
-    """Format thông minh cho dữ liệu log, xử lý các kiểu dữ liệu khác nhau.
+def format_log_data(data: Any, max_str: int = 80, max_items: int = 8) -> str:
+    """Format dữ liệu log một cách đơn giản và nhanh.
+
+    Tối ưu cho performance - tránh recursive calls và xử lý phức tạp.
 
     Args:
-        data: Dữ liệu cần format (dict, list, str, v.v.)
-        max_length: Độ dài ký tự tối đa cho output
-        max_items: Số lượng item tối đa hiển thị trong collection
+        data: Dữ liệu cần format
+        max_str: Độ dài tối đa cho string values
+        max_items: Số items tối đa hiển thị
 
     Returns:
-        String đã format phù hợp cho logging
-
-    Example:
-        >>> format_log_data({"key": "value", "list": [1, 2, 3]})
-        "{key='value', list=<list len=3>}"
+        String đã format cho logging
     """
     if data is None:
-        return "None"
+        return "[muted]None[/muted]"
+
+    if isinstance(data, str):
+        if len(data) > max_str:
+            return f"[str]'{data[:max_str]}...'[/str]"
+        return f"[str]'{data}'[/str]"
+
+    if isinstance(data, bool):
+        return f"[value]{data}[/value]"
+
+    if isinstance(data, (int, float)):
+        return f"[value]{data}[/value]"
+
+    if isinstance(data, bytes):
+        return f"[muted]<bytes {len(data)}>[/muted]"
 
     if isinstance(data, dict):
         if not data:
             return "{}"
-
-        items = []
+        parts = []
         for i, (k, v) in enumerate(data.items()):
             if i >= max_items:
-                items.append(f"... +{len(data) - max_items} more")
+                parts.append(f"[muted]+{len(data) - i}[/muted]")
                 break
-
-            if isinstance(v, str):
-                val_str = f"'{v[:50]}...'" if len(v) > 50 else f"'{v}'"
-            elif isinstance(v, (list, dict)):
-                val_str = f"<{type(v).__name__} len={len(v)}>"
-            elif isinstance(v, bytes):
-                val_str = f"<bytes len={len(v)}>"
+            # Inline format value - không gọi hàm riêng
+            if v is None:
+                val = "[muted]None[/muted]"
+            elif isinstance(v, str):
+                val = f"[str]'{v[:50]}...'[/str]" if len(v) > 50 else f"[str]'{v}'[/str]"
+            elif isinstance(v, bool):
+                val = f"[value]{v}[/value]"
+            elif isinstance(v, (int, float)):
+                val = f"[value]{v}[/value]"
+            elif isinstance(v, dict):
+                val = f"[muted]<dict {len(v)}>[/muted]"
+            elif isinstance(v, (list, tuple)):
+                val = f"[muted]<{type(v).__name__} {len(v)}>[/muted]"
             else:
-                val_str = str(v)[:50]
+                s = str(v)
+                val = f"[value]{s[:50]}...[/value]" if len(s) > 50 else f"[value]{s}[/value]"
+            parts.append(f"{k}={val}")
+        return "{" + ", ".join(parts) + "}"
 
-            items.append(f"{k}={val_str}")
-
-        result = "{" + ", ".join(items) + "}"
-
-    elif isinstance(data, (list, tuple)):
-        if not data:
+    if isinstance(data, (list, tuple)):
+        n = len(data)
+        if n == 0:
             return "[]" if isinstance(data, list) else "()"
+        if n > max_items:
+            return f"[muted]<{type(data).__name__} {n}>[/muted]"
+        # List ngắn - hiển thị inline
+        parts = []
+        for v in data:
+            if isinstance(v, str):
+                parts.append(f"[str]'{v[:30]}...'[/str]" if len(v) > 30 else f"[str]'{v}'[/str]")
+            elif isinstance(v, (bool, int, float)):
+                parts.append(f"[value]{v}[/value]")
+            else:
+                s = str(v)
+                parts.append(f"[value]{s[:30]}...[/value]" if len(s) > 30 else f"[value]{s}[/value]")
+        bracket = "[]" if isinstance(data, list) else "()"
+        return bracket[0] + ", ".join(parts) + bracket[1]
 
-        items = []
-        for i, item in enumerate(data):
-            if i >= max_items:
-                items.append(f"... +{len(data) - max_items} more")
-                break
-            items.append(str(item)[:50])
-
-        bracket = ("[]" if isinstance(data, list) else "()")
-        result = bracket[0] + ", ".join(items) + bracket[1]
-
-    elif isinstance(data, str):
-        if len(data) > max_length:
-            result = f"'{data[:max_length]}...' (len={len(data)})"
-        else:
-            result = f"'{data}'"
-
-    elif isinstance(data, bytes):
-        result = f"<bytes len={len(data)}>"
-
-    else:
-        result = str(data)
-
-    if len(result) > max_length:
-        result = result[:max_length] + "..."
-
-    return result
+    # Fallback
+    s = str(data)
+    if len(s) > max_str:
+        return f"[value]{s[:max_str]}...[/value]"
+    return f"[value]{s}[/value]"

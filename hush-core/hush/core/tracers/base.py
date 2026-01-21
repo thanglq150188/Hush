@@ -252,13 +252,11 @@ class BaseTracer(ABC):
             queue.put(flush_data)
 
         except Exception as e:
-            import traceback
             LOGGER.error(
-                "Workflow: %s, Request ID: %s, Failed to submit flush task: %s\nTraceback:\n%s",
-                workflow_name,
+                "[title]\\[%s][/title] Workflow [highlight]%s[/highlight]: Failed to submit flush task: %s",
                 state.request_id,
-                str(e),
-                traceback.format_exc()
+                workflow_name,
+                str(e)
             )
 
     @staticmethod
@@ -332,7 +330,7 @@ def _dispatch_flush(flush_data: Dict[str, Any]) -> None:
 
     tracer_cls = _TRACER_REGISTRY.get(tracer_type)
     if tracer_cls is None:
-        LOGGER.error(f"Unknown tracer type: {tracer_type}")
+        LOGGER.error("Unknown tracer type: [highlight]%s[/highlight]", tracer_type)
         return
 
     tracer_cls.flush(flush_data)

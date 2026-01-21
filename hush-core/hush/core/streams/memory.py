@@ -22,7 +22,7 @@ class InMemoryStreamService(BaseStreamingService):
         self._queues: Dict[str, Dict[str, Dict[str, asyncio.Queue]]] = defaultdict(lambda: defaultdict(dict))
         # Lock để đảm bảo thread-safe
         self._lock = asyncio.Lock()
-        LOGGER.info("InMemoryStreamService initialized")
+        LOGGER.debug("[highlight]InMemoryStreamService[/highlight] initialized")
 
     async def push(
         self,
@@ -54,7 +54,7 @@ class InMemoryStreamService(BaseStreamingService):
             await self._queues[session_id][request_id][channel_name].put(data)
 
         except Exception as e:
-            LOGGER.error(f"Error pushing data to {session_id}/{request_id}/{channel_name}: {e}")
+            LOGGER.error("[title]\\[%s][/title] Error pushing data to [muted]%s/%s[/muted]: %s", request_id, session_id, channel_name, e)
             raise
 
     async def end(self, request_id: str, channel_name: str, session_id: Optional[str] = None) -> None:
@@ -77,10 +77,10 @@ class InMemoryStreamService(BaseStreamingService):
 
             # Push END sentinel để báo hiệu kết thúc
             await self._queues[session_id][request_id][channel_name].put("__END__")
-            LOGGER.debug(f"Pushed END signal to {session_id}/{request_id}/{channel_name}")
+            LOGGER.debug("[title]\\[%s][/title] Pushed END signal to [muted]%s/%s[/muted]", request_id, session_id, channel_name)
 
         except Exception as e:
-            LOGGER.error(f"Error pushing END signal to {session_id}/{request_id}/{channel_name}: {e}")
+            LOGGER.error("[title]\\[%s][/title] Error pushing END signal to [muted]%s/%s[/muted]: %s", request_id, session_id, channel_name, e)
             raise
 
     async def get(
@@ -137,18 +137,18 @@ class InMemoryStreamService(BaseStreamingService):
                         idle_time = time.time() - last_data_time
                         if idle_time >= max_idle_time:
                             LOGGER.debug(
-                                f"Max idle time ({max_idle_time}s) exceeded for "
-                                f"{session_id}/{request_id}/{channel_name}, stopping"
+                                "[title]\\[%s][/title] Max idle time [muted](%ss)[/muted] exceeded for [muted]%s/%s[/muted], stopping",
+                                request_id, max_idle_time, session_id, channel_name
                             )
                             break
                     continue
 
                 except Exception as e:
-                    LOGGER.warning(f"Failed to process data from {session_id}/{request_id}/{channel_name}: {e}")
+                    LOGGER.warning("[title]\\[%s][/title] Failed to process data from [muted]%s/%s[/muted]: %s", request_id, session_id, channel_name, e)
                     continue
 
         except Exception as e:
-            LOGGER.error(f"Error consuming from {session_id}/{request_id}/{channel_name}: {e}")
+            LOGGER.error("[title]\\[%s][/title] Error consuming from [muted]%s/%s[/muted]: %s", request_id, session_id, channel_name, e)
             raise
         finally:
             # Dọn dẹp queue sau khi consume xong
@@ -184,10 +184,10 @@ class InMemoryStreamService(BaseStreamingService):
                     for channel_name in channels:
                         queue = self._queues[session_id][request_id][channel_name]
                         await queue.put("__END__")
-                    LOGGER.debug(f"Sent END signal to all channels for {session_id}/{request_id}")
+                    LOGGER.debug("[title]\\[%s][/title] Sent END signal to all channels for session [muted]%s[/muted]", request_id, session_id)
 
         except Exception as e:
-            LOGGER.error(f"Error ending request {session_id}/{request_id}: {e}")
+            LOGGER.error("[title]\\[%s][/title] Error ending request for session [muted]%s[/muted]: %s", request_id, session_id, e)
             raise
 
     async def get_channels(
@@ -215,6 +215,6 @@ class InMemoryStreamService(BaseStreamingService):
         """Dọn dẹp resource."""
         try:
             self._queues.clear()
-            LOGGER.info("InMemoryStreamService closed")
+            LOGGER.debug("[highlight]InMemoryStreamService[/highlight] closed")
         except Exception as e:
-            LOGGER.error(f"Error closing InMemoryStreamService: {e}")
+            LOGGER.error("Error closing [highlight]InMemoryStreamService[/highlight]: %s", e)

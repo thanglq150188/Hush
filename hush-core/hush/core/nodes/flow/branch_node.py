@@ -123,7 +123,7 @@ class BranchNode(BaseNode):
                 compiled_code = compile(condition, f'<condition: {condition}>', 'eval')
                 compiled_conditions.append((compiled_code, condition, target))
             except SyntaxError as e:
-                LOGGER.error(f"Cú pháp điều kiện không hợp lệ '{condition}': {e}")
+                LOGGER.error("Cú pháp điều kiện không hợp lệ [str]'%s'[/str]: %s", condition, e)
                 raise ValueError(f"Cú pháp điều kiện không hợp lệ: {condition}")
 
         return compiled_conditions
@@ -150,11 +150,11 @@ class BranchNode(BaseNode):
                 result = eval(compiled_cond, {"__builtins__": {}}, safe_inputs)
 
                 if result:
-                    LOGGER.debug(f"Điều kiện '{condition_str}' khớp, định tuyến đến '{target}'")
+                    LOGGER.debug("Điều kiện [str]'%s'[/str] khớp, định tuyến đến [highlight]%s[/highlight]", condition_str, target)
                     return target, condition_str
 
             except Exception as e:
-                LOGGER.error(f"Lỗi khi đánh giá điều kiện '{condition_str}': {e}")
+                LOGGER.error("Lỗi khi đánh giá điều kiện [str]'%s'[/str]: %s", condition_str, e)
                 continue
 
         # Then evaluate Ref-based conditions (supports .apply())
@@ -167,15 +167,15 @@ class BranchNode(BaseNode):
 
                 if result:
                     condition_desc = f"ref:{ref.var}"
-                    LOGGER.debug(f"Điều kiện '{condition_desc}' khớp, định tuyến đến '{target}'")
+                    LOGGER.debug("Điều kiện [str]'%s'[/str] khớp, định tuyến đến [highlight]%s[/highlight]", condition_desc, target)
                     return target, condition_desc
 
             except Exception as e:
-                LOGGER.error(f"Lỗi khi đánh giá ref condition cho '{ref.var}': {e}")
+                LOGGER.error("Lỗi khi đánh giá ref condition cho [str]'%s'[/str]: %s", ref.var, e)
                 continue
 
         if self.default:
-            LOGGER.debug(f"Không có điều kiện khớp, sử dụng target mặc định '{self.default}'")
+            LOGGER.debug("Không có điều kiện khớp, sử dụng target mặc định [highlight]%s[/highlight]", self.default)
             return self.default, "default"
         else:
             LOGGER.warning("Không có điều kiện khớp và không có target mặc định")

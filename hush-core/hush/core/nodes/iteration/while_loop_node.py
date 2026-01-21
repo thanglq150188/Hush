@@ -62,7 +62,7 @@ class WhileLoopNode(BaseIterationNode):
         try:
             return compile(condition, f'<stop_condition: {condition}>', 'eval')
         except SyntaxError as e:
-            LOGGER.error(f"Invalid stop_condition syntax '{condition}': {e}")
+            LOGGER.error("Invalid stop_condition syntax [str]'%s'[/str]: %s", condition, e)
             raise ValueError(f"Invalid stop_condition syntax: {condition}") from e
 
     def _evaluate_stop_condition(self, inputs: Dict[str, Any]) -> bool:
@@ -78,7 +78,7 @@ class WhileLoopNode(BaseIterationNode):
             result = eval(self._compiled_condition, {"__builtins__": {}}, inputs)
             return bool(result)
         except Exception as e:
-            LOGGER.error(f"Error evaluating stop_condition '{self._stop_condition}': {e}")
+            LOGGER.error("Error evaluating stop_condition [str]'%s'[/str]: %s", self._stop_condition, e)
             return False  # Khi error, tiếp tục (để max_iterations làm safety)
 
     def _post_build(self):
@@ -166,9 +166,9 @@ class WhileLoopNode(BaseIterationNode):
             # Cảnh báo nếu max_iterations đạt (có thể infinite loop)
             if step_count >= self._max_iterations and not should_stop:
                 LOGGER.warning(
-                    f"WhileLoopNode '{self.full_name}': max_iterations ({self._max_iterations}) reached. "
-                    f"Condition '{self._stop_condition}' never evaluated to True. "
-                    "This may indicate an infinite loop or incorrect stop condition."
+                    "[title]\\[%s][/title] WhileLoopNode [highlight]%s[/highlight]: max_iterations [muted](%s)[/muted] reached. "
+                    "Condition [str]'%s'[/str] never evaluated to True. This may indicate an infinite loop or incorrect stop condition.",
+                    request_id, self.full_name, self._max_iterations, self._stop_condition
                 )
 
             # Tính iteration metrics (tất cả completed iterations đều success, errors propagate)
@@ -188,7 +188,7 @@ class WhileLoopNode(BaseIterationNode):
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error("[title]\\[%s][/title] Error in node [highlight]%s[/highlight]: %s", request_id, self.full_name, str(e))
             LOGGER.error(error_msg)
             state[self.full_name, "error", context_id] = error_msg
 

@@ -77,7 +77,7 @@ class GraphNode(BaseNode):
 
     def _setup_endpoints(self):
         """Khởi tạo entry/exit node."""
-        LOGGER.debug(f"Graph '{self.name}': đang khởi tạo endpoints...")
+        LOGGER.debug("Graph [highlight]%s[/highlight]: đang khởi tạo endpoints...", self.name)
 
         if not self.entries:
             self.entries = [node for node in self._nodes if not self.prevs[node]]
@@ -86,10 +86,10 @@ class GraphNode(BaseNode):
             self.exits = [node for node in self._nodes if not self.nexts[node]]
 
         if not self.entries:
-            LOGGER.error(f"Graph '{self.name}': không tìm thấy entry node. Kiểm tra kết nối START >> node.")
+            LOGGER.error("Graph [highlight]%s[/highlight]: không tìm thấy entry node. Kiểm tra kết nối START >> node.", self.name)
             raise ValueError("Graph phải có ít nhất một entry node.")
         if not self.exits:
-            LOGGER.error(f"Graph '{self.name}': không tìm thấy exit node. Kiểm tra kết nối node >> END.")
+            LOGGER.error("Graph [highlight]%s[/highlight]: không tìm thấy exit node. Kiểm tra kết nối node >> END.", self.name)
             raise ValueError("Graph phải có ít nhất một exit node.")
 
     def _setup_schema(self):
@@ -98,7 +98,7 @@ class GraphNode(BaseNode):
         Scan các node con để tìm các ref trỏ đến PARENT (self) -
         đó chính là inputs/outputs của graph.
         """
-        LOGGER.debug(f"Graph '{self.name}': đang tạo schema...")
+        LOGGER.debug("Graph [highlight]%s[/highlight]: đang tạo schema...", self.name)
         graph_inputs = {}
         graph_outputs = {}
 
@@ -133,7 +133,7 @@ class GraphNode(BaseNode):
 
     def _build_flow_type(self):
         """Xác định flow type của mỗi node dựa trên pattern kết nối."""
-        LOGGER.debug(f"Graph '{self.name}': đang xác định flow type của các node...")
+        LOGGER.debug("Graph [highlight]%s[/highlight]: đang xác định flow type của các node...", self.name)
         self.flowtype_map = BiMap[str, NodeFlowType]()
 
         # Phát hiện orphan node (không có kết nối nào)
@@ -169,8 +169,8 @@ class GraphNode(BaseNode):
         # Cảnh báo về orphan node
         if orphan_nodes:
             LOGGER.warning(
-                f"Graph '{self.full_name}': phát hiện orphan node (không có edge): {orphan_nodes}. "
-                "Các node này sẽ không bao giờ được thực thi."
+                "Graph [highlight]%s[/highlight]: phát hiện orphan node [muted](không có edge)[/muted]: %s. Các node này sẽ không bao giờ được thực thi.",
+                self.full_name, orphan_nodes
             )
 
     def build(self):
@@ -228,7 +228,8 @@ class GraphNode(BaseNode):
         # Cảnh báo nếu node cùng tên đã tồn tại (sẽ bị ghi đè)
         if node.name in self._nodes:
             LOGGER.warning(
-                f"Graph '{self.name}': node '{node.name}' đã tồn tại và sẽ bị ghi đè"
+                "Graph [highlight]%s[/highlight]: node [highlight]%s[/highlight] đã tồn tại và sẽ bị ghi đè",
+                self.name, node.name
             )
 
         self._nodes[node.name] = node
@@ -401,7 +402,7 @@ class GraphNode(BaseNode):
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.name}: {str(e)}")
+            LOGGER.error("[title]\\[%s][/title] Error in node [highlight]%s[/highlight]: %s", request_id, self.name, str(e))
             LOGGER.error(error_msg)
             state[self.full_name, "error", context_id] = error_msg
 

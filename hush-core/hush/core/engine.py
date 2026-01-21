@@ -84,7 +84,7 @@ class Hush:
         self.graph.build()
         self._schema = StateSchema(self.graph)
 
-        LOGGER.info(f"Hush engine initialized for workflow '{self.name}'")
+        LOGGER.debug("Hush engine initialized for workflow [highlight]%s[/highlight]", self.name)
 
     @property
     def schema(self) -> StateSchema:
@@ -121,7 +121,7 @@ class Hush:
         session_id = session_id or str(uuid.uuid4())
         request_id = request_id or str(uuid.uuid4())
 
-        LOGGER.info(f"Running workflow '{self.name}', request_id={request_id}")
+        LOGGER.info("[title]\\[%s][/title] Running workflow [highlight]%s[/highlight]", request_id, self.name)
 
         # Create fresh state for this run
         state = self._schema.create_state(
@@ -141,7 +141,7 @@ class Hush:
         if tracer is not None:
             tracer.flush_in_background(self.name, state)
 
-        LOGGER.info(f"Workflow '{self.name}' completed, request_id={request_id}")
+        LOGGER.info("[title]\\[%s][/title] Workflow [highlight]%s[/highlight] completed", request_id, self.name)
 
         # Include state in result for debugging/tracing access
         result["$state"] = state

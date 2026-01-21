@@ -1,13 +1,11 @@
 """Storage config dựa trên JSON."""
 
 import json
-import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from hush.core.loggings import LOGGER
 from .base import ConfigStorage
-
-logger = logging.getLogger(__name__)
 
 
 class JsonConfigStorage(ConfigStorage):
@@ -62,13 +60,13 @@ class JsonConfigStorage(ConfigStorage):
                 return None
 
             if '_class' not in config_data:
-                logger.warning(f"Thiếu field '_class' cho key: {key}")
+                LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
                 return None
 
             return config_data
 
         except Exception as e:
-            logger.error(f"Không thể load config '{key}': {e}")
+            LOGGER.error(f"Không thể load config '{key}': {e}")
             return None
 
     def load_all(self) -> Dict[str, Dict[str, Any]]:
@@ -78,7 +76,7 @@ class JsonConfigStorage(ConfigStorage):
         try:
             data = self._load_file()
         except json.JSONDecodeError as e:
-            logger.error(f"File JSON không hợp lệ: {e}")
+            LOGGER.error(f"File JSON không hợp lệ: {e}")
             return configs
 
         for key, config_data in data.items():
@@ -86,7 +84,7 @@ class JsonConfigStorage(ConfigStorage):
                 continue
 
             if '_class' not in config_data:
-                logger.warning(f"Thiếu field '_class' cho key: {key}")
+                LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
                 continue
 
             configs[key] = config_data
@@ -99,10 +97,10 @@ class JsonConfigStorage(ConfigStorage):
             data = self._load_file()
             data[key] = config_dict
             self._save_file(data)
-            logger.info(f"Đã lưu config: {key}")
+            LOGGER.debug(f"Đã lưu config: {key}")
             return True
         except Exception as e:
-            logger.error(f"Không thể lưu config '{key}': {e}")
+            LOGGER.error(f"Không thể lưu config '{key}': {e}")
             return False
 
     def remove(self, key: str) -> bool:
@@ -112,11 +110,11 @@ class JsonConfigStorage(ConfigStorage):
             if key in data:
                 del data[key]
                 self._save_file(data)
-                logger.info(f"Đã xóa config: {key}")
+                LOGGER.debug(f"Đã xóa config: {key}")
                 return True
             return False
         except Exception as e:
-            logger.error(f"Không thể xóa config '{key}': {e}")
+            LOGGER.error(f"Không thể xóa config '{key}': {e}")
             return False
 
     def close(self):

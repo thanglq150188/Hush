@@ -225,7 +225,7 @@ class AsyncIterNode(BaseIterationNode):
                 "latency_ms": (perf_counter() - start) * 1000
             }
         except Exception as e:
-            LOGGER.error(f"[{request_id}] Error processing chunk {chunk_id}: {e}")
+            LOGGER.error("[title]\\[%s][/title] Error processing chunk [value]%s[/value]: %s", request_id, chunk_id, e)
             return {
                 "chunk_id": chunk_id,
                 "result": None,
@@ -259,7 +259,7 @@ class AsyncIterNode(BaseIterationNode):
             _inputs = {iter_var_name: "<AsyncIterable>", **broadcast_values}
 
             if source is None:
-                LOGGER.warning(f"AsyncIterNode '{self.full_name}': source is None.")
+                LOGGER.warning("[title]\\[%s][/title] AsyncIterNode [highlight]%s[/highlight]: source is None.", request_id, self.full_name)
 
             semaphore = asyncio.Semaphore(self._max_concurrency)
             result_queue: asyncio.Queue = asyncio.Queue()
@@ -354,7 +354,7 @@ class AsyncIterNode(BaseIterationNode):
                                 await self._callback(result["result"])
                             except Exception as e:
                                 handler_error_count += 1
-                                LOGGER.error(f"[{request_id}] Callback error: {e}")
+                                LOGGER.error("[title]\\[%s][/title] Callback error: %s", request_id, e)
                             handler_latencies.append((perf_counter() - handler_start) * 1000)
 
                         # Collect result
@@ -378,8 +378,8 @@ class AsyncIterNode(BaseIterationNode):
             # Cảnh báo nếu error rate cao (>10%)
             if total_chunks > 0 and error_count / total_chunks > 0.1:
                 LOGGER.warning(
-                    f"AsyncIterNode '{self.full_name}': high error rate "
-                    f"({error_count / total_chunks:.1%}). {error_count}/{total_chunks} failed."
+                    "[title]\\[%s][/title] AsyncIterNode [highlight]%s[/highlight]: high error rate [muted](%s)[/muted]. %s/%s failed.",
+                    request_id, self.full_name, f"{error_count / total_chunks:.1%}", error_count, total_chunks
                 )
 
             # Thêm callback metrics nếu có sử dụng
@@ -392,8 +392,8 @@ class AsyncIterNode(BaseIterationNode):
                 }
                 if handler_error_count / len(handler_latencies) > 0.05:
                     LOGGER.warning(
-                        f"AsyncIterNode '{self.full_name}': high callback error rate "
-                        f"({handler_error_count / len(handler_latencies):.1%})."
+                        "[title]\\[%s][/title] AsyncIterNode [highlight]%s[/highlight]: high callback error rate [muted](%s)[/muted].",
+                        request_id, self.full_name, f"{handler_error_count / len(handler_latencies):.1%}"
                     )
 
             # Transpose results sang column-oriented format (giống ForLoopNode)
@@ -408,7 +408,7 @@ class AsyncIterNode(BaseIterationNode):
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error("[title]\\[%s][/title] Error in node [highlight]%s[/highlight]: %s", request_id, self.full_name, str(e))
             LOGGER.error(error_msg)
             state[self.full_name, "error", context_id] = error_msg
 

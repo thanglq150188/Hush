@@ -189,7 +189,8 @@ class ForLoopNode(BaseIterationNode):
         lengths = {var: len(lst) for var, lst in each_values.items()}
         if len(set(lengths.values())) > 1:
             LOGGER.error(
-                f"ForLoopNode '{self.full_name}': 'each' variables have different lengths: {lengths}"
+                "ForLoopNode [highlight]%s[/highlight]: 'each' variables have different lengths: %s",
+                self.full_name, lengths
             )
             raise ValueError(
                 f"All 'each' variables must have the same length. Got: {lengths}"
@@ -234,7 +235,8 @@ class ForLoopNode(BaseIterationNode):
             # Cảnh báo nếu không có iterations
             if not iteration_data:
                 LOGGER.warning(
-                    f"ForLoopNode '{self.full_name}': no iteration data. No iterations will be executed."
+                    "[title]\\[%s][/title] ForLoopNode [highlight]%s[/highlight]: no iteration data. No iterations will be executed.",
+                    request_id, self.full_name
                 )
 
             # Execute iterations sequentially
@@ -269,8 +271,8 @@ class ForLoopNode(BaseIterationNode):
             # Cảnh báo nếu error rate cao (>10%)
             if iteration_data and error_count / len(iteration_data) > 0.1:
                 LOGGER.warning(
-                    f"ForLoopNode '{self.full_name}': high error rate ({error_count / len(iteration_data):.1%}). "
-                    f"{error_count}/{len(iteration_data)} iterations failed."
+                    "[title]\\[%s][/title] ForLoopNode [highlight]%s[/highlight]: high error rate [muted](%s)[/muted]. %s/%s iterations failed.",
+                    request_id, self.full_name, f"{error_count / len(iteration_data):.1%}", error_count, len(iteration_data)
                 )
 
             # Transpose results sang column-oriented format
@@ -285,7 +287,7 @@ class ForLoopNode(BaseIterationNode):
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            LOGGER.error(f"Error in node {self.full_name}: {str(e)}")
+            LOGGER.error("[title]\\[%s][/title] Error in node [highlight]%s[/highlight]: %s", request_id, self.full_name, str(e))
             LOGGER.error(error_msg)
             state[self.full_name, "error", context_id] = error_msg
 
