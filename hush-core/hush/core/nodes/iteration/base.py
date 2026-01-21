@@ -12,46 +12,6 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
-def calculate_iteration_metrics(latencies_ms: List[float]) -> Dict[str, Any]:
-    """Calculate aggregate metrics from iteration latencies.
-
-    Args:
-        latencies_ms: List of latency values in milliseconds
-
-    Returns:
-        Dictionary containing latency statistics
-    """
-    if not latencies_ms:
-        return {
-            "latency_avg_ms": 0.0,
-            "latency_min_ms": 0.0,
-            "latency_max_ms": 0.0,
-            "latency_p50_ms": 0.0,
-            "latency_p95_ms": 0.0,
-            "latency_p99_ms": 0.0,
-        }
-
-    sorted_latencies = sorted(latencies_ms)
-    n = len(sorted_latencies)
-
-    def percentile(p: float) -> float:
-        if n == 1:
-            return sorted_latencies[0]
-        k = (n - 1) * p
-        f = int(k)
-        c = f + 1 if f + 1 < n else f
-        return sorted_latencies[f] + (k - f) * (sorted_latencies[c] - sorted_latencies[f])
-
-    return {
-        "latency_avg_ms": round(sum(latencies_ms) / n, 2),
-        "latency_min_ms": round(sorted_latencies[0], 2),
-        "latency_max_ms": round(sorted_latencies[-1], 2),
-        "latency_p50_ms": round(percentile(0.50), 2),
-        "latency_p95_ms": round(percentile(0.95), 2),
-        "latency_p99_ms": round(percentile(0.99), 2),
-    }
-
-
 class Each:
     """Marker wrapper to mark iteration source in unified inputs.
 
@@ -81,11 +41,19 @@ class BaseIterationNode(GraphNode):
     """Base class for iteration nodes (ForLoop, Map, While, AsyncIter).
 
     Extracts common boilerplate:
-    - build() with ready_count calculation
     - _run_graph() for executing child nodes
+    - _resolve_values() for resolving Ref objects
+    - _build_iteration_data() for building iteration data
+    - _normalize_iteration_io() for normalizing inputs/outputs
+
+    Inherits build() from GraphNode which calls _post_build() hook.
+
+    Performance optimization:
+    - _var_indices: Pre-computed indices for iteration variables to avoid
+      repeated schema.get_index() calls in hot loops
     """
 
-    __slots__ = ['_each', '_broadcast_inputs', '_raw_inputs', '_raw_outputs']
+    __slots__ = ['_each', '_broadcast_inputs', '_raw_inputs', '_raw_outputs', '_var_indices']
 
     def __init__(
         self,
@@ -111,38 +79,6 @@ class BaseIterationNode(GraphNode):
                 self._each[var_name] = value.source
             else:
                 self._broadcast_inputs[var_name] = value
-
-    def build(self):
-        """Build iteration node - build children then setup iteration config."""
-        for node in self._nodes.values():
-            if hasattr(node, 'build'):
-                node.build()
-
-        self._setup_schema()
-        self._build_flow_type()
-        self._setup_endpoints()
-
-        # Calculate ready_count for execution scheduling
-        self.ready_count = {}
-        self.has_soft_preds = set()
-        for name in self._nodes:
-            hard_pred_count = 0
-            has_soft = False
-            for pred in self.prevs[name]:
-                edge = self._edges_lookup.get((pred, name))
-                if edge and edge.soft:
-                    has_soft = True
-                elif edge and not edge.soft:
-                    hard_pred_count += 1
-                elif edge is None:
-                    hard_pred_count += 1
-            if has_soft:
-                self.has_soft_preds.add(name)
-                hard_pred_count += 1
-            self.ready_count[name] = hard_pred_count
-
-        self._is_building = False
-        self._post_build()
 
     def _post_build(self):
         """Setup inputs/outputs after graph is built. Override in subclasses."""
@@ -200,10 +136,9 @@ class BaseIterationNode(GraphNode):
                             continue
                         soft_satisfied.add(next_node)
 
-                    count = ready_count[next_node] - 1
-                    ready_count[next_node] = count
+                    ready_count[next_node] -= 1
 
-                    if count == 0:
+                    if ready_count[next_node] == 0:
                         task = asyncio.create_task(
                             name=next_node,
                             coro=nodes[next_node].run(state, context_id, parent_context)
@@ -245,13 +180,16 @@ class BaseIterationNode(GraphNode):
             )
             raise ValueError(f"All 'each' variables must have the same length. Got: {lengths}")
 
+        # Pre-allocate result list and avoid repeated broadcast_values.copy()
         keys = list(each_values.keys())
-        result = []
-        for vals in zip(*each_values.values()):
-            item = broadcast_values.copy()
-            for i, k in enumerate(keys):
-                item[k] = vals[i]
-            result.append(item)
+        n = next(iter(lengths.values()))
+        result = [{**broadcast_values} for _ in range(n)]
+
+        # Fill in each values
+        for i, vals in enumerate(zip(*each_values.values())):
+            item = result[i]
+            for j, k in enumerate(keys):
+                item[k] = vals[j]
         return result
 
     def _normalize_iteration_io(self):

@@ -569,13 +569,17 @@ class BaseNode(ABC):
         duration_ms: float
     ) -> None:
         """Log tóm tắt thực thi node với inputs, outputs và duration."""
-        if self.verbose:
-            _context_id = context_id or "main"
-            _request_id = request_id or "unknown"
+        # Check both verbose flag and logger level before formatting
+        if self.verbose and LOGGER.isEnabledFor(20):  # 20 = INFO level
             LOGGER.info(
                 "[title]\\[%s][/title] [bold]%s[/bold]: [highlight]%s[/highlight] [muted]\\[%s][/muted] [muted](%.1fms)[/muted] %s -> %s",
-                _request_id, str(self.type).upper(), self.full_name, _context_id,
-                duration_ms, format_log_data(inputs), format_log_data(outputs)
+                request_id or "unknown",
+                self.type.upper() if isinstance(self.type, str) else str(self.type).upper(),
+                self.full_name,
+                context_id or "main",
+                duration_ms,
+                format_log_data(inputs),
+                format_log_data(outputs)
             )
 
     async def run(

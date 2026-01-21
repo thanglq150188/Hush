@@ -6,7 +6,7 @@ from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, calculate_iteration_metrics
+from hush.core.nodes.iteration.base import BaseIterationNode
 from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
 
@@ -135,21 +135,18 @@ class WhileLoopNode(BaseIterationNode):
         try:
             _inputs = self.get_inputs(state, context_id, parent_context)
             step_inputs = _inputs
-            latencies_ms: List[float] = []
             step_count = 0
 
             should_stop = self._evaluate_stop_condition(step_inputs)
 
+            ctx_prefix = context_id + "." if context_id else ""
             while not should_stop and step_count < self._max_iterations:
-                step_context = f"while[{step_count}]" if not context_id else f"{context_id}.while[{step_count}]"
-                iter_start = perf_counter()
+                step_context = ctx_prefix + "[" + str(step_count) + "]"
 
                 for var_name, value in step_inputs.items():
                     state[self.full_name, var_name, step_context] = value
 
                 _outputs = await self._run_graph(state, step_context, step_context)
-
-                latencies_ms.append((perf_counter() - iter_start) * 1000)
 
                 step_inputs = {**step_inputs, **_outputs}
                 step_count += 1
@@ -162,14 +159,13 @@ class WhileLoopNode(BaseIterationNode):
                     request_id, self.full_name, self._max_iterations
                 )
 
-            iteration_metrics = calculate_iteration_metrics(latencies_ms)
-            iteration_metrics.update({
+            iteration_metrics = {
                 "total_iterations": step_count,
                 "success_count": step_count,
                 "error_count": 0,
                 "max_iterations_reached": step_count >= self._max_iterations,
                 "stopped_by_condition": should_stop,
-            })
+            }
 
             _outputs["iteration_metrics"] = iteration_metrics
             self.store_result(state, _outputs, context_id)

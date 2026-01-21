@@ -321,3 +321,177 @@ class TestWhileLoopNewOutputSyntax:
         # Value: 1->2->4->8->16, stops at 4 iterations
         assert result.get('iteration_metrics', {}).get('total_iterations') == 4
         assert result.get('value') == 16
+
+
+# ============================================================
+# Test 8: WhileLoop with Initial Value from Upstream Node
+# ============================================================
+
+class TestWhileLoopInitialFromUpstream:
+    """Test WhileLoopNode receiving initial condition variable from upstream node."""
+
+    @pytest.mark.asyncio
+    async def test_counter_from_upstream_node(self):
+        """Test WhileLoop's counter starts from value computed by upstream node.
+
+        This tests the scenario where the initial value of a condition variable
+        (like 'counter') comes from another node's output rather than a literal.
+        """
+        @code_node
+        def compute_start():
+            """Compute initial counter value."""
+            return {"start_value": 3}
+
+        @code_node
+        def increment(counter: int):
+            """Increment counter by 1."""
+            return {"new_counter": counter + 1}
+
+        with GraphNode(name="upstream_while_graph") as graph:
+            start_node = compute_start()
+
+            with WhileLoopNode(
+                name="counter_loop",
+                inputs={"counter": start_node["start_value"]},
+                stop_condition="counter >= 7",
+                max_iterations=10
+            ) as loop:
+                inc_node = increment(
+                    inputs={"counter": PARENT["counter"]}
+                )
+                inc_node["new_counter"] >> PARENT["counter"]
+                START >> inc_node >> END
+
+            START >> start_node >> loop >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = MemoryState(schema)
+
+        await graph.run(state)
+
+        # Counter starts at 3 (from upstream), then: 3->4->5->6->7
+        # Stops when counter >= 7, so 4 iterations
+        loop_result = state[loop.full_name, "iteration_metrics", None]
+        assert loop_result.get('total_iterations') == 4
+        assert loop_result.get('stopped_by_condition') is True
+
+        # Final counter value should be 7
+        final_counter = state[loop.full_name, "counter", None]
+        assert final_counter == 7
+
+    @pytest.mark.asyncio
+    async def test_multiple_vars_from_upstream(self):
+        """Test WhileLoop receiving multiple condition variables from upstream.
+
+        Both 'counter' and 'limit' come from an upstream node's output.
+        """
+        @code_node
+        def compute_config():
+            """Compute initial values and limit."""
+            return {
+                "initial_counter": 0,
+                "step_size": 5,
+                "target_limit": 20
+            }
+
+        @code_node
+        def increment_by(counter: int, step: int):
+            """Increment counter by step."""
+            return {"new_counter": counter + step}
+
+        with GraphNode(name="multi_var_graph") as graph:
+            config = compute_config()
+
+            with WhileLoopNode(
+                name="configured_loop",
+                inputs={
+                    "counter": config["initial_counter"],
+                    "step": config["step_size"],
+                    "limit": config["target_limit"]
+                },
+                stop_condition="counter >= limit",
+                max_iterations=20
+            ) as loop:
+                inc = increment_by(
+                    inputs={
+                        "counter": PARENT["counter"],
+                        "step": PARENT["step"]
+                    }
+                )
+                inc["new_counter"] >> PARENT["counter"]
+                START >> inc >> END
+
+            START >> config >> loop >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = MemoryState(schema)
+
+        await graph.run(state)
+
+        # Counter: 0->5->10->15->20, stops at counter >= 20
+        # 4 iterations
+        loop_result = state[loop.full_name, "iteration_metrics", None]
+        assert loop_result.get('total_iterations') == 4
+
+        final_counter = state[loop.full_name, "counter", None]
+        assert final_counter == 20
+
+    @pytest.mark.asyncio
+    async def test_dynamic_stop_threshold(self):
+        """Test WhileLoop where stop threshold is computed dynamically.
+
+        The 'threshold' variable is computed by an upstream node and used
+        in the stop_condition.
+        """
+        @code_node
+        def calculate_threshold(base: int):
+            """Calculate dynamic threshold."""
+            return {"threshold": base * 3}
+
+        @code_node
+        def increment(value: int):
+            """Increment value."""
+            return {"new_value": value + 2}
+
+        with GraphNode(
+            name="dynamic_threshold_graph",
+            inputs={"base": 5}
+        ) as graph:
+            calc = calculate_threshold(
+                inputs={"base": PARENT["base"]}
+            )
+
+            with WhileLoopNode(
+                name="dynamic_loop",
+                inputs={
+                    "value": 0,
+                    "threshold": calc["threshold"]
+                },
+                stop_condition="value >= threshold",
+                max_iterations=20
+            ) as loop:
+                inc = increment(
+                    inputs={"value": PARENT["value"]}
+                )
+                inc["new_value"] >> PARENT["value"]
+                START >> inc >> END
+
+            START >> calc >> loop >> END
+
+        graph.build()
+        schema = StateSchema(graph)
+        state = MemoryState(schema, inputs={"base": 5})
+
+        await graph.run(state)
+
+        # threshold = 5 * 3 = 15
+        # value: 0->2->4->6->8->10->12->14->16
+        # stops when value >= 15, so at 8 iterations (value=16)
+        loop_result = state[loop.full_name, "iteration_metrics", None]
+        assert loop_result.get('total_iterations') == 8
+        assert loop_result.get('stopped_by_condition') is True
+
+        final_value = state[loop.full_name, "value", None]
+        assert final_value == 16

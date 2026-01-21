@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, calculate_iteration_metrics
+from hush.core.nodes.iteration.base import BaseIterationNode
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -143,8 +143,7 @@ class AsyncIterNode(BaseIterationNode):
         base_context: Optional[str]
     ) -> Dict[str, Any]:
         """Process single chunk through graph."""
-        chunk_context = f"stream[{chunk_id}]" if not base_context else f"{base_context}.stream[{chunk_id}]"
-        start = perf_counter()
+        chunk_context = (base_context + "." if base_context else "") + "[" + str(chunk_id) + "]"
 
         try:
             for var_name, value in chunk_data.items():
@@ -155,7 +154,6 @@ class AsyncIterNode(BaseIterationNode):
                 "chunk_id": chunk_id,
                 "result": result,
                 "success": True,
-                "latency_ms": (perf_counter() - start) * 1000
             }
         except Exception as e:
             LOGGER.error("[title]\\[%s][/title] Error processing chunk [value]%s[/value]: %s", request_id, chunk_id, e)
@@ -164,7 +162,6 @@ class AsyncIterNode(BaseIterationNode):
                 "result": None,
                 "success": False,
                 "error": str(e),
-                "latency_ms": (perf_counter() - start) * 1000
             }
 
     async def run(
@@ -196,8 +193,6 @@ class AsyncIterNode(BaseIterationNode):
             semaphore = asyncio.Semaphore(self._max_concurrency)
             result_queue: asyncio.Queue = asyncio.Queue()
 
-            latencies: List[float] = []
-            handler_latencies: List[float] = []
             success_count = 0
             error_count = 0
             handler_error_count = 0
@@ -256,19 +251,16 @@ class AsyncIterNode(BaseIterationNode):
 
                 while next_id in pending_results:
                     result = pending_results.pop(next_id)
-                    latencies.append(result.get("latency_ms", 0))
 
                     if result.get("success"):
                         success_count += 1
 
                         if self._callback:
-                            handler_start = perf_counter()
                             try:
                                 await self._callback(result["result"])
                             except Exception as e:
                                 handler_error_count += 1
                                 LOGGER.error("[title]\\[%s][/title] Callback error: %s", request_id, e)
-                            handler_latencies.append((perf_counter() - handler_start) * 1000)
 
                         collected_results.append(result["result"])
                     else:
@@ -279,12 +271,11 @@ class AsyncIterNode(BaseIterationNode):
 
             await consumer_task
 
-            iteration_metrics = calculate_iteration_metrics(latencies)
-            iteration_metrics.update({
+            iteration_metrics = {
                 "total_iterations": total_chunks,
                 "success_count": success_count,
                 "error_count": error_count,
-            })
+            }
 
             if total_chunks > 0 and error_count / total_chunks > 0.1:
                 LOGGER.warning(
@@ -292,11 +283,8 @@ class AsyncIterNode(BaseIterationNode):
                     request_id, self.full_name, f"{error_count / total_chunks:.1%}"
                 )
 
-            if handler_latencies:
-                handler_metrics = calculate_iteration_metrics(handler_latencies)
+            if self._callback:
                 iteration_metrics["callback"] = {
-                    **handler_metrics,
-                    "call_count": len(handler_latencies),
                     "error_count": handler_error_count,
                 }
 

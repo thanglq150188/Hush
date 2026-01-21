@@ -6,7 +6,7 @@ from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, calculate_iteration_metrics
+from hush.core.nodes.iteration.base import BaseIterationNode
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -71,13 +71,12 @@ class ForLoopNode(BaseIterationNode):
                 )
 
             # Execute iterations sequentially
-            latencies_ms: List[float] = []
             final_results: List[Dict[str, Any]] = []
             success_count = 0
 
+            ctx_prefix = context_id + "." if context_id else ""
             for i, loop_data in enumerate(iteration_data):
-                iter_context = f"[{i}]" if not context_id else f"{context_id}.[{i}]"
-                iter_start = perf_counter()
+                iter_context = ctx_prefix + "[" + str(i) + "]"
 
                 try:
                     for var_name, value in loop_data.items():
@@ -89,17 +88,14 @@ class ForLoopNode(BaseIterationNode):
                 except Exception as e:
                     final_results.append({"error": str(e), "error_type": type(e).__name__})
 
-                latencies_ms.append((perf_counter() - iter_start) * 1000)
-
             error_count = len(iteration_data) - success_count
 
             # Build metrics
-            iteration_metrics = calculate_iteration_metrics(latencies_ms)
-            iteration_metrics.update({
+            iteration_metrics = {
                 "total_iterations": len(iteration_data),
                 "success_count": success_count,
                 "error_count": error_count,
-            })
+            }
 
             if iteration_data and error_count / len(iteration_data) > 0.1:
                 LOGGER.warning(

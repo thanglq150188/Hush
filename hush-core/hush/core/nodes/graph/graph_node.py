@@ -208,6 +208,11 @@ class GraphNode(BaseNode):
             self.ready_count[name] = hard_pred_count
 
         self._is_building = False
+        self._post_build()
+
+    def _post_build(self):
+        """Hook for subclasses to run after build. Override in subclasses."""
+        pass
 
     @staticmethod
     def get_current_graph() -> Optional['GraphNode']:
@@ -394,10 +399,9 @@ class GraphNode(BaseNode):
                                 continue  # Đã có soft pred khác hoàn thành
                             soft_satisfied.add(next_node)
 
-                        count = ready_count[next_node] - 1
-                        ready_count[next_node] = count
+                        ready_count[next_node] -= 1
 
-                        if count == 0:
+                        if ready_count[next_node] == 0:
                             task = asyncio.create_task(
                                 name=next_node,
                                 coro=nodes[next_node].run(state, context_id, parent_context)

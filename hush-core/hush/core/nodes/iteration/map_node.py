@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, calculate_iteration_metrics
+from hush.core.nodes.iteration.base import BaseIterationNode
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -91,40 +91,34 @@ class MapNode(BaseIterationNode):
             semaphore = asyncio.Semaphore(self._max_concurrency)
 
             async def execute_iteration(iter_context: str, loop_data: Dict[str, Any]) -> Dict[str, Any]:
-                start = perf_counter()
                 try:
                     async with semaphore:
                         for var_name, value in loop_data.items():
                             state[self.full_name, var_name, iter_context] = value
                         result = await self._run_graph(state, iter_context, iter_context)
-                    return {"result": result, "latency_ms": (perf_counter() - start) * 1000, "success": True}
+                    return {"result": result, "success": True}
                 except Exception as e:
-                    return {"result": {"error": str(e), "error_type": type(e).__name__}, "latency_ms": (perf_counter() - start) * 1000, "success": False}
+                    return {"result": {"error": str(e), "error_type": type(e).__name__}, "success": False}
 
+            ctx_prefix = context_id + "." if context_id else ""
             raw_results = await asyncio.gather(*[
-                execute_iteration(
-                    f"loop[{i}]" if not context_id else f"{context_id}.loop[{i}]",
-                    data
-                )
+                execute_iteration(ctx_prefix + "[" + str(i) + "]", data)
                 for i, data in enumerate(iteration_data)
             ])
 
             # Extract metrics and results
-            latencies_ms = []
             final_results = []
             success_count = 0
             for r in raw_results:
-                latencies_ms.append(r["latency_ms"])
                 final_results.append(r["result"])
                 success_count += r["success"]
             error_count = len(raw_results) - success_count
 
-            iteration_metrics = calculate_iteration_metrics(latencies_ms)
-            iteration_metrics.update({
+            iteration_metrics = {
                 "total_iterations": len(iteration_data),
                 "success_count": success_count,
                 "error_count": error_count,
-            })
+            }
 
             if iteration_data and error_count / len(iteration_data) > 0.1:
                 LOGGER.warning(

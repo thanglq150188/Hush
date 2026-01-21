@@ -1,6 +1,6 @@
 """StateSchema - định nghĩa cấu trúc state của workflow."""
 
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type, TYPE_CHECKING
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, TYPE_CHECKING
 
 from hush.core.states.ref import Ref
 
@@ -149,12 +149,6 @@ class StateSchema:
         """Lấy storage index của một biến. Trả về -1 nếu không tìm thấy."""
         return self._var_to_idx.get((node, var), -1)
 
-    def get_default(self, idx: int) -> Any:
-        """Lấy giá trị mặc định cho một index."""
-        if 0 <= idx < len(self._defaults):
-            return self._defaults[idx]
-        return None
-
     def get_pull_ref(self, idx: int) -> Optional[Ref]:
         """Lấy pull Ref cho một index (None nếu không pull)."""
         if 0 <= idx < len(self._pull_refs):
@@ -166,17 +160,6 @@ class StateSchema:
         if 0 <= idx < len(self._push_refs):
             return self._push_refs[idx]
         return None
-
-    def get_source(self, idx: int) -> Tuple[int, Optional[Callable]]:
-        """Lấy source index và function transform cho pull ref.
-
-        Returns:
-            (source_idx, fn) - source_idx là -1 nếu không có pull ref
-        """
-        ref = self._pull_refs[idx] if 0 <= idx < len(self._pull_refs) else None
-        if ref:
-            return ref.idx, ref._fn
-        return -1, None
 
     @property
     def num_indices(self) -> int:

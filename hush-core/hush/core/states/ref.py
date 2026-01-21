@@ -274,19 +274,3 @@ class Ref:
         if not self._ops:
             return f"Ref({self.node!r}, {self.var!r})"
         return f"Ref({self.node!r}, {self.var!r}, ops={len(self._ops)})"
-
-    def __hash__(self) -> int:
-        """Tính hash của Ref dựa trên node, var và ops."""
-        def hashable(item):
-            if isinstance(item, (list, tuple)):
-                return tuple(hashable(i) for i in item)
-            if isinstance(item, dict):
-                return tuple(sorted((k, hashable(v)) for k, v in item.items()))
-            return item
-        return hash((self.node, self.var, hashable(self._ops)))
-
-    def is_same_ref(self, other: "Ref") -> bool:
-        """Kiểm tra hai Ref có giống nhau không (cùng node, var và ops)."""
-        if not isinstance(other, Ref):
-            return False
-        return self.node == other.node and self.var == other.var and self._ops == other._ops

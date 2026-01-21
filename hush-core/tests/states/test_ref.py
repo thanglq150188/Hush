@@ -348,50 +348,7 @@ class TestImmutability:
 
 
 # ============================================================
-# Test 12: Hash and is_same_ref
-# ============================================================
-
-class TestHashAndIsSameRef:
-    """Test hash and is_same_ref methods."""
-
-    def test_same_refs_same_hash(self):
-        """Test refs with same node/var have same hash."""
-        ref1 = Ref("n", "x")
-        ref2 = Ref("n", "x")
-        assert hash(ref1) == hash(ref2)
-
-    def test_different_ops_different_hash(self):
-        """Test refs with different ops have different hash."""
-        ref1 = Ref("n", "x")
-        ref3 = Ref("n", "x")['key']
-        assert hash(ref1) != hash(ref3)
-
-    def test_is_same_ref_true(self):
-        """Test is_same_ref returns True for equivalent refs."""
-        ref1 = Ref("n", "x")
-        ref2 = Ref("n", "x")
-        assert ref1.is_same_ref(ref2) is True
-
-    def test_is_same_ref_with_ops(self):
-        """Test is_same_ref with same ops."""
-        ref3 = Ref("n", "x")['key']
-        ref4 = Ref("n", "x")['key']
-        assert ref3.is_same_ref(ref4) is True
-
-    def test_is_same_ref_false(self):
-        """Test is_same_ref returns False for different refs."""
-        ref1 = Ref("n", "x")
-        ref3 = Ref("n", "x")['key']
-        assert ref1.is_same_ref(ref3) is False
-
-    def test_is_same_ref_non_ref(self):
-        """Test is_same_ref returns False for non-Ref."""
-        ref1 = Ref("n", "x")
-        assert ref1.is_same_ref("not a ref") is False
-
-
-# ============================================================
-# Test 13: Clone
+# Test 12: Clone
 # ============================================================
 
 class TestClone:

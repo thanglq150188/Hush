@@ -472,7 +472,6 @@ class TestIterationMetrics:
         assert metrics["total_iterations"] == 3
         assert metrics["success_count"] == 3
         assert metrics["error_count"] == 0
-        assert "latency_avg_ms" in metrics
 
 
 # ============================================================
