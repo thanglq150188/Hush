@@ -84,19 +84,10 @@ class StateSchema:
             self._register(node_name, meta_var, None)
 
         # Load đệ quy các node con
+        # Iteration nodes giờ kế thừa từ GraphNode nên được handle bởi _nodes recursion
         if hasattr(node, '_nodes') and node._nodes:
             for child in node._nodes.values():
                 self._load_from(child)
-
-        # Load đệ quy inner graph (cho iteration node)
-        if hasattr(node, '_graph') and node._graph:
-            self._load_from(node._graph)
-            # Liên kết biến inner graph <- biến iteration node (cho PARENT access)
-            inner_graph_name = node._graph.full_name
-            # Input: inner_graph.var -> iteration_node.var (PARENT đọc từ iteration node)
-            for var_name in inputs.keys():
-                self._register(inner_graph_name, var_name, Ref(node_name, var_name))
-            # Lưu ý: Output ref được xử lý bởi logic output connection ở trên
 
     def _register(self, node: str, var: str, value: Any) -> None:
         """Đăng ký một biến (có thể gọi nhiều lần, Ref luôn được ưu tiên)."""

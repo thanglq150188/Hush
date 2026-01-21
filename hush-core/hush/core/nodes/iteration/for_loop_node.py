@@ -4,9 +4,11 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from time import perf_counter
 import traceback
+import asyncio
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, Each
+from hush.core.nodes.graph.graph_node import GraphNode
+from hush.core.nodes.iteration.base import Each, calculate_iteration_metrics
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
-class ForLoopNode(BaseIterationNode):
+class ForLoopNode(GraphNode):
     """Sequential iteration node - processes items one at a time in order.
 
     Use ForLoopNode when:
@@ -88,8 +90,44 @@ class ForLoopNode(BaseIterationNode):
             else:
                 self._broadcast_inputs[var_name] = value
 
+    def build(self):
+        """Build ForLoopNode - build child nodes rồi setup iteration-specific config."""
+        # Build child nodes first (như GraphNode)
+        for node in self._nodes.values():
+            if hasattr(node, 'build'):
+                node.build()
+
+        # Setup graph schema, flow type, endpoints (từ GraphNode)
+        self._setup_schema()
+        self._build_flow_type()
+        self._setup_endpoints()
+
+        # Calculate ready_count cho execution scheduling
+        self.ready_count = {}
+        self.has_soft_preds = set()
+        for name in self._nodes:
+            hard_pred_count = 0
+            has_soft = False
+            for pred in self.prevs[name]:
+                edge = self._edges_lookup.get((pred, name))
+                if edge and edge.soft:
+                    has_soft = True
+                elif edge and not edge.soft:
+                    hard_pred_count += 1
+                elif edge is None:
+                    hard_pred_count += 1
+            if has_soft:
+                self.has_soft_preds.add(name)
+                hard_pred_count += 1
+            self.ready_count[name] = hard_pred_count
+
+        self._is_building = False
+
+        # Iteration-specific post-build
+        self._post_build()
+
     def _post_build(self):
-        """Thiết lập inputs/outputs sau khi inner graph được build.
+        """Thiết lập inputs/outputs sau khi graph được build.
 
         QUAN TRỌNG: Method này normalize _each và _broadcast_inputs dùng
         _normalize_params để resolve PARENT refs thành self.father.
@@ -112,10 +150,12 @@ class ForLoopNode(BaseIterationNode):
             for var_name, value in self._broadcast_inputs.items()
         })
 
-        # Build outputs: dẫn xuất từ inner graph's outputs (column-oriented)
+        # Build outputs: dẫn xuất từ graph's outputs (column-oriented)
+        # self.outputs đã được populate bởi _setup_schema()
+        graph_outputs = self.outputs or {}
         parsed_outputs = {
             key: Param(type=List, required=param.required)
-            for key, param in self._graph.outputs.items()
+            for key, param in graph_outputs.items()
         }
         parsed_outputs["iteration_metrics"] = Param(type=Dict, required=False)
 
@@ -206,12 +246,89 @@ class ForLoopNode(BaseIterationNode):
             result.append(item)
         return result
 
+    async def _run_graph(
+        self,
+        state: 'MemoryState',
+        context_id: str,
+        parent_context: str
+    ) -> Dict[str, Any]:
+        """Chạy child nodes với parent_context.
+
+        Reuse logic từ GraphNode.run() nhưng truyền parent_context cho children.
+        """
+        active_tasks: Dict[str, asyncio.Task] = {}
+        ready_count = self.ready_count.copy()
+        soft_satisfied: set = set()
+
+        # Start entry nodes
+        for entry in self.entries:
+            task = asyncio.create_task(
+                name=entry,
+                coro=self._nodes[entry].run(state, context_id, parent_context)
+            )
+            active_tasks[entry] = task
+
+        while active_tasks:
+            done_tasks, _ = await asyncio.wait(
+                active_tasks.values(),
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Cache dict lookups for performance
+            nodes = self._nodes
+            nexts = self.nexts
+            edges_lookup = self._edges_lookup
+
+            for task in done_tasks:
+                node_name = task.get_name()
+                active_tasks.pop(node_name)
+
+                node = nodes[node_name]
+
+                if node.type == "branch":
+                    branch_target = node.get_target(state, context_id)
+                    from hush.core.nodes.base import END
+                    if branch_target != END.name:
+                        next_nodes = [branch_target]
+                    else:
+                        next_nodes = []
+                else:
+                    next_nodes = nexts[node_name]
+
+                for next_node in next_nodes:
+                    edge = edges_lookup.get((node_name, next_node))
+                    is_soft = edge and edge.soft
+
+                    if is_soft:
+                        if next_node in soft_satisfied:
+                            continue
+                        soft_satisfied.add(next_node)
+
+                    count = ready_count[next_node] - 1
+                    ready_count[next_node] = count
+
+                    if count == 0:
+                        task = asyncio.create_task(
+                            name=next_node,
+                            coro=nodes[next_node].run(state, context_id, parent_context)
+                        )
+                        active_tasks[next_node] = task
+
+        return self.get_outputs(state, context_id, parent_context)
+
     async def run(
         self,
         state: 'MemoryState',
-        context_id: Optional[str] = None
+        context_id: Optional[str] = None,
+        parent_context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Thực thi for loop qua iteration data tuần tự."""
+        """Thực thi for loop qua iteration data tuần tự.
+
+        Args:
+            state: Workflow state
+            context_id: Context của ForLoopNode này
+            parent_context: Context của PARENT để resolve PARENT refs trong inputs
+        """
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -222,9 +339,10 @@ class ForLoopNode(BaseIterationNode):
         _outputs = {}
 
         try:
-            # Resolve each và broadcast values
-            each_values = self._resolve_values(self._each, state, context_id)
-            broadcast_values = self._resolve_values(self._broadcast_inputs, state, context_id)
+            # Resolve each và broadcast values dùng parent_context
+            # (vì có thể là PARENT refs cần resolve từ father's context)
+            each_values = self._resolve_values(self._each, state, parent_context)
+            broadcast_values = self._resolve_values(self._broadcast_inputs, state, parent_context)
 
             # Build iteration data
             iteration_data = self._build_iteration_data(each_values, broadcast_values)
@@ -245,12 +363,17 @@ class ForLoopNode(BaseIterationNode):
             success_count = 0
 
             for i, loop_data in enumerate(iteration_data):
-                task_id = f"for[{i}]" if not context_id else f"{context_id}.for[{i}]"
+                # Chain context ID để tránh cache conflict giữa nested loops
+                iter_context = f"loop[{i}]" if not context_id else f"{context_id}.loop[{i}]"
                 iter_start = perf_counter()
 
                 try:
-                    self.inject_inputs(state, loop_data, task_id)
-                    result = await self._graph.run(state, task_id)
+                    # Inject inputs trực tiếp vào state (không cần duplicate injection)
+                    for var_name, value in loop_data.items():
+                        state[self.full_name, var_name, iter_context] = value
+
+                    # Chạy child nodes với iter_context là cả context_id và parent_context
+                    result = await self._run_graph(state, iter_context, iter_context)
                     final_results.append(result)
                     success_count += 1
                 except Exception as e:
@@ -261,7 +384,7 @@ class ForLoopNode(BaseIterationNode):
             error_count = len(iteration_data) - success_count
 
             # Tính iteration metrics
-            iteration_metrics = self._calculate_iteration_metrics(latencies_ms)
+            iteration_metrics = calculate_iteration_metrics(latencies_ms)
             iteration_metrics.update({
                 "total_iterations": len(iteration_data),
                 "success_count": success_count,
@@ -276,7 +399,8 @@ class ForLoopNode(BaseIterationNode):
                 )
 
             # Transpose results sang column-oriented format
-            output_keys = list(self._graph.outputs.keys())
+            # Lấy output keys từ self.outputs (không phải self._graph.outputs)
+            output_keys = [k for k in self.outputs.keys() if k != "iteration_metrics"]
             _outputs = {
                 key: [r.get(key) for r in final_results]
                 for key in output_keys

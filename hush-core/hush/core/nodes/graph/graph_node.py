@@ -315,9 +315,16 @@ class GraphNode(BaseNode):
     async def run(
         self,
         state: 'MemoryState',
-        context_id: Optional[str] = None
+        context_id: Optional[str] = None,
+        parent_context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Thực thi graph bằng cách chạy tất cả node theo thứ tự dependency."""
+        """Thực thi graph bằng cách chạy tất cả node theo thứ tự dependency.
+
+        Args:
+            state: Workflow state
+            context_id: Context của graph này
+            parent_context: Context của PARENT để truyền cho child nodes
+        """
 
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
@@ -329,7 +336,7 @@ class GraphNode(BaseNode):
         _outputs = {}
 
         try:
-            _inputs = self.get_inputs(state, context_id=context_id)
+            _inputs = self.get_inputs(state, context_id=context_id, parent_context=parent_context)
 
             if self._is_building:
                 raise ValueError(
@@ -346,7 +353,7 @@ class GraphNode(BaseNode):
             for entry in self.entries:
                 task = asyncio.create_task(
                     name=entry,
-                    coro=self._nodes[entry].run(state, context_id)
+                    coro=self._nodes[entry].run(state, context_id, parent_context)
                 )
                 active_tasks[entry] = task
 
@@ -393,11 +400,11 @@ class GraphNode(BaseNode):
                         if count == 0:
                             task = asyncio.create_task(
                                 name=next_node,
-                                coro=nodes[next_node].run(state, context_id)
+                                coro=nodes[next_node].run(state, context_id, parent_context)
                             )
                             active_tasks[next_node] = task
 
-            _outputs = self.get_outputs(state, context_id=context_id)
+            _outputs = self.get_outputs(state, context_id=context_id, parent_context=parent_context)
             self.store_result(state, _outputs, context_id)
 
         except Exception as e:

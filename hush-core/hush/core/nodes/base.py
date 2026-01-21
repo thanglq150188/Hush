@@ -473,7 +473,12 @@ class BaseNode(ABC):
     def is_base_node(self) -> bool:
         return True
 
-    def get_inputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
+    def get_inputs(
+        self,
+        state: 'MemoryState',
+        context_id: str,
+        parent_context: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Lấy giá trị input từ state dựa trên ánh xạ kết nối.
 
         Sử dụng state[this_node, var_name, ctx] để:
@@ -482,12 +487,29 @@ class BaseNode(ABC):
 
         Schema đã resolve Ref chain tại thời điểm build, nên ta đọc
         từ tên biến của chính node này - index và ops đã được tính trước.
+
+        Args:
+            state: Workflow state
+            context_id: Context của node này
+            parent_context: Context của PARENT để resolve PARENT refs.
+                           Dùng cho iteration nodes khi child cần đọc từ parent.
         """
         result = {}
 
         for var_name, param in self.inputs.items():
+            # Xác định context dựa trên ref target
+            # PARENT ref → dùng parent_context (nếu có), sibling/other → dùng context_id
+            if (
+                parent_context is not None
+                and isinstance(param.value, Ref)
+                and param.value.raw_node is self.father
+            ):
+                lookup_ctx = parent_context
+            else:
+                lookup_ctx = context_id
+
             # Luôn đọc từ state trước (có thể có giá trị từ MemoryState inputs hoặc Ref)
-            value = state[self.full_name, var_name, context_id]
+            value = state[self.full_name, var_name, lookup_ctx]
 
             if value is not None:
                 result[var_name] = value
@@ -500,12 +522,22 @@ class BaseNode(ABC):
 
         return result
 
-    def get_outputs(self, state: 'MemoryState', context_id: str) -> Dict[str, Any]:
+    def get_outputs(
+        self,
+        state: 'MemoryState',
+        context_id: str,
+        parent_context: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Lấy giá trị output từ state.
 
         Đọc trực tiếp từ các biến output của node này. Output connections
         (outputs={...}) đã được schema resolve tại thời điểm build -
         chúng tạo ref ở vị trí đích, không phải ở node này.
+
+        Args:
+            state: Workflow state
+            context_id: Context của node này
+            parent_context: Context của PARENT (để giữ API consistency)
         """
         result = {}
         for var_name in self.outputs:
@@ -549,9 +581,16 @@ class BaseNode(ABC):
     async def run(
         self,
         state: 'MemoryState',
-        context_id: Optional[str] = None
+        context_id: Optional[str] = None,
+        parent_context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Thực thi node."""
+        """Thực thi node.
+
+        Args:
+            state: Workflow state
+            context_id: Context của node này cho biến của chính nó
+            parent_context: Context của PARENT để resolve PARENT refs
+        """
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
 
@@ -562,7 +601,7 @@ class BaseNode(ABC):
         _outputs = {}
 
         try:
-            _inputs = self.get_inputs(state, context_id)
+            _inputs = self.get_inputs(state, context_id, parent_context)
 
             if asyncio.iscoroutinefunction(self.core):
                 _outputs = await self.core(**_inputs)

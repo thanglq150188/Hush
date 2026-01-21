@@ -8,9 +8,11 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode, Each
+from hush.core.nodes.graph.graph_node import GraphNode
+from hush.core.nodes.iteration.base import Each, calculate_iteration_metrics
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
+from hush.core.utils.context import _current_graph
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -22,7 +24,7 @@ def batch_by_size(n: int) -> Callable[[List, Any], bool]:
     return lambda batch, _: len(batch) >= n
 
 
-class AsyncIterNode(BaseIterationNode):
+class AsyncIterNode(GraphNode):
     """Streaming node xử lý async iterable data với optional batching.
 
     API (unified inputs với Each wrapper):
@@ -63,7 +65,7 @@ class AsyncIterNode(BaseIterationNode):
 
     __slots__ = [
         '_max_concurrency', '_each', '_broadcast_inputs',
-        '_callback', '_batch_fn', '_raw_outputs', '_raw_inputs'
+        '_callback', '_batch_fn', '_raw_outputs', '_raw_inputs', '_token'
     ]
 
     def __init__(
@@ -95,6 +97,8 @@ class AsyncIterNode(BaseIterationNode):
         # Không pass inputs cho parent - tự xử lý
         super().__init__(**kwargs)
 
+        self._token = None  # Cho context manager
+
         # Tách Each() sources khỏi broadcast inputs
         self._each = {}
         self._broadcast_inputs = {}
@@ -115,8 +119,53 @@ class AsyncIterNode(BaseIterationNode):
         self._batch_fn = batch_fn
         self._max_concurrency = max_concurrency if max_concurrency is not None else os.cpu_count()
 
+    def __enter__(self):
+        """Set this node as current graph context."""
+        self._token = _current_graph.set(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Reset graph context."""
+        _current_graph.reset(self._token)
+
+    def build(self):
+        """Build AsyncIterNode - build child nodes rồi setup iteration-specific config."""
+        # Build child nodes first (như GraphNode)
+        for node in self._nodes.values():
+            if hasattr(node, 'build'):
+                node.build()
+
+        # Setup graph schema, flow type, endpoints (từ GraphNode)
+        self._setup_schema()
+        self._build_flow_type()
+        self._setup_endpoints()
+
+        # Calculate ready_count cho execution scheduling
+        self.ready_count = {}
+        self.has_soft_preds = set()
+        for name in self._nodes:
+            hard_pred_count = 0
+            has_soft = False
+            for pred in self.prevs[name]:
+                edge = self._edges_lookup.get((pred, name))
+                if edge and edge.soft:
+                    has_soft = True
+                elif edge and not edge.soft:
+                    hard_pred_count += 1
+                elif edge is None:
+                    hard_pred_count += 1
+            if has_soft:
+                self.has_soft_preds.add(name)
+                hard_pred_count += 1
+            self.ready_count[name] = hard_pred_count
+
+        self._is_building = False
+
+        # Iteration-specific post-build
+        self._post_build()
+
     def _post_build(self):
-        """Thiết lập inputs/outputs sau khi inner graph được build.
+        """Thiết lập inputs/outputs sau khi graph được build.
 
         QUAN TRỌNG: Method này normalize _each và _broadcast_inputs dùng
         _normalize_params để resolve PARENT refs thành self.father.
@@ -147,10 +196,14 @@ class AsyncIterNode(BaseIterationNode):
             for var_name, value in self._broadcast_inputs.items()
         })
 
-        # Build outputs: từ inner graph (dạng lists) + metrics
+        # Preserve output mappings set via >> syntax before _post_build
+        existing_outputs = self.outputs or {}
+
+        # Build outputs: từ graph (dạng lists) + metrics
+        graph_outputs = self.outputs or {}
         parsed_outputs = {
             key: Param(type=List, required=param.required)
-            for key, param in self._graph.outputs.items()
+            for key, param in graph_outputs.items()
         }
         parsed_outputs["iteration_metrics"] = Param(type=Dict, required=False)
 
@@ -159,6 +212,11 @@ class AsyncIterNode(BaseIterationNode):
             self.outputs = self._merge_params(parsed_outputs, self._raw_outputs)
         else:
             self.outputs = parsed_outputs
+
+        # Restore .value references from existing outputs (set by >> syntax)
+        for key, existing_param in existing_outputs.items():
+            if key in self.outputs and existing_param.value is not None:
+                self.outputs[key].value = existing_param.value
 
         # Set inputs
         self.inputs = parsed_inputs
@@ -193,31 +251,101 @@ class AsyncIterNode(BaseIterationNode):
                 result[var_name] = value
         return result
 
-    def _get_source(self, state: 'MemoryState', context_id: Optional[str]) -> AsyncIterable:
+    def _get_source(self, state: 'MemoryState', parent_context: Optional[str]) -> AsyncIterable:
         """Lấy async iterable source, resolve Ref nếu cần."""
         iter_var_name = list(self._each.keys())[0]
         source = self._each[iter_var_name]
 
         if isinstance(source, Ref):
             # Lấy raw value từ state và apply Ref's operations
-            raw = state[source.node, source.var, context_id]
+            raw = state[source.node, source.var, parent_context]
             return source._fn(raw)
         return source
+
+    async def _run_graph(
+        self,
+        state: 'MemoryState',
+        context_id: str,
+        parent_context: str
+    ) -> Dict[str, Any]:
+        """Chạy child nodes với parent_context."""
+        active_tasks: Dict[str, asyncio.Task] = {}
+        ready_count = self.ready_count.copy()
+        soft_satisfied: set = set()
+
+        for entry in self.entries:
+            task = asyncio.create_task(
+                name=entry,
+                coro=self._nodes[entry].run(state, context_id, parent_context)
+            )
+            active_tasks[entry] = task
+
+        while active_tasks:
+            done_tasks, _ = await asyncio.wait(
+                active_tasks.values(),
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            nodes = self._nodes
+            nexts = self.nexts
+            edges_lookup = self._edges_lookup
+
+            for task in done_tasks:
+                node_name = task.get_name()
+                active_tasks.pop(node_name)
+
+                node = nodes[node_name]
+
+                if node.type == "branch":
+                    branch_target = node.get_target(state, context_id)
+                    from hush.core.nodes.base import END
+                    if branch_target != END.name:
+                        next_nodes = [branch_target]
+                    else:
+                        next_nodes = []
+                else:
+                    next_nodes = nexts[node_name]
+
+                for next_node in next_nodes:
+                    edge = edges_lookup.get((node_name, next_node))
+                    is_soft = edge and edge.soft
+
+                    if is_soft:
+                        if next_node in soft_satisfied:
+                            continue
+                        soft_satisfied.add(next_node)
+
+                    count = ready_count[next_node] - 1
+                    ready_count[next_node] = count
+
+                    if count == 0:
+                        task = asyncio.create_task(
+                            name=next_node,
+                            coro=nodes[next_node].run(state, context_id, parent_context)
+                        )
+                        active_tasks[next_node] = task
+
+        return self.get_outputs(state, context_id, parent_context)
 
     async def _process_chunk(
         self,
         chunk_data: Dict[str, Any],
         chunk_id: int,
         state: 'MemoryState',
-        request_id: str
+        request_id: str,
+        base_context: Optional[str]
     ) -> Dict[str, Any]:
-        """Xử lý single chunk qua inner graph."""
-        context_id = f"stream[{chunk_id}]"
+        """Xử lý single chunk qua graph."""
+        # Chain context ID để tránh cache conflict
+        chunk_context = f"stream[{chunk_id}]" if not base_context else f"{base_context}.stream[{chunk_id}]"
         start = perf_counter()
 
         try:
-            self.inject_inputs(state, chunk_data, context_id)
-            result = await self._graph.run(state, context_id)
+            # Inject inputs trực tiếp vào state
+            for var_name, value in chunk_data.items():
+                state[self.full_name, var_name, chunk_context] = value
+
+            result = await self._run_graph(state, chunk_context, chunk_context)
             return {
                 "chunk_id": chunk_id,
                 "result": result,
@@ -237,7 +365,8 @@ class AsyncIterNode(BaseIterationNode):
     async def run(
         self,
         state: 'MemoryState',
-        context_id: Optional[str] = None
+        context_id: Optional[str] = None,
+        parent_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """Xử lý streaming data với concurrent processing nhưng ordered output."""
         parent_name = self.father.full_name if self.father else None
@@ -250,9 +379,9 @@ class AsyncIterNode(BaseIterationNode):
         _outputs = {}
 
         try:
-            # Lấy source và broadcast values
-            source = self._get_source(state, context_id)
-            broadcast_values = self._resolve_values(self._broadcast_inputs, state, context_id)
+            # Lấy source và broadcast values (dùng parent_context)
+            source = self._get_source(state, parent_context)
+            broadcast_values = self._resolve_values(self._broadcast_inputs, state, parent_context)
             iter_var_name = list(self._each.keys())[0]
 
             # Lưu inputs để logging
@@ -277,7 +406,7 @@ class AsyncIterNode(BaseIterationNode):
 
             async def process_with_semaphore(chunk_data: Dict[str, Any], cid: int):
                 async with semaphore:
-                    result = await self._process_chunk(chunk_data, cid, state, request_id)
+                    result = await self._process_chunk(chunk_data, cid, state, request_id, context_id)
                     await result_queue.put((cid, result))
 
             async def consume_stream():
@@ -368,7 +497,7 @@ class AsyncIterNode(BaseIterationNode):
             await consumer_task
 
             # Build iteration metrics
-            iteration_metrics = self._calculate_iteration_metrics(latencies)
+            iteration_metrics = calculate_iteration_metrics(latencies)
             iteration_metrics.update({
                 "total_iterations": total_chunks,
                 "success_count": success_count,
@@ -384,7 +513,7 @@ class AsyncIterNode(BaseIterationNode):
 
             # Thêm callback metrics nếu có sử dụng
             if handler_latencies:
-                handler_metrics = self._calculate_iteration_metrics(handler_latencies)
+                handler_metrics = calculate_iteration_metrics(handler_latencies)
                 iteration_metrics["callback"] = {
                     **handler_metrics,
                     "call_count": len(handler_latencies),
@@ -396,8 +525,8 @@ class AsyncIterNode(BaseIterationNode):
                         request_id, self.full_name, f"{handler_error_count / len(handler_latencies):.1%}"
                     )
 
-            # Transpose results sang column-oriented format (giống ForLoopNode)
-            output_keys = list(self._graph.outputs.keys())
+            # Transpose results sang column-oriented format
+            output_keys = [k for k in self.outputs.keys() if k != "iteration_metrics"]
             _outputs = {
                 key: [r.get(key) for r in collected_results]
                 for key in output_keys

@@ -310,7 +310,11 @@ class TestIterationNode:
     """Test schema with iteration nodes."""
 
     def test_while_loop_refs(self):
-        """Test refs in WhileLoopNode."""
+        """Test refs in WhileLoopNode.
+
+        Note: After refactor, iteration nodes inherit directly from GraphNode
+        (no inner graph), so child nodes reference the loop node directly.
+        """
         from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
 
         with WhileLoopNode(
@@ -330,12 +334,13 @@ class TestIterationNode:
         loop.build()
         schema = StateSchema(loop)
 
-        # inner_graph.counter should ref to loop.counter
-        inner_counter_idx = schema.get_index("counter_loop.__inner__", "counter")
-        inner_counter_ref = schema._pull_refs[inner_counter_idx]
-        assert inner_counter_ref is not None
-        assert inner_counter_ref.node == "counter_loop"
-        assert inner_counter_ref.var == "counter"
+        # Child node's counter should ref to loop.counter (PARENT resolution)
+        # Iteration nodes now inherit from GraphNode directly, no __inner__ graph
+        child_counter_idx = schema.get_index("counter_loop.increment", "counter")
+        child_counter_ref = schema._pull_refs[child_counter_idx]
+        assert child_counter_ref is not None
+        assert child_counter_ref.node == "counter_loop"
+        assert child_counter_ref.var == "counter"
 
 
 # ============================================================
