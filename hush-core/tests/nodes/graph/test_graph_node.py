@@ -820,14 +820,19 @@ class TestCodeNodeDecorator:
 # ============================================================
 
 class TestSoftEdgeBehavior:
-    """Test soft edge (>) vs hard edge (>>) behavior.
+    """Test soft edge (>> ~) vs hard edge (>>) behavior.
 
     Soft edge semantics:
     - Hard edge (>>): Đếm từng cái một vào ready_count
-    - Soft edge (>): Nhiều soft edges đến cùng node đếm chung là 1
+    - Soft edge (>> ~): Nhiều soft edges đến cùng node đếm chung là 1
       (chỉ cần BẤT KỲ một soft predecessor hoàn thành)
 
-    Ví dụ: A >> D, B > D, C > D
+    Syntax:
+    - a >> b      # hard edge
+    - a >> ~b     # soft edge (dùng ~ marker)
+    - [a, b] >> ~c  # soft edges từ nhiều nodes
+
+    Ví dụ: A >> D, B >> ~D, C >> ~D
     => ready_count[D] = 2 (1 hard + 1 soft group)
     => D chạy khi A hoàn thành VÀ (B HOẶC C) hoàn thành
     """
@@ -862,10 +867,10 @@ class TestSoftEdgeBehavior:
                 outputs=PARENT
             )
 
-            # Soft edges: B > D, C > D
+            # Soft edges: B >> ~D, C >> ~D
             START >> [b, c]
-            b > d
-            c > d
+            b >> ~d
+            c >> ~d
             d >> END
 
         graph.build()
@@ -926,11 +931,11 @@ class TestSoftEdgeBehavior:
             )
 
             # Hard edge: A >> D
-            # Soft edges: B > D, C > D
+            # Soft edges: B >> ~D, C >> ~D
             START >> [a, b, c]
             a >> d
-            b > d
-            c > d
+            b >> ~d
+            c >> ~d
             d >> END
 
         graph.build()
@@ -980,10 +985,8 @@ class TestSoftEdgeBehavior:
                 outputs=PARENT
             )
 
-            START >> [b, c]
-            b > d
-            c > d
-            d >> END
+            # Using [b, c] >> ~d syntax for soft edges from multiple nodes
+            START >> [b, c] >> ~d >> END
 
         graph.build()
 
@@ -1099,10 +1102,10 @@ class TestSoftEdgeBehavior:
 
             START >> [a, b, c]
 
-            # E: hard from A, soft from B and C
+            # E: hard from A, soft from B and C using >> ~ syntax
             a >> e
-            b > e
-            c > e
+            b >> ~e
+            c >> ~e
 
             # F: hard from both A and B
             a >> f

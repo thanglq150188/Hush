@@ -18,6 +18,54 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
+class SoftEdge:
+    """Marker wrapper cho soft edge connection.
+
+    Sử dụng với cú pháp ~node để đánh dấu soft edge:
+        a >> ~b  # soft edge từ a đến b
+        a >> b   # hard edge từ a đến b
+        [a, b] >> ~c  # soft edges từ nhiều nodes
+        ~a >> b  # soft edge, rồi tiếp tục chain
+
+    Soft edge không tính vào ready_count, dùng cho branch outputs
+    khi chỉ một nhánh được thực thi.
+    """
+    __slots__ = ['node']
+
+    def __init__(self, node: 'BaseNode'):
+        self.node = node
+
+    @property
+    def name(self) -> str:
+        return self.node.name
+
+    def __rrshift__(self, other):
+        """[a, b] >> ~self: soft edges từ list nodes đến self.node."""
+        add_edge = getattr(self.node.father, "add_edge", None)
+
+        if isinstance(other, list):
+            if add_edge is not None:
+                for node in other:
+                    edge_type = "condition" if getattr(node, 'type', None) == "branch" else "normal"
+                    add_edge(node.name, self.node.name, edge_type, soft=True)
+            return self.node  # Return unwrapped for chaining
+        elif getattr(other, 'name', None) is not None:
+            # single_node >> ~self
+            edge_type = "condition" if getattr(other, 'type', None) == "branch" else "normal"
+            if add_edge is not None:
+                add_edge(other.name, self.node.name, edge_type, soft=True)
+            return self.node
+        return NotImplemented
+
+    def __rshift__(self, other):
+        """~a >> b: sau soft edge marker, tiếp tục với hard edge.
+
+        Cho phép chaining: source >> ~a >> b >> c
+        Sau khi ~a được xử lý, cần tiếp tục chain với b.
+        """
+        return self.node.__rshift__(other)
+
+
 class BaseNode(ABC):
     """Base class cho tất cả các node trong workflow.
 
@@ -34,9 +82,20 @@ class BaseNode(ABC):
     - value: Ref hoặc literal value
 
     Hỗ trợ kết nối node bằng operators:
-    - >> : Kết nối tuần tự (hard edge)
-    - >  : Kết nối điều kiện (soft edge, dùng cho branch)
-    - << : Kết nối ngược
+    - >>  : Hard edge (kết nối tuần tự, tính vào ready_count)
+    - >>~ : Soft edge (kết nối điều kiện, không tính vào ready_count)
+
+    Ví dụ:
+        # Hard edges (normal flow)
+        START >> a >> b >> c >> END
+
+        # Soft edges (branch outputs) - dùng ~node
+        branch >> ~case1 >> merge
+        branch >> ~case2 >> merge
+
+        # Mixed chain
+        a >> ~b >> c >> ~d >> e
+        # a->b soft, b->c hard, c->d soft, d->e hard
     """
 
     INNER_PROCESS = "__inner__"
@@ -274,16 +333,43 @@ class BaseNode(ABC):
         """
         return Ref(self, item)
 
+    def __invert__(self) -> 'SoftEdge':
+        """~node: Đánh dấu node này cho soft edge connection.
+
+        Sử dụng:
+            a >> ~b  # soft edge từ a đến b
+            a >> b   # hard edge từ a đến b
+
+        Returns:
+            SoftEdge wrapper chứa node này
+        """
+        return SoftEdge(self)
+
     def __rshift__(self, other):
-        """node >> other: kết nối node này đến other."""
+        """node >> other: kết nối node này đến other.
+
+        Hỗ trợ:
+            a >> b      # hard edge
+            a >> ~b     # soft edge (b wrapped trong SoftEdge)
+            a >> [b, c] # hard edges đến nhiều nodes
+        """
         edge_type = "condition" if self.type == "branch" else "normal"
-        # Cache add_edge lookup to avoid repeated hasattr
         add_edge = getattr(self.father, "add_edge", None)
+
+        # Handle SoftEdge marker: a >> ~b
+        if isinstance(other, SoftEdge):
+            if add_edge is not None:
+                add_edge(self.name, other.node.name, edge_type, soft=True)
+            return other.node  # Return unwrapped node for chaining
 
         if isinstance(other, list):
             if add_edge is not None:
                 for node in other:
-                    add_edge(self.name, node.name, edge_type)
+                    # Check if item is SoftEdge
+                    if isinstance(node, SoftEdge):
+                        add_edge(self.name, node.node.name, edge_type, soft=True)
+                    else:
+                        add_edge(self.name, node.name, edge_type)
             return other
         elif getattr(other, 'name', None) is not None:
             if add_edge is not None:
@@ -568,7 +654,15 @@ class DummyNode(BaseNode):
         super().__init__(name=name)
 
     def __rshift__(self, other):
-        """START >> node"""
+        """START >> node hoặc node >> END"""
+        # Không hỗ trợ soft edge với START/END
+        if isinstance(other, SoftEdge):
+            raise TypeError(
+                f"Không thể dùng soft edge (~) với {self.name}.\n"
+                f"  Sai: {self.name} >> ~node\n"
+                f"  Đúng: {self.name} >> node"
+            )
+
         if self == START:
             current_graph = get_current()
             if current_graph and hasattr(current_graph, 'add_edge'):

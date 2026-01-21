@@ -16,11 +16,12 @@ Bao gồm:
 from .base import (
     BaseNode,
     DummyNode,
-    NodeType,
+    SoftEdge,
     START,
     END,
     PARENT,
 )
+from hush.core.configs.node_config import NodeType
 from .graph.graph_node import GraphNode
 from .flow.branch_node import BranchNode
 from .iteration.for_loop_node import ForLoopNode
@@ -34,6 +35,7 @@ __all__ = [
     # Base
     "BaseNode",
     "DummyNode",
+    "SoftEdge",
     "NodeType",
     # Markers
     "START",
