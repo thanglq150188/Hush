@@ -6,7 +6,7 @@ from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode
+from hush.core.nodes.iteration.base import BaseIterationNode, get_iter_context
 from hush.core.utils.common import Param, extract_condition_variables
 from hush.core.loggings import LOGGER
 
@@ -139,9 +139,9 @@ class WhileLoopNode(BaseIterationNode):
 
             should_stop = self._evaluate_stop_condition(step_inputs)
 
-            ctx_prefix = context_id + "." if context_id else ""
+            ctx_prefix = (context_id + ".") if context_id else ""
             while not should_stop and step_count < self._max_iterations:
-                step_context = ctx_prefix + "[" + str(step_count) + "]"
+                step_context = get_iter_context(ctx_prefix, step_count)
 
                 for var_name, value in step_inputs.items():
                     state[self.full_name, var_name, step_context] = value

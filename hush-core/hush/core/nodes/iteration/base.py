@@ -12,6 +12,17 @@ if TYPE_CHECKING:
     from hush.core.states import MemoryState
 
 
+# Pre-computed context ID suffixes for indices 0-999
+_CTX_SUFFIXES = tuple("[" + str(i) + "]" for i in range(1000))
+
+
+def get_iter_context(prefix: str, i: int) -> str:
+    """Get iteration context ID. Uses pre-computed strings for i < 1000."""
+    if i < 1000:
+        return prefix + _CTX_SUFFIXES[i]
+    return prefix + "[" + str(i) + "]"
+
+
 class Each:
     """Marker wrapper to mark iteration source in unified inputs.
 

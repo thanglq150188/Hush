@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode
+from hush.core.nodes.iteration.base import BaseIterationNode, get_iter_context
 from hush.core.states.ref import Ref
 from hush.core.utils.common import Param
 from hush.core.loggings import LOGGER
@@ -143,7 +143,7 @@ class AsyncIterNode(BaseIterationNode):
         base_context: Optional[str]
     ) -> Dict[str, Any]:
         """Process single chunk through graph."""
-        chunk_context = (base_context + "." if base_context else "") + "[" + str(chunk_id) + "]"
+        chunk_context = get_iter_context((base_context + ".") if base_context else "", chunk_id)
 
         try:
             for var_name, value in chunk_data.items():

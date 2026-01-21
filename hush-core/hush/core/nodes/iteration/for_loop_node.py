@@ -6,7 +6,7 @@ from time import perf_counter
 import traceback
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode
+from hush.core.nodes.iteration.base import BaseIterationNode, get_iter_context
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -74,9 +74,9 @@ class ForLoopNode(BaseIterationNode):
             final_results: List[Dict[str, Any]] = []
             success_count = 0
 
-            ctx_prefix = context_id + "." if context_id else ""
+            ctx_prefix = (context_id + ".") if context_id else ""
             for i, loop_data in enumerate(iteration_data):
-                iter_context = ctx_prefix + "[" + str(i) + "]"
+                iter_context = get_iter_context(ctx_prefix, i)
 
                 try:
                     for var_name, value in loop_data.items():

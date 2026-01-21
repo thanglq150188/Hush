@@ -8,7 +8,7 @@ import traceback
 import os
 
 from hush.core.configs.node_config import NodeType
-from hush.core.nodes.iteration.base import BaseIterationNode
+from hush.core.nodes.iteration.base import BaseIterationNode, get_iter_context
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
@@ -100,9 +100,9 @@ class MapNode(BaseIterationNode):
                 except Exception as e:
                     return {"result": {"error": str(e), "error_type": type(e).__name__}, "success": False}
 
-            ctx_prefix = context_id + "." if context_id else ""
+            ctx_prefix = (context_id + ".") if context_id else ""
             raw_results = await asyncio.gather(*[
-                execute_iteration(ctx_prefix + "[" + str(i) + "]", data)
+                execute_iteration(get_iter_context(ctx_prefix, i), data)
                 for i, data in enumerate(iteration_data)
             ])
 
