@@ -364,7 +364,7 @@ class ForLoopNode(GraphNode):
 
             for i, loop_data in enumerate(iteration_data):
                 # Chain context ID để tránh cache conflict giữa nested loops
-                iter_context = f"loop[{i}]" if not context_id else f"{context_id}.loop[{i}]"
+                iter_context = f"[{i}]" if not context_id else f"{context_id}.[{i}]"
                 iter_start = perf_counter()
 
                 try:
