@@ -4,6 +4,9 @@ This module provides the BaseTracer abstract class that all concrete tracer
 implementations must inherit from. Tracers are responsible for collecting
 and exporting workflow execution traces to observability platforms.
 
+Traces are written to SQLite via a unified background process, then flushed
+to external services (Langfuse, etc.) asynchronously.
+
 Example:
     ```python
     from hush.core.tracers import BaseTracer, register_tracer
@@ -20,254 +23,166 @@ Example:
     ```
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, TYPE_CHECKING
-import multiprocessing
+from typing import Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from hush.core.states import MemoryState
-
-
-# Global worker process and queue
-_flush_queue: Optional[multiprocessing.Queue] = None
-_worker_process: Optional[multiprocessing.Process] = None
-
-
-def _flush_worker(queue: multiprocessing.Queue, config_path: Optional[str], dotenv_path: Optional[str] = None) -> None:
-    """Worker process that initializes ResourceHub and processes flush requests.
-
-    This worker stays alive and processes flush requests from the queue.
-    ResourceHub is initialized once when the worker starts.
-
-    Args:
-        queue: Queue to receive flush requests
-        config_path: Absolute path to resources.yaml (from main process)
-        dotenv_path: Absolute path to .env file (from main process)
-    """
-    import signal
-    import os
-
-    # Ignore SIGINT in worker - let main process handle it
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    # Load .env file if provided
-    if dotenv_path:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(dotenv_path)
-        except ImportError:
-            pass
-
-    # Set HUSH_CONFIG env var so get_hub() finds the right config
-    if config_path:
-        os.environ['HUSH_CONFIG'] = config_path
-
-    # Initialize ResourceHub once in this process
-    try:
-        from hush.core.registry import get_hub
-        get_hub()  # This loads resources.yaml from HUSH_CONFIG
-    except Exception as e:
-        print(f"[FlushWorker] Failed to initialize ResourceHub: {e}")
-
-    while True:
-        try:
-            flush_data = queue.get()
-
-            # Sentinel value to stop worker
-            if flush_data is None:
-                break
-
-            _dispatch_flush(flush_data)
-
-        except Exception as e:
-            import traceback
-            print(f"[FlushWorker] Error processing flush: {e}\n{traceback.format_exc()}")
+    from hush.core.tracers.store import TraceStore
 
 
 class BaseTracer(ABC):
     """Abstract base class for workflow tracers.
 
     Subclasses must implement:
-        - flush(): The actual tracing logic that runs in a subprocess
-        - _get_tracer_config(): Returns tracer-specific config for serialization
+        - flush(): The actual tracing logic
+        - _get_tracer_config(): Returns tracer-specific config
 
-    The tracer uses a persistent worker process with ResourceHub initialized.
-    Flush requests are sent via a queue and processed asynchronously.
+    All trace operations are non-blocking - they are sent to a unified
+    background process that handles:
+        - Writing traces to SQLite
+        - Flushing to external services
+        - Retry on failure
     """
 
     @classmethod
-    def _ensure_worker(cls) -> multiprocessing.Queue:
-        """Ensure the flush worker process is running and return the queue."""
-        global _flush_queue, _worker_process
+    def shutdown_worker(cls, timeout: float = 5.0) -> None:
+        """Shutdown the background process gracefully.
 
-        if _worker_process is None or not _worker_process.is_alive():
-            import os
-            from pathlib import Path
+        Args:
+            timeout: Maximum time to wait for shutdown
+        """
+        from hush.core.background import shutdown_background
+        shutdown_background()
 
-            # Get config path from current hub's storage
-            config_path = None
-            try:
-                from hush.core.registry import get_hub
-                hub = get_hub()
-                if hasattr(hub._storage, '_file_path'):
-                    config_path = str(hub._storage._file_path.resolve())
-            except Exception:
-                pass
-
-            # Find .env file near config or in current directory
-            dotenv_path = None
-            if config_path:
-                env_file = Path(config_path).parent / ".env"
-                if env_file.exists():
-                    dotenv_path = str(env_file.resolve())
-            if not dotenv_path:
-                cwd_env = Path.cwd() / ".env"
-                if cwd_env.exists():
-                    dotenv_path = str(cwd_env.resolve())
-
-            ctx = multiprocessing.get_context("spawn")
-            _flush_queue = ctx.Queue()
-            _worker_process = ctx.Process(
-                target=_flush_worker,
-                args=(_flush_queue, config_path, dotenv_path),
-                daemon=True,
-            )
-            _worker_process.start()
-
-        return _flush_queue
-
-    @classmethod
-    def shutdown_executor(cls) -> None:
-        """Shutdown the flush worker process."""
-        global _flush_queue, _worker_process
-
-        if _worker_process is not None and _worker_process.is_alive():
-            # Send sentinel to stop worker
-            _flush_queue.put(None)
-            _worker_process.join(timeout=5)
-
-            if _worker_process.is_alive():
-                _worker_process.terminate()
-
-        _flush_queue = None
-        _worker_process = None
+    # Keep old name for backwards compatibility
+    shutdown_executor = shutdown_worker
 
     @abstractmethod
     def _get_tracer_config(self) -> Dict[str, Any]:
         """Return tracer-specific configuration for serialization.
 
-        This config will be passed to the subprocess flush function.
+        This config will be stored in the database and passed to flush().
 
         Returns:
             Dictionary containing tracer configuration
         """
         pass
 
-    def prepare_flush_data(
-        self,
-        workflow_name: str,
-        state: 'MemoryState',
-    ) -> Dict[str, Any]:
-        """Prepare serializable data for the subprocess.
-
-        This method reads trace metadata and values from state to build
-        the flush_data dictionary. Input/output values are read directly
-        from state cells (no duplication in trace_metadata).
-
-        Args:
-            workflow_name: Name of the workflow
-            state: MemoryState object containing execution data
-
-        Returns:
-            Dictionary containing all data needed for flushing
-        """
-        flush_data = {
-            "tracer_type": self.__class__.__name__,
-            "tracer_config": self._get_tracer_config(),
-            "workflow_name": workflow_name,
-            "request_id": state.request_id,
-            "user_id": state.user_id,
-            "session_id": state.session_id,
-            "execution_order": [],
-            "nodes_trace_data": {},
-        }
-
-        for execution in state.execution_order:
-            node_name = execution["node"]
-            parent_name = execution["parent"]
-            context_id = execution["context_id"]
-
-            # Build key for trace_metadata lookup
-            key = f"{node_name}:{context_id}" if context_id else node_name
-            metadata = state._trace_metadata.get(key, {})
-
-            # Build input dict from state cells
-            input_data = {}
-            for var in metadata.get("input_vars", []):
-                input_data[var] = state.get(node_name, var, context_id)
-
-            # Build output dict from state cells
-            output_data = {}
-            for var in metadata.get("output_vars", []):
-                output_data[var] = state.get(node_name, var, context_id)
-
-            # Get start/end times from state
-            start_time = state.get(node_name, "start_time", context_id)
-            end_time = state.get(node_name, "end_time", context_id)
-
-            # Build trace_data for this node
-            trace_data = {
-                "name": metadata.get("name", node_name),
-                "start_time": start_time,
-                "end_time": end_time,
-                "input": input_data,
-                "output": output_data,
-                "model": metadata.get("model"),
-                "usage": metadata.get("usage"),
-                "cost": metadata.get("cost"),
-                "metadata": metadata.get("metadata", {}),
-            }
-
-            flush_data["nodes_trace_data"][key] = trace_data
-            flush_data["execution_order"].append({
-                "node": node_name,
-                "parent": parent_name,
-                "context_id": context_id,
-                "contain_generation": metadata.get("contain_generation", False),
-            })
-
-        return flush_data
-
     def flush_in_background(self, workflow_name: str, state: 'MemoryState') -> None:
-        """Submit flush task to worker process without blocking the main flow.
+        """Mark trace as complete and trigger background flushing.
+
+        With incremental writes, trace data is already in SQLite (written during
+        node execution via state.record_trace_metadata()). This method:
+        1. Marks the request as complete (status: writing -> pending)
+        2. Background process will pick up and flush automatically
+
+        All operations are non-blocking.
+
+        For legacy mode (no trace_store), falls back to batch insert.
 
         Args:
             workflow_name: Name of the workflow
             state: MemoryState object containing execution data
         """
         from hush.core.loggings import LOGGER
+        from hush.core.tracers.store import get_store
 
         try:
-            flush_data = self.prepare_flush_data(workflow_name, state)
-            queue = self._ensure_worker()
-            queue.put(flush_data)
+            if state.has_trace_store:
+                # New mode: traces already written incrementally
+                # Just mark complete - background process handles flushing
+                store = state._trace_store
+                store.mark_request_complete(
+                    request_id=state.request_id,
+                    tracer_type=self.__class__.__name__,
+                    tracer_config=self._get_tracer_config(),
+                )
+            else:
+                # Legacy mode: batch insert from in-memory data
+                store = get_store()
+                self._insert_legacy_traces(store, workflow_name, state)
+
+            LOGGER.debug(
+                "[title]\\[%s][/title] Trace ready for flush: [highlight]%s[/highlight]",
+                state.request_id,
+                workflow_name,
+            )
 
         except Exception as e:
             LOGGER.error(
-                "[title]\\[%s][/title] Workflow [highlight]%s[/highlight]: Failed to submit flush task: %s",
+                "[title]\\[%s][/title] Failed to prepare trace for [highlight]%s[/highlight]: %s",
                 state.request_id,
                 workflow_name,
                 str(e)
             )
 
+    def _insert_legacy_traces(
+        self,
+        store: 'TraceStore',
+        workflow_name: str,
+        state: 'MemoryState'
+    ) -> None:
+        """Insert traces from legacy in-memory storage.
+
+        This is used when state doesn't have a trace_store (backwards compatibility).
+
+        Args:
+            store: TraceStore to insert into
+            workflow_name: Name of the workflow
+            state: MemoryState with in-memory trace data
+        """
+        execution_order = state.execution_order
+        trace_metadata = state.trace_metadata
+
+        for idx, execution in enumerate(execution_order):
+            node_name = execution["node"]
+            parent_name = execution.get("parent")
+            context_id = execution.get("context_id")
+
+            # Get trace data for this node
+            trace_key = f"{node_name}:{context_id}" if context_id else node_name
+            trace_data = trace_metadata.get(trace_key, {})
+
+            # Extract fields from trace_data
+            usage = trace_data.get("usage") or {}
+
+            store.insert_node_trace(
+                request_id=state.request_id,
+                workflow_name=workflow_name,
+                node_name=node_name,
+                parent_name=parent_name,
+                context_id=context_id,
+                execution_order=idx,
+                start_time=None,  # Legacy mode doesn't have timing
+                end_time=None,
+                duration_ms=None,
+                input_data={},  # Would need to read from state
+                output_data={},
+                user_id=state.user_id,
+                session_id=state.session_id,
+                model=trace_data.get("model"),
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                cost_usd=trace_data.get("cost"),
+                contain_generation=trace_data.get("contain_generation", False),
+                metadata=trace_data.get("metadata"),
+            )
+
+        # Mark as complete
+        store.mark_request_complete(
+            request_id=state.request_id,
+            tracer_type=self.__class__.__name__,
+            tracer_config=self._get_tracer_config(),
+        )
+
     @staticmethod
     @abstractmethod
     def flush(flush_data: Dict[str, Any]) -> None:
-        """Execute the flush logic in a subprocess.
+        """Execute the flush logic.
 
-        This method runs in a separate process, so it must:
-        - Re-import all dependencies
-        - Use only the data provided in flush_data
-        - Not access any instance attributes
+        This method is called by the background process with reconstructed
+        flush_data from the SQLite database.
 
         Args:
             flush_data: Dictionary containing all data needed for flushing
@@ -306,31 +221,3 @@ def get_registered_tracers() -> Dict[str, type]:
         Dictionary mapping tracer names to their classes
     """
     return _TRACER_REGISTRY.copy()
-
-
-def _dispatch_flush(flush_data: Dict[str, Any]) -> None:
-    """Dispatch flush to the appropriate tracer based on tracer_type.
-
-    This function runs in the subprocess and routes the flush_data
-    to the correct tracer implementation.
-
-    Args:
-        flush_data: Dictionary containing tracer_type and flush data
-    """
-    from hush.core.loggings import LOGGER
-
-    tracer_type = flush_data.get("tracer_type")
-
-    if tracer_type not in _TRACER_REGISTRY:
-        # Try to import common tracer implementations to populate registry
-        try:
-            from hush.observability.langfuse import LangfuseTracer  # noqa: F401
-        except ImportError:
-            pass
-
-    tracer_cls = _TRACER_REGISTRY.get(tracer_type)
-    if tracer_cls is None:
-        LOGGER.error("Unknown tracer type: [highlight]%s[/highlight]", tracer_type)
-        return
-
-    tracer_cls.flush(flush_data)

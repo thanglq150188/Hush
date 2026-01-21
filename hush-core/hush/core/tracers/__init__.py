@@ -37,6 +37,12 @@ from hush.core.tracers.media import (
     MediaAttachment,
     serialize_media_attachments,
 )
+from hush.core.tracers.store import (
+    TraceStore,
+    get_store,
+    DEFAULT_DB_PATH,
+)
+from hush.core.tracers.local import LocalTracer
 
 __all__ = [
     # Base tracer
@@ -48,4 +54,10 @@ __all__ = [
     "MAX_INLINE_SIZE",
     "MediaAttachment",
     "serialize_media_attachments",
+    # Store
+    "TraceStore",
+    "get_store",
+    "DEFAULT_DB_PATH",
+    # Local tracer
+    "LocalTracer",
 ]

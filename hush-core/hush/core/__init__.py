@@ -75,6 +75,11 @@ from hush.core.tracers import (
     MediaAttachment,
     serialize_media_attachments,
 )
+from hush.core.background import (
+    get_background,
+    shutdown_background,
+    BackgroundProcess,
+)
 
 __version__ = "0.1.0"
 
@@ -133,4 +138,8 @@ __all__ = [
     "MEDIA_KEY",
     "MediaAttachment",
     "serialize_media_attachments",
+    # Background
+    "get_background",
+    "shutdown_background",
+    "BackgroundProcess",
 ]

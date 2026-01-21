@@ -1,10 +1,13 @@
 """Workflow state với Cell-based storage và độ phân giải O(1) dựa trên index."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 import uuid
 
 from hush.core.states.schema import StateSchema
 from hush.core.states.cell import Cell, DEFAULT_CONTEXT
+
+if TYPE_CHECKING:
+    from hush.core.tracers.store import TraceStore
 
 __all__ = ["MemoryState"]
 
@@ -22,9 +25,18 @@ class MemoryState:
     Luồng dữ liệu:
         __setitem__: Lưu value, nếu output ref thì push 1 hop
         __getitem__: Nếu cached trả về, nếu input ref thì pull 1 hop và cache
+
+    Tracing:
+        When trace_store is set, trace data is written directly to SQLite
+        instead of being stored in memory. This reduces memory usage for
+        large workflows and provides crash resilience.
     """
 
-    __slots__ = ("schema", "_cells", "_execution_order", "_trace_metadata", "_user_id", "_session_id", "_request_id")
+    __slots__ = (
+        "schema", "_cells", "_execution_order", "_trace_metadata",
+        "_user_id", "_session_id", "_request_id",
+        "_trace_store", "_execution_count"
+    )
 
     def __init__(
         self,
@@ -33,6 +45,7 @@ class MemoryState:
         user_id: str = None,
         session_id: str = None,
         request_id: str = None,
+        trace_store: Optional["TraceStore"] = None,
     ) -> None:
         """Khởi tạo MemoryState.
 
@@ -42,14 +55,26 @@ class MemoryState:
             user_id: ID người dùng (tự động tạo nếu không cung cấp)
             session_id: ID phiên (tự động tạo nếu không cung cấp)
             request_id: ID yêu cầu (tự động tạo nếu không cung cấp)
+            trace_store: Optional TraceStore for incremental trace writes
         """
         self.schema = schema
         self._cells: List[Cell] = [Cell(v) for v in schema._defaults]
-        self._execution_order: List[Dict[str, str]] = []
-        self._trace_metadata: Dict[str, Dict[str, Any]] = {}
         self._user_id = user_id or str(_uuid4())
         self._session_id = session_id or str(_uuid4())
         self._request_id = request_id or str(_uuid4())
+
+        # Tracing - either memory or SQLite
+        self._trace_store = trace_store
+        self._execution_count = 0
+
+        if trace_store is None:
+            # Legacy mode: store in memory
+            self._execution_order: List[Dict[str, str]] = []
+            self._trace_metadata: Dict[str, Dict[str, Any]] = {}
+        else:
+            # New mode: write to SQLite, don't keep in memory
+            self._execution_order = None
+            self._trace_metadata = None
 
         # Áp dụng input ban đầu
         if inputs:
@@ -156,12 +181,17 @@ class MemoryState:
     # =========================================================================
 
     def record_execution(self, node_name: str, parent: str, context_id: str) -> None:
-        """Ghi lại thực thi node cho observability."""
-        self._execution_order.append({
-            "node": node_name,
-            "parent": parent,
-            "context_id": context_id
-        })
+        """Ghi lại thực thi node cho observability.
+
+        In legacy mode (no trace_store), appends to _execution_order list.
+        With trace_store, this is a no-op as tracing happens in record_trace_metadata.
+        """
+        if self._execution_order is not None:
+            self._execution_order.append({
+                "node": node_name,
+                "parent": parent,
+                "context_id": context_id
+            })
 
     def record_trace_metadata(
         self,
@@ -170,16 +200,20 @@ class MemoryState:
         name: str,
         input_vars: List[str],
         output_vars: List[str],
+        parent_name: Optional[str] = None,
+        start_time: Any = None,
+        end_time: Any = None,
+        duration_ms: Optional[float] = None,
         contain_generation: bool = False,
         model: Optional[str] = None,
         usage: Optional[Dict[str, int]] = None,
-        cost: Optional[Dict[str, float]] = None,
+        cost: Optional[float] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store trace metadata for a node execution.
 
-        This stores only metadata - input/output values are read from cells.
-        Called by nodes at the end of execution.
+        With trace_store: writes directly to SQLite (incremental).
+        Without trace_store: stores in memory (legacy mode).
 
         Args:
             node_name: Full name of the node
@@ -187,23 +221,76 @@ class MemoryState:
             name: Display name for the trace
             input_vars: List of input variable names
             output_vars: List of output variable names
+            parent_name: Parent node name (for SQLite mode)
+            start_time: Start time (datetime object)
+            end_time: End time (datetime object)
+            duration_ms: Execution duration in milliseconds
             contain_generation: Whether this node contains LLM generation
             model: Model name (for LLM nodes)
-            usage: Token usage dict with input/output/total (for LLM nodes)
-            cost: Cost dict with input/output/total in USD (for LLM nodes)
+            usage: Token usage dict with prompt_tokens/completion_tokens/total_tokens
+            cost: Cost in USD (for LLM nodes)
             metadata: Additional metadata dict
         """
-        key = f"{node_name}:{context_id}" if context_id else node_name
-        self._trace_metadata[key] = {
-            "name": name,
-            "input_vars": input_vars,
-            "output_vars": output_vars,
-            "contain_generation": contain_generation,
-            "model": model,
-            "usage": usage,
-            "cost": cost,
-            "metadata": metadata or {},
-        }
+        if self._trace_store is not None:
+            # New mode: write directly to SQLite
+            # Build input/output data from cells
+            input_data = {}
+            for var in input_vars:
+                input_data[var] = self.get(node_name, var, context_id)
+
+            output_data = {}
+            for var in output_vars:
+                output_data[var] = self.get(node_name, var, context_id)
+
+            # Extract token counts from usage dict
+            prompt_tokens = None
+            completion_tokens = None
+            total_tokens = None
+            if usage:
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
+                total_tokens = usage.get("total_tokens")
+
+            # Format times as ISO strings
+            start_time_str = start_time.isoformat() if start_time else None
+            end_time_str = end_time.isoformat() if end_time else None
+
+            self._trace_store.insert_node_trace(
+                request_id=self._request_id,
+                workflow_name=self.schema.name,
+                node_name=node_name,
+                parent_name=parent_name,
+                context_id=context_id,
+                execution_order=self._execution_count,
+                start_time=start_time_str,
+                end_time=end_time_str,
+                duration_ms=duration_ms,
+                input_data=input_data,
+                output_data=output_data,
+                user_id=self._user_id,
+                session_id=self._session_id,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                cost_usd=cost,
+                contain_generation=contain_generation,
+                metadata=metadata,
+            )
+            self._execution_count += 1
+        else:
+            # Legacy mode: store in memory
+            key = f"{node_name}:{context_id}" if context_id else node_name
+            self._trace_metadata[key] = {
+                "name": name,
+                "input_vars": input_vars,
+                "output_vars": output_vars,
+                "contain_generation": contain_generation,
+                "model": model,
+                "usage": usage,
+                "cost": cost,
+                "metadata": metadata or {},
+            }
 
     # =========================================================================
     # Properties
@@ -216,12 +303,16 @@ class MemoryState:
 
     @property
     def execution_order(self) -> List[Dict[str, str]]:
-        """Danh sách thứ tự thực thi các node."""
+        """Danh sách thứ tự thực thi các node (legacy mode only)."""
+        if self._execution_order is None:
+            return []
         return self._execution_order.copy()
 
     @property
     def trace_metadata(self) -> Dict[str, Dict[str, Any]]:
-        """Get all trace metadata for observability."""
+        """Get all trace metadata for observability (legacy mode only)."""
+        if self._trace_metadata is None:
+            return {}
         return self._trace_metadata.copy()
 
     @property
@@ -247,6 +338,11 @@ class MemoryState:
     def request_id(self) -> str:
         """ID yêu cầu."""
         return self._request_id
+
+    @property
+    def has_trace_store(self) -> bool:
+        """Whether this state uses SQLite trace store."""
+        return self._trace_store is not None
 
     # =========================================================================
     # Collection Interface

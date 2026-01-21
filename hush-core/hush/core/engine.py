@@ -30,7 +30,7 @@ from hush.core.streams import STREAM_SERVICE
 from hush.core.loggings import LOGGER
 
 if TYPE_CHECKING:
-    from hush.core.tracers import BaseTracer
+    from hush.core.tracers import BaseTracer, TraceStore
 
 
 class Hush:
@@ -123,12 +123,19 @@ class Hush:
 
         LOGGER.info("[title]\\[%s][/title] Running workflow [highlight]%s[/highlight]", request_id, self.name)
 
+        # Create trace store for incremental writes if tracer is provided
+        trace_store: Optional["TraceStore"] = None
+        if tracer is not None:
+            from hush.core.tracers import get_store
+            trace_store = get_store()
+
         # Create fresh state for this run
         state = self._schema.create_state(
             inputs=inputs,
             user_id=user_id,
             session_id=session_id,
             request_id=request_id,
+            trace_store=trace_store,
         )
 
         # Execute the graph
