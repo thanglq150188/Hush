@@ -553,9 +553,15 @@ class BaseNode(ABC):
         """Lưu dict kết quả vào state.
 
         Sử dụng state[node, var, ctx] = value cho lưu trữ O(1) dựa trên index.
+        Extracts $tags special key for dynamic tagging.
         """
         if not result:
             return
+
+        # Extract $tags before storing (don't store as output variable)
+        tags = result.pop("$tags", None)
+        if tags:
+            state.add_tags(tags)
 
         for key, value in result.items():
             state[self.full_name, key, context_id] = value

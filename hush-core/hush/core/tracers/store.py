@@ -7,7 +7,7 @@ Traces are written incrementally during workflow execution, not batched at the e
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from hush.core.background import get_background, DEFAULT_DB_PATH
 
@@ -131,6 +131,7 @@ class TraceStore:
         request_id: str,
         tracer_type: str,
         tracer_config: Dict[str, Any],
+        tags: Optional[List[str]] = None,
     ) -> None:
         """Mark all traces for a request as ready for flushing (non-blocking).
 
@@ -141,12 +142,14 @@ class TraceStore:
             request_id: The request to mark complete
             tracer_type: Type of tracer (e.g., "LangfuseTracer")
             tracer_config: Tracer configuration dict
+            tags: Optional list of tags for filtering/grouping traces
         """
         bg = get_background(self._db_path)
         bg.mark_complete(
             request_id=request_id,
             tracer_type=tracer_type,
             tracer_config=tracer_config,
+            tags=tags,
         )
 
 

@@ -35,7 +35,7 @@ class MemoryState:
     __slots__ = (
         "schema", "_cells", "_execution_order", "_trace_metadata",
         "_user_id", "_session_id", "_request_id",
-        "_trace_store", "_execution_count"
+        "_trace_store", "_execution_count", "_tags"
     )
 
     def __init__(
@@ -62,6 +62,9 @@ class MemoryState:
         self._user_id = user_id or str(_uuid4())
         self._session_id = session_id or str(_uuid4())
         self._request_id = request_id or str(_uuid4())
+
+        # Dynamic tags collected during execution
+        self._tags: List[str] = []
 
         # Tracing - either memory or SQLite
         self._trace_store = trace_store
@@ -343,6 +346,32 @@ class MemoryState:
     def has_trace_store(self) -> bool:
         """Whether this state uses SQLite trace store."""
         return self._trace_store is not None
+
+    @property
+    def tags(self) -> List[str]:
+        """Dynamic tags collected during execution."""
+        return self._tags.copy()
+
+    def add_tag(self, tag: str) -> None:
+        """Add a dynamic tag to this execution.
+
+        Tags are used for filtering/grouping traces in observability tools.
+        Duplicate tags are ignored.
+
+        Args:
+            tag: Tag string to add (e.g., "error", "cache-hit", "fallback")
+        """
+        if tag not in self._tags:
+            self._tags.append(tag)
+
+    def add_tags(self, tags: List[str]) -> None:
+        """Add multiple dynamic tags to this execution.
+
+        Args:
+            tags: List of tag strings to add
+        """
+        for tag in tags:
+            self.add_tag(tag)
 
     # =========================================================================
     # Collection Interface

@@ -7,7 +7,7 @@ Phoenix is built on OpenTelemetry, so the trace structure is similar
 to OTELTracer but with Phoenix-specific features.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from hush.core.tracers import BaseTracer, register_tracer
 
@@ -31,7 +31,7 @@ class PhoenixTracer(BaseTracer):
         from hush.observability import PhoenixTracer
 
         # Use with ResourceHub (recommended)
-        tracer = PhoenixTracer(resource_key="phoenix:local")
+        tracer = PhoenixTracer(resource_key="phoenix:local", tags=["prod", "ml-team"])
 
         # Use with workflow engine
         workflow = MyWorkflow(tracer=tracer)
@@ -44,12 +44,14 @@ class PhoenixTracer(BaseTracer):
         - GitHub: https://github.com/Arize-ai/phoenix
     """
 
-    def __init__(self, resource_key: str = "phoenix:default"):
+    def __init__(self, resource_key: str = "phoenix:default", tags: Optional[List[str]] = None):
         """Initialize the Phoenix tracer.
 
         Args:
             resource_key: ResourceHub key for PhoenixClient (e.g., "phoenix:local")
+            tags: Optional list of static tags for filtering/grouping traces
         """
+        super().__init__(tags=tags)
         self.resource_key = resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
@@ -89,6 +91,7 @@ class PhoenixTracer(BaseTracer):
             req_id = flush_data["request_id"]
             user_id = flush_data.get("user_id")
             session_id = flush_data.get("session_id")
+            tags = flush_data.get("tags", [])
             execution_order = flush_data["execution_order"]
             nodes_trace_data = flush_data["nodes_trace_data"]
 
@@ -140,6 +143,8 @@ class PhoenixTracer(BaseTracer):
                     attributes["user.id"] = user_id
                 if session_id:
                     attributes["session.id"] = session_id
+                if tags:
+                    attributes["tags"] = ",".join(tags)
 
                 # Add LLM-specific attributes for generations (OpenInference semantic conventions)
                 if contain_generation:

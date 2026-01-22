@@ -5,7 +5,7 @@ ResourceHub to get the LangfuseClient in the subprocess.
 """
 
 import base64
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from hush.core.tracers import BaseTracer, register_tracer
 
@@ -23,7 +23,7 @@ class LangfuseTracer(BaseTracer):
         from hush.observability import LangfuseTracer
 
         # Use with ResourceHub (recommended)
-        tracer = LangfuseTracer(resource_key="langfuse:vpbank")
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank", tags=["prod", "ml-team"])
 
         # Use with workflow engine
         workflow = MyWorkflow(tracer=tracer)
@@ -32,12 +32,14 @@ class LangfuseTracer(BaseTracer):
         ```
     """
 
-    def __init__(self, resource_key: str = "langfuse:default"):
+    def __init__(self, resource_key: str = "langfuse:default", tags: Optional[List[str]] = None):
         """Initialize the Langfuse tracer.
 
         Args:
             resource_key: ResourceHub key for LangfuseClient (e.g., "langfuse:vpbank")
+            tags: Optional list of static tags for filtering/grouping traces
         """
+        super().__init__(tags=tags)
         self.resource_key = resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
@@ -151,6 +153,7 @@ class LangfuseTracer(BaseTracer):
             req_id = flush_data["request_id"]
             user_id = flush_data.get("user_id")
             session_id = flush_data.get("session_id")
+            tags = flush_data.get("tags", [])
             execution_order = flush_data["execution_order"]
             nodes_trace_data = flush_data["nodes_trace_data"]
 
@@ -197,6 +200,7 @@ class LangfuseTracer(BaseTracer):
                         name=workflow_name,
                         user_id=user_id,
                         session_id=session_id,
+                        tags=tags if tags else None,
                         start_time=trace_data.get("start_time"),
                         end_time=trace_data.get("end_time"),
                         input=trace_data.get("input"),

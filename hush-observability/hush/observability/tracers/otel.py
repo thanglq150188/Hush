@@ -4,7 +4,7 @@ This tracer inherits from hush.core.tracers.BaseTracer and uses
 ResourceHub to get the OTELClient in the subprocess.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from hush.core.tracers import BaseTracer, register_tracer
 
@@ -26,7 +26,7 @@ class OTELTracer(BaseTracer):
         from hush.observability import OTELTracer
 
         # Use with ResourceHub (recommended)
-        tracer = OTELTracer(resource_key="otel:jaeger")
+        tracer = OTELTracer(resource_key="otel:jaeger", tags=["prod", "ml-team"])
 
         # Use with workflow engine
         workflow = MyWorkflow(tracer=tracer)
@@ -39,12 +39,14 @@ class OTELTracer(BaseTracer):
         - GitHub: https://github.com/open-telemetry/opentelemetry-python
     """
 
-    def __init__(self, resource_key: str = "otel:default"):
+    def __init__(self, resource_key: str = "otel:default", tags: Optional[List[str]] = None):
         """Initialize the OpenTelemetry tracer.
 
         Args:
             resource_key: ResourceHub key for OTELClient (e.g., "otel:jaeger")
+            tags: Optional list of static tags for filtering/grouping traces
         """
+        super().__init__(tags=tags)
         self.resource_key = resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
@@ -84,6 +86,7 @@ class OTELTracer(BaseTracer):
             req_id = flush_data["request_id"]
             user_id = flush_data.get("user_id")
             session_id = flush_data.get("session_id")
+            tags = flush_data.get("tags", [])
             execution_order = flush_data["execution_order"]
             nodes_trace_data = flush_data["nodes_trace_data"]
 
@@ -135,6 +138,8 @@ class OTELTracer(BaseTracer):
                     attributes["user.id"] = user_id
                 if session_id:
                     attributes["session.id"] = session_id
+                if tags:
+                    attributes["tags"] = ",".join(tags)
 
                 # Add LLM-specific attributes for generations
                 if contain_generation:

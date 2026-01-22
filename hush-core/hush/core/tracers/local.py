@@ -8,7 +8,7 @@ This tracer is useful for:
 Traces are stored in ~/.hush/traces.db by default.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from hush.core.tracers.base import BaseTracer, register_tracer
 
@@ -30,7 +30,7 @@ class LocalTracer(BaseTracer):
         ```python
         from hush.core.tracers import LocalTracer
 
-        tracer = LocalTracer()
+        tracer = LocalTracer(tags=["dev", "testing"])
 
         # Use with workflow engine
         engine = Hush(graph)
@@ -38,15 +38,18 @@ class LocalTracer(BaseTracer):
 
         # Traces are now in ~/.hush/traces.db
         # Query with: SELECT * FROM traces WHERE request_id = '...'
+        # Filter by tags: WHERE tags LIKE '%"dev"%'
         ```
     """
 
-    def __init__(self, name: str = "local"):
+    def __init__(self, name: str = "local", tags: Optional[List[str]] = None):
         """Initialize LocalTracer.
 
         Args:
             name: Optional name for this tracer instance
+            tags: Optional list of static tags for filtering/grouping traces
         """
+        super().__init__(tags=tags)
         self.name = name
 
     def _get_tracer_config(self) -> Dict[str, Any]:

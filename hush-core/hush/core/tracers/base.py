@@ -23,7 +23,7 @@ Example:
     ```
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from hush.core.states import MemoryState
@@ -42,7 +42,30 @@ class BaseTracer(ABC):
         - Writing traces to SQLite
         - Flushing to external services
         - Retry on failure
+
+    Tags:
+        Tracers support both static and dynamic tags for filtering/grouping traces:
+        - Static tags: Set at tracer initialization (e.g., tags=["prod", "ml-team"])
+        - Dynamic tags: Added during execution via $tags in node return values
+
+        Both are merged at flush time and stored in SQLite.
     """
+
+    # Static tags for this tracer instance
+    _tags: List[str]
+
+    def __init__(self, tags: Optional[List[str]] = None):
+        """Initialize base tracer.
+
+        Args:
+            tags: Optional list of static tags for this tracer instance
+        """
+        self._tags = tags or []
+
+    @property
+    def tags(self) -> List[str]:
+        """Get static tags for this tracer."""
+        return self._tags.copy()
 
     @classmethod
     def shutdown_worker(cls, timeout: float = 5.0) -> None:
@@ -68,13 +91,29 @@ class BaseTracer(ABC):
         """
         pass
 
+    def _merge_tags(self, state: 'MemoryState') -> List[str]:
+        """Merge static tracer tags with dynamic state tags.
+
+        Args:
+            state: MemoryState containing dynamic tags
+
+        Returns:
+            Combined list of unique tags (static first, then dynamic)
+        """
+        merged = list(self._tags)  # Start with static tags
+        for tag in state.tags:
+            if tag not in merged:
+                merged.append(tag)
+        return merged
+
     def flush_in_background(self, workflow_name: str, state: 'MemoryState') -> None:
         """Mark trace as complete and trigger background flushing.
 
         With incremental writes, trace data is already in SQLite (written during
         node execution via state.record_trace_metadata()). This method:
-        1. Marks the request as complete (status: writing -> pending)
-        2. Background process will pick up and flush automatically
+        1. Merges static (tracer) and dynamic (state) tags
+        2. Marks the request as complete (status: writing -> pending)
+        3. Background process will pick up and flush automatically
 
         All operations are non-blocking.
 
@@ -88,6 +127,9 @@ class BaseTracer(ABC):
         from hush.core.tracers.store import get_store
 
         try:
+            # Merge static and dynamic tags
+            merged_tags = self._merge_tags(state)
+
             if state.has_trace_store:
                 # New mode: traces already written incrementally
                 # Just mark complete - background process handles flushing
@@ -96,11 +138,12 @@ class BaseTracer(ABC):
                     request_id=state.request_id,
                     tracer_type=self.__class__.__name__,
                     tracer_config=self._get_tracer_config(),
+                    tags=merged_tags if merged_tags else None,
                 )
             else:
                 # Legacy mode: batch insert from in-memory data
                 store = get_store()
-                self._insert_legacy_traces(store, workflow_name, state)
+                self._insert_legacy_traces(store, workflow_name, state, merged_tags)
 
             LOGGER.debug(
                 "[title]\\[%s][/title] Trace ready for flush: [highlight]%s[/highlight]",
@@ -120,7 +163,8 @@ class BaseTracer(ABC):
         self,
         store: 'TraceStore',
         workflow_name: str,
-        state: 'MemoryState'
+        state: 'MemoryState',
+        tags: Optional[List[str]] = None,
     ) -> None:
         """Insert traces from legacy in-memory storage.
 
@@ -130,6 +174,7 @@ class BaseTracer(ABC):
             store: TraceStore to insert into
             workflow_name: Name of the workflow
             state: MemoryState with in-memory trace data
+            tags: Optional merged tags (static + dynamic)
         """
         execution_order = state.execution_order
         trace_metadata = state.trace_metadata
@@ -169,11 +214,12 @@ class BaseTracer(ABC):
                 metadata=trace_data.get("metadata"),
             )
 
-        # Mark as complete
+        # Mark as complete with tags
         store.mark_request_complete(
             request_id=state.request_id,
             tracer_type=self.__class__.__name__,
             tracer_config=self._get_tracer_config(),
+            tags=tags,
         )
 
     @staticmethod

@@ -4,7 +4,7 @@ This tracer inherits from hush.core.tracers.BaseTracer and uses
 ResourceHub to get the OpikClient in the subprocess.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from hush.core.tracers import BaseTracer, register_tracer
 
@@ -27,7 +27,7 @@ class OpikTracer(BaseTracer):
         from hush.observability import OpikTracer
 
         # Use with ResourceHub (recommended)
-        tracer = OpikTracer(resource_key="opik:default")
+        tracer = OpikTracer(resource_key="opik:default", tags=["prod", "ml-team"])
 
         # Use with workflow engine
         workflow = MyWorkflow(tracer=tracer)
@@ -40,12 +40,14 @@ class OpikTracer(BaseTracer):
         - GitHub: https://github.com/comet-ml/opik
     """
 
-    def __init__(self, resource_key: str = "opik:default"):
+    def __init__(self, resource_key: str = "opik:default", tags: Optional[List[str]] = None):
         """Initialize the Opik tracer.
 
         Args:
             resource_key: ResourceHub key for OpikClient (e.g., "opik:default")
+            tags: Optional list of static tags for filtering/grouping traces
         """
+        super().__init__(tags=tags)
         self.resource_key = resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
@@ -82,6 +84,7 @@ class OpikTracer(BaseTracer):
             req_id = flush_data["request_id"]
             user_id = flush_data.get("user_id")
             session_id = flush_data.get("session_id")
+            tags = flush_data.get("tags", [])
             execution_order = flush_data["execution_order"]
             nodes_trace_data = flush_data["nodes_trace_data"]
 
@@ -122,6 +125,11 @@ class OpikTracer(BaseTracer):
 
                 if parent_id is None:
                     # Root node - create trace
+                    # Merge workflow name with custom tags
+                    trace_tags = [workflow_name] if workflow_name else []
+                    if tags:
+                        trace_tags.extend(tags)
+
                     root_trace = client.trace(
                         id=req_id,
                         name=workflow_name,
@@ -132,7 +140,7 @@ class OpikTracer(BaseTracer):
                             "user_id": user_id,
                             "session_id": session_id,
                         },
-                        tags=[workflow_name] if workflow_name else None,
+                        tags=trace_tags if trace_tags else None,
                     )
                     opik_objects[node_id] = {
                         "trace": root_trace,

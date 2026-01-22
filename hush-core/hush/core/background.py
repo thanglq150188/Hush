@@ -101,6 +101,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
             contain_generation INTEGER DEFAULT 0,
             metadata TEXT,
 
+            -- Tags (JSON array of strings)
+            tags TEXT,
+
             -- Status
             status TEXT DEFAULT 'pending',
             retry_count INTEGER DEFAULT 0,
@@ -298,6 +301,8 @@ def _mark_complete(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
     tracer_type = data["tracer_type"]
     tracer_config_json = json.dumps(data.get("tracer_config", {}))
     request_id = data["request_id"]
+    tags = data.get("tags")
+    tags_json = json.dumps(tags) if tags else None
 
     # Create synthetic iteration groups before finalizing
     _create_iteration_groups(conn, request_id)
@@ -306,16 +311,16 @@ def _mark_complete(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
     if tracer_type == "LocalTracer":
         conn.execute("""
             UPDATE traces
-            SET status = 'flushed', tracer_type = ?, tracer_config = ?, flushed_at = ?
+            SET status = 'flushed', tracer_type = ?, tracer_config = ?, tags = ?, flushed_at = ?
             WHERE request_id = ? AND status = 'writing'
-        """, (tracer_type, tracer_config_json, time(), request_id))
+        """, (tracer_type, tracer_config_json, tags_json, time(), request_id))
     else:
         # Other tracers need the background flush loop
         conn.execute("""
             UPDATE traces
-            SET status = 'pending', tracer_type = ?, tracer_config = ?
+            SET status = 'pending', tracer_type = ?, tracer_config = ?, tags = ?
             WHERE request_id = ? AND status = 'writing'
-        """, (tracer_type, tracer_config_json, request_id))
+        """, (tracer_type, tracer_config_json, tags_json, request_id))
     conn.commit()
 
 
@@ -362,6 +367,7 @@ def _rebuild_flush_data(rows: List[sqlite3.Row]) -> Dict[str, Any]:
         "request_id": first_row["request_id"],
         "user_id": first_row["user_id"],
         "session_id": first_row["session_id"],
+        "tags": json.loads(first_row["tags"]) if first_row["tags"] else [],
         "execution_order": [],
         "nodes_trace_data": {},
     }
@@ -698,6 +704,7 @@ class BackgroundProcess:
         request_id: str,
         tracer_type: str,
         tracer_config: Dict[str, Any],
+        tags: Optional[List[str]] = None,
     ) -> None:
         """Mark traces as ready for flushing (non-blocking).
 
@@ -705,11 +712,13 @@ class BackgroundProcess:
             request_id: The request to mark complete
             tracer_type: Type of tracer
             tracer_config: Tracer configuration
+            tags: Optional list of tags for filtering/grouping traces
         """
         self.submit(TaskType.TRACE_COMPLETE, {
             "request_id": request_id,
             "tracer_type": tracer_type,
             "tracer_config": tracer_config,
+            "tags": tags,
         })
 
     def shutdown(self, timeout: float = 5.0) -> None:
