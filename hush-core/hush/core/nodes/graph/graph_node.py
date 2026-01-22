@@ -431,6 +431,10 @@ class GraphNode(BaseNode):
                 name=self.name,
                 input_vars=list(self.inputs.keys()) if self.inputs else [],
                 output_vars=list(self.outputs.keys()) if self.outputs else [],
+                parent_name=parent_name,
+                start_time=start_time,
+                end_time=end_time,
+                duration_ms=duration_ms,
                 contain_generation=False,
                 metadata=self.metadata(),
             )

@@ -57,7 +57,7 @@ def _get_global_hub() -> Optional['ResourceHub']:
                 )
 
         except Exception as e:
-            LOGGER.error(f"Không thể khởi tạo global hub: {e}")
+            LOGGER.error("Không thể khởi tạo global hub: %s", e)
             return None
 
     return _GLOBAL_HUB
@@ -207,12 +207,12 @@ class ResourceHub:
 
         config_class_name = config_data.get('_class')
         if not config_class_name:
-            LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
+            LOGGER.warning("Thiếu field '_class' cho key: %s", key)
             return None
 
         config_class = get_config_class(config_class_name)
         if not config_class:
-            LOGGER.warning(f"Config class không xác định: {config_class_name}")
+            LOGGER.warning("Config class không xác định: %s", config_class_name)
             return None
 
         try:
@@ -222,7 +222,7 @@ class ResourceHub:
             self._configs[key] = config
             return config
         except Exception as e:
-            LOGGER.error(f"Không thể parse config '{key}': {e}")
+            LOGGER.error("Không thể parse config '%s': %s", key, e)
             return None
 
     def _hash_of(self, config: YamlModel) -> str:
@@ -262,7 +262,7 @@ class ResourceHub:
                             data = {k: v for k, v in config_data.items() if k != '_class'}
                             self._configs[key] = config_class.model_validate(data)
                         except Exception as e:
-                            LOGGER.error(f"Không thể parse config '{key}': {e}")
+                            LOGGER.error("Không thể parse config '%s': %s", key, e)
 
         return list(self._configs.keys())
 
@@ -300,7 +300,7 @@ class ResourceHub:
             raise RuntimeError(f"Không thể tạo resource cho '{key}'")
 
         self._instances[key] = instance
-        LOGGER.debug(f"Đã lazy load resource: {key}")
+        LOGGER.debug("Đã lazy load resource: %s", key)
 
         return self._instances[key]
 
@@ -347,7 +347,7 @@ class ResourceHub:
         config_dict['_class'] = type(config).__name__
         self._storage.save(registry_key, config_dict)
 
-        LOGGER.debug(f"Đã đăng ký: {registry_key}")
+        LOGGER.debug("Đã đăng ký: %s", registry_key)
         return registry_key
 
     def remove(self, key: str) -> bool:
@@ -370,7 +370,7 @@ class ResourceHub:
             del self._configs[key]
 
         self._storage.remove(key)
-        LOGGER.debug(f"Đã xóa: {key}")
+        LOGGER.debug("Đã xóa: %s", key)
         return True
 
     def clear(self):

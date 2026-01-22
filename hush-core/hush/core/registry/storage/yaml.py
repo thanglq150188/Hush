@@ -58,13 +58,13 @@ class YamlConfigStorage(ConfigStorage):
                 return None
 
             if '_class' not in config_data:
-                LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
+                LOGGER.warning("Thiếu field '_class' cho key: %s", key)
                 return None
 
             return config_data
 
         except Exception as e:
-            LOGGER.error(f"Không thể load config '{key}': {e}")
+            LOGGER.error("Không thể load config '%s': %s", key, e)
             return None
 
     def load_all(self) -> Dict[str, Dict[str, Any]]:
@@ -74,7 +74,7 @@ class YamlConfigStorage(ConfigStorage):
         try:
             data = self._load_file()
         except yaml.YAMLError as e:
-            LOGGER.error(f"File YAML không hợp lệ: {e}")
+            LOGGER.error("File YAML không hợp lệ: %s", e)
             return configs
 
         for key, config_data in data.items():
@@ -82,7 +82,7 @@ class YamlConfigStorage(ConfigStorage):
                 continue
 
             if '_class' not in config_data:
-                LOGGER.warning(f"Thiếu field '_class' cho key: {key}")
+                LOGGER.warning("Thiếu field '_class' cho key: %s", key)
                 continue
 
             configs[key] = config_data
@@ -95,10 +95,10 @@ class YamlConfigStorage(ConfigStorage):
             data = self._load_file()
             data[key] = config_dict
             self._save_file(data)
-            LOGGER.debug(f"Đã lưu config: {key}")
+            LOGGER.debug("Đã lưu config: %s", key)
             return True
         except Exception as e:
-            LOGGER.error(f"Không thể lưu config '{key}': {e}")
+            LOGGER.error("Không thể lưu config '%s': %s", key, e)
             return False
 
     def remove(self, key: str) -> bool:
@@ -108,11 +108,11 @@ class YamlConfigStorage(ConfigStorage):
             if key in data:
                 del data[key]
                 self._save_file(data)
-                LOGGER.debug(f"Đã xóa config: {key}")
+                LOGGER.debug("Đã xóa config: %s", key)
                 return True
             return False
         except Exception as e:
-            LOGGER.error(f"Không thể xóa config '{key}': {e}")
+            LOGGER.error("Không thể xóa config '%s': %s", key, e)
             return False
 
     def close(self):

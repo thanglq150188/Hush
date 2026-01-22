@@ -59,26 +59,17 @@ class LocalTracer(BaseTracer):
 
     @staticmethod
     def flush(flush_data: Dict[str, Any]) -> None:
-        """No-op flush - traces are already in SQLite.
+        """Flush traces to local SQLite viewer.
 
-        This method is called by the background process but does nothing
-        since LocalTracer only stores traces locally.
+        For LocalTracer, traces are already in SQLite - this method just
+        logs completion. The background worker will mark them as 'flushed'.
 
         Args:
-            flush_data: Dictionary containing trace data (ignored)
+            flush_data: Dictionary containing trace data
         """
-        # Do nothing - traces are already persisted in SQLite
-        # Just log that we "flushed" for debugging
-        from hush.core.loggings import LOGGER
-
-        request_id = flush_data.get("request_id", "unknown")
-        workflow_name = flush_data.get("workflow_name", "unknown")
-
-        LOGGER.debug(
-            "[title]\\[%s][/title] LocalTracer: traces stored for [highlight]%s[/highlight]",
-            request_id,
-            workflow_name,
-        )
+        # Traces are already in SQLite, background worker marks them flushed
+        # Just log for debugging
+        pass
 
     def __repr__(self) -> str:
         """String representation."""

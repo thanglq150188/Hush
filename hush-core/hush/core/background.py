@@ -121,6 +121,18 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
 def _write_trace(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
     """Write a single trace to database."""
     now = time()
+
+    # Calculate duration_ms from start_time/end_time if not provided
+    duration_ms = data.get("duration_ms")
+    if duration_ms is None and data.get("start_time") and data.get("end_time"):
+        try:
+            from datetime import datetime
+            start = datetime.fromisoformat(data["start_time"])
+            end = datetime.fromisoformat(data["end_time"])
+            duration_ms = (end - start).total_seconds() * 1000
+        except (ValueError, TypeError):
+            pass
+
     conn.execute("""
         INSERT INTO traces (
             request_id, workflow_name, node_name, parent_name, context_id,
@@ -138,7 +150,7 @@ def _write_trace(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
         data.get("execution_order", 0),
         data.get("start_time"),
         data.get("end_time"),
-        data.get("duration_ms"),
+        duration_ms,
         data.get("model"),
         data.get("prompt_tokens"),
         data.get("completion_tokens"),
@@ -155,14 +167,155 @@ def _write_trace(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
     conn.commit()
 
 
-def _mark_complete(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
-    """Mark traces as ready for flushing."""
-    tracer_config_json = json.dumps(data.get("tracer_config", {}))
-    conn.execute("""
-        UPDATE traces
-        SET status = 'pending', tracer_type = ?, tracer_config = ?
+def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
+    """Create synthetic iteration group traces to group children by context_id.
+
+    Context_id is chained: [0], [1], [0].[0], [0].[1], [1].[0], etc.
+    - [0] means first iteration of outer loop
+    - [0].[1] means first outer iteration, second inner iteration
+
+    We group nodes by (parent_name, context_id) and create iteration[N] nodes.
+
+    Example:
+        outer_loop.validate (ctx=[0]) -> outer_loop.iteration[0].validate
+        outer_loop.inner_loop.scale (ctx=[0].[1]) -> outer_loop.inner_loop.iteration[1].scale
+                                                     (under outer_loop.iteration[0].inner_loop)
+    """
+    cursor = conn.execute("""
+        SELECT id, node_name, parent_name, context_id, start_time, end_time,
+               duration_ms, workflow_name, user_id, session_id
+        FROM traces
         WHERE request_id = ? AND status = 'writing'
-    """, (data["tracer_type"], tracer_config_json, data["request_id"]))
+        ORDER BY execution_order
+    """, (request_id,))
+    rows = cursor.fetchall()
+
+    if not rows:
+        return
+
+    # Group nodes by (parent_name, context_id)
+    # Key: (parent_name, context_id) -> iteration group
+    iteration_groups: Dict[Tuple[str, str], Dict] = {}
+
+    for row in rows:
+        node_id, parent_name, context_id = row[0], row[2], row[3]
+
+        if not context_id or not parent_name:
+            continue
+
+        # Use full context_id as the grouping key
+        # All nodes with same (parent_name, context_id) go into same iteration group
+        key = (parent_name, context_id)
+
+        if key not in iteration_groups:
+            iteration_groups[key] = {
+                'parent_name': parent_name,
+                'context_id': context_id,
+                'children': [],
+                'start_time': row[4],
+                'end_time': row[5],
+                'workflow_name': row[7],
+                'user_id': row[8],
+                'session_id': row[9],
+            }
+
+        group = iteration_groups[key]
+        group['children'].append(node_id)
+
+        # Update time bounds
+        if row[4] and (not group['start_time'] or row[4] < group['start_time']):
+            group['start_time'] = row[4]
+        if row[5] and (not group['end_time'] or row[5] > group['end_time']):
+            group['end_time'] = row[5]
+
+    # Create iteration group traces
+    now = time()
+
+    for (parent_name, context_id), group in iteration_groups.items():
+        # Extract the last index from context_id for parent_context calculation
+        # e.g., [0] -> parent_context=None, [0].[1] -> parent_context=[0]
+        last_bracket_start = context_id.rfind('[')
+        if last_bracket_start == -1:
+            continue
+
+        # The iteration group's context is the parent's context (everything before last bracket)
+        parent_context = context_id[:last_bracket_start].rstrip('.') if last_bracket_start > 0 else None
+
+        # Use full context_id for iteration name: iteration[0], iteration[0][1], iteration[0][1][2]
+        # Remove dots from context_id: [0].[1] -> [0][1]
+        iteration_suffix = context_id.replace('.', '')
+        iteration_name = f"{parent_name}.iteration{iteration_suffix}"
+
+        # Calculate duration
+        duration_ms = None
+        if group['start_time'] and group['end_time']:
+            try:
+                from datetime import datetime
+                start = datetime.fromisoformat(group['start_time'])
+                end = datetime.fromisoformat(group['end_time'])
+                duration_ms = (end - start).total_seconds() * 1000
+            except (ValueError, TypeError):
+                pass
+
+        # Insert iteration group trace
+        conn.execute("""
+            INSERT INTO traces (
+                request_id, workflow_name, node_name, parent_name, context_id,
+                execution_order, start_time, end_time, duration_ms,
+                user_id, session_id, contain_generation, metadata,
+                status, created_at
+            ) VALUES (?, ?, ?, ?, ?, -1, ?, ?, ?, ?, ?, 0, ?, 'writing', ?)
+        """, (
+            request_id,
+            group['workflow_name'],
+            iteration_name,
+            parent_name,
+            parent_context,
+            group['start_time'],
+            group['end_time'],
+            duration_ms,
+            group['user_id'],
+            group['session_id'],
+            json.dumps({'_synthetic': True, '_iteration_group': True}),
+            now,
+        ))
+
+        # Update children to point to this iteration group
+        child_ids = group['children']
+        if child_ids:
+            placeholders = ','.join('?' * len(child_ids))
+            conn.execute(f"""
+                UPDATE traces
+                SET parent_name = ?
+                WHERE id IN ({placeholders})
+            """, [iteration_name] + child_ids)
+
+    conn.commit()
+
+
+def _mark_complete(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
+    """Mark traces as ready for flushing or flushed for local tracers."""
+    tracer_type = data["tracer_type"]
+    tracer_config_json = json.dumps(data.get("tracer_config", {}))
+    request_id = data["request_id"]
+
+    # Create synthetic iteration groups before finalizing
+    _create_iteration_groups(conn, request_id)
+
+    # LocalTracer doesn't need external flushing - mark as flushed directly
+    if tracer_type == "LocalTracer":
+        conn.execute("""
+            UPDATE traces
+            SET status = 'flushed', tracer_type = ?, tracer_config = ?, flushed_at = ?
+            WHERE request_id = ? AND status = 'writing'
+        """, (tracer_type, tracer_config_json, time(), request_id))
+    else:
+        # Other tracers need the background flush loop
+        conn.execute("""
+            UPDATE traces
+            SET status = 'pending', tracer_type = ?, tracer_config = ?
+            WHERE request_id = ? AND status = 'writing'
+        """, (tracer_type, tracer_config_json, request_id))
     conn.commit()
 
 

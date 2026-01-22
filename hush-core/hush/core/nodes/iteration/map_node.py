@@ -144,6 +144,21 @@ class MapNode(BaseIterationNode):
             self._log(request_id, context_id, _inputs, _outputs, duration_ms)
             state[self.full_name, "start_time", context_id] = start_time
             state[self.full_name, "end_time", context_id] = end_time
+
+            # Record trace metadata for observability
+            state.record_trace_metadata(
+                node_name=self.full_name,
+                context_id=context_id,
+                name=self.name,
+                input_vars=list(self.inputs.keys()) if self.inputs else [],
+                output_vars=list(self.outputs.keys()) if self.outputs else [],
+                parent_name=parent_name,
+                start_time=start_time,
+                end_time=end_time,
+                duration_ms=duration_ms,
+                contain_generation=False,
+                metadata=self.metadata(),
+            )
             return _outputs
 
     def specific_metadata(self) -> Dict[str, Any]:

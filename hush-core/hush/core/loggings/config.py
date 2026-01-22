@@ -75,7 +75,7 @@ class LogConfig(BaseModel):
     """
 
     name: str = "hush"
-    level: str = "INFO"
+    level: str = "WARNING"
     handlers: List[Union[HandlerConfig, Dict[str, Any]]] = Field(
         default_factory=lambda: [{"type": "console"}]
     )
