@@ -758,6 +758,684 @@ class TestCallableSyntax:
 
 
 # ============================================================================
+# Complex Loop Workflow Tests (ForLoop, MapNode, WhileLoop)
+# ============================================================================
+
+class TestComplexLoopWorkflows:
+    """Test complex workflows with ForLoop, MapNode, WhileLoop - with and without tags."""
+
+    @pytest.mark.asyncio
+    async def test_map_node_workflow(self, tracer):
+        """Test MapNode workflow - process each item in a list."""
+        from hush.core.nodes.iteration.map_node import MapNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def process_item(item: int, multiplier: int):
+            """Process a single item."""
+            return {"result": item * multiplier}
+
+        @code_node
+        def aggregate(results: list):
+            """Aggregate all results."""
+            total = sum(results) if results else 0
+            return {"total": total, "count": len(results)}
+
+        with GraphNode(name="map-node-workflow") as graph:
+            with MapNode(
+                name="process_items",
+                inputs={
+                    "item": Each(PARENT["items"]),
+                    "multiplier": PARENT["multiplier"],
+                }
+            ) as map_node:
+                proc = process_item(
+                    name="processor",
+                    inputs={"item": PARENT["item"], "multiplier": PARENT["multiplier"]},
+                    outputs=PARENT,
+                )
+                START >> proc >> END
+
+            agg = aggregate(
+                name="aggregator",
+                inputs={"results": map_node["result"]},
+                outputs=PARENT,
+            )
+
+            START >> map_node >> agg >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"items": [1, 2, 3, 4, 5], "multiplier": 2},
+            request_id="map-node-001",
+            user_id="test-user",
+            session_id="map-session",
+            tracer=tracer,
+        )
+
+        # items [1,2,3,4,5] * 2 = [2,4,6,8,10] -> total = 30
+        assert result["total"] == 30
+        assert result["count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_map_node_with_static_tags(self):
+        """Test MapNode workflow with static tracer tags."""
+        from hush.core.nodes.iteration.map_node import MapNode
+        from hush.core.nodes.iteration.base import Each
+
+        # Create tracer with static tags
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank", tags=["production", "batch-processing"])
+
+        @code_node
+        def square(n: int):
+            return {"squared": n ** 2}
+
+        with GraphNode(name="map-with-static-tags") as graph:
+            with MapNode(
+                name="square_items",
+                inputs={"n": Each(PARENT["numbers"])}
+            ) as map_node:
+                sq = square(name="square", inputs={"n": PARENT["n"]}, outputs=PARENT)
+                START >> sq >> END
+
+            START >> map_node >> END
+            map_node["squared"] >> PARENT["results"]
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"numbers": [2, 3, 4]},
+            request_id="map-static-tags-001",
+            user_id="alice",
+            session_id="static-tags-session",
+            tracer=tracer,
+        )
+
+        assert result["results"] == [4, 9, 16]
+
+    @pytest.mark.asyncio
+    async def test_map_node_with_dynamic_tags(self):
+        """Test MapNode workflow with dynamic tags from node output."""
+        from hush.core.nodes.iteration.map_node import MapNode
+        from hush.core.nodes.iteration.base import Each
+
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank", tags=["experiment"])
+
+        @code_node
+        def analyze_item(value: int):
+            """Analyze item and add dynamic tags based on value."""
+            result = value * 10
+            tags = ["processed"]
+            if result > 50:
+                tags.append("high-value")
+            return {"score": result, "$tags": tags}
+
+        @code_node
+        def summarize(scores: list):
+            """Summarize scores with dynamic tag."""
+            total = sum(scores)
+            tags = ["summarized"]
+            if total > 100:
+                tags.append("large-total")
+            return {"total": total, "$tags": tags}
+
+        with GraphNode(name="map-with-dynamic-tags") as graph:
+            with MapNode(
+                name="analyze_items",
+                inputs={"value": Each(PARENT["values"])}
+            ) as map_node:
+                analyze = analyze_item(
+                    name="analyzer",
+                    inputs={"value": PARENT["value"]},
+                    outputs=PARENT,
+                )
+                START >> analyze >> END
+
+            summary = summarize(
+                name="summary",
+                inputs={"scores": map_node["score"]},
+                outputs=PARENT,
+            )
+
+            START >> map_node >> summary >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"values": [5, 8, 12]},  # scores: 50, 80, 120 -> total: 250
+            request_id="map-dynamic-tags-001",
+            user_id="bob",
+            session_id="dynamic-tags-session",
+            tracer=tracer,
+        )
+
+        assert result["total"] == 250
+
+    @pytest.mark.asyncio
+    async def test_for_loop_workflow(self, tracer):
+        """Test ForLoopNode workflow - iterate with Each."""
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def process_x(x: int):
+            return {"doubled": x * 2}
+
+        with GraphNode(name="for-loop-workflow") as graph:
+            with ForLoopNode(
+                name="iterate_values",
+                inputs={"x": Each([10, 20, 30])}
+            ) as for_loop:
+                proc = process_x(
+                    name="doubler",
+                    inputs={"x": PARENT["x"]},
+                    outputs=PARENT,
+                )
+                START >> proc >> END
+
+            for_loop["doubled"] >> PARENT["results"]
+            START >> for_loop >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={},
+            request_id="for-loop-001",
+            user_id="test-user",
+            session_id="for-loop-session",
+            tracer=tracer,
+        )
+
+        assert result["results"] == [20, 40, 60]
+
+    @pytest.mark.asyncio
+    async def test_nested_for_loops(self, tracer):
+        """Test nested ForLoopNode workflow - outer and inner loops."""
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        @code_node
+        def validate(x: int):
+            return {"validated_x": x, "$tags": ["validated"]}
+
+        @code_node
+        def multiply(x: int, y: int):
+            product = x * y
+            tags = ["multiplied"]
+            if product > 50:
+                tags.append("large-product")
+            return {"product": product, "$tags": tags}
+
+        @code_node
+        def summarize(products: list):
+            return {"total": sum(products) if products else 0}
+
+        with GraphNode(name="nested-for-loops") as graph:
+            with ForLoopNode(
+                name="outer_loop",
+                inputs={"x": Each([2, 3])}
+            ) as outer:
+                validate_node = validate(
+                    name="validate",
+                    inputs={"x": PARENT["x"]},
+                )
+
+                with ForLoopNode(
+                    name="inner_loop",
+                    inputs={
+                        "y": Each([10, 20]),
+                        "x": validate_node["validated_x"],
+                    }
+                ) as inner:
+                    mult_node = multiply(
+                        name="multiply",
+                        inputs={"x": PARENT["x"], "y": PARENT["y"]},
+                        outputs=PARENT,
+                    )
+                    START >> mult_node >> END
+
+                summarize_node = summarize(
+                    name="summarize",
+                    inputs={"products": inner["product"]},
+                    outputs=PARENT,
+                )
+
+                START >> validate_node >> inner >> summarize_node >> END
+
+            outer["total"] >> PARENT["results"]
+            START >> outer >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={},
+            request_id="nested-for-loops-001",
+            user_id="charlie",
+            session_id="nested-loops-session",
+            tracer=tracer,
+        )
+
+        # x=2: products=[20,40] total=60
+        # x=3: products=[30,60] total=90
+        assert result["results"] == [60, 90]
+
+    @pytest.mark.asyncio
+    async def test_nested_for_loops_with_tags(self):
+        """Test nested ForLoopNode with both static and dynamic tags."""
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.base import Each
+
+        # Create tracer with static tags
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["experiment", "batch-job", "ml-team"]
+        )
+
+        @code_node
+        def validate(x: int):
+            return {"validated_x": x, "$tags": ["validated"]}
+
+        @code_node
+        def multiply(x: int, y: int):
+            product = x * y
+            tags = ["multiplied"]
+            if product > 50:
+                tags.append("large-product")
+            return {"product": product, "$tags": tags}
+
+        @code_node
+        def summarize(products: list):
+            total = sum(products) if products else 0
+            tags = ["summarized"]
+            if total > 100:
+                tags.append("high-total")
+            return {"total": total, "$tags": tags}
+
+        with GraphNode(name="nested-loops-with-tags") as graph:
+            with ForLoopNode(
+                name="outer_loop",
+                inputs={"x": Each([3, 4, 5])}
+            ) as outer:
+                validate_node = validate(
+                    name="validate",
+                    inputs={"x": PARENT["x"]},
+                )
+
+                with ForLoopNode(
+                    name="inner_loop",
+                    inputs={
+                        "y": Each([10, 20, 30]),
+                        "x": validate_node["validated_x"],
+                    }
+                ) as inner:
+                    mult_node = multiply(
+                        name="multiply",
+                        inputs={"x": PARENT["x"], "y": PARENT["y"]},
+                        outputs=PARENT,
+                    )
+                    START >> mult_node >> END
+
+                summarize_node = summarize(
+                    name="summarize",
+                    inputs={"products": inner["product"]},
+                    outputs=PARENT,
+                )
+
+                START >> validate_node >> inner >> summarize_node >> END
+
+            outer["total"] >> PARENT["results"]
+            START >> outer >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={},
+            request_id="nested-loops-tags-001",
+            user_id="alice",
+            session_id="nested-tags-session",
+            tracer=tracer,
+        )
+
+        # x=3: [30,60,90] -> 180
+        # x=4: [40,80,120] -> 240
+        # x=5: [50,100,150] -> 300
+        assert result["results"] == [180, 240, 300]
+
+    @pytest.mark.asyncio
+    async def test_while_loop_workflow(self, tracer):
+        """Test WhileLoopNode workflow - iterate until condition met."""
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+
+        @code_node
+        def halve(value: int):
+            new_val = value // 2
+            tags = []
+            if new_val < 10:
+                tags.append("small-value")
+            return {"new_value": new_val, "$tags": tags} if tags else {"new_value": new_val}
+
+        with GraphNode(name="while-loop-workflow") as graph:
+            with WhileLoopNode(
+                name="halve_loop",
+                inputs={"value": PARENT["start_value"]},
+                stop_condition="value < 5",
+                max_iterations=10,
+            ) as while_loop:
+                halve_node = halve(
+                    name="halve",
+                    inputs={"value": PARENT["value"]},
+                )
+                halve_node["new_value"] >> PARENT["value"]
+                START >> halve_node >> END
+
+            while_loop["value"] >> PARENT["final_value"]
+            START >> while_loop >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"start_value": 100},
+            request_id="while-loop-001",
+            user_id="test-user",
+            session_id="while-session",
+            tracer=tracer,
+        )
+
+        # 100 -> 50 -> 25 -> 12 -> 6 -> 3 (stops at < 5)
+        assert result["final_value"] == 3
+
+    @pytest.mark.asyncio
+    async def test_while_loop_with_tags(self):
+        """Test WhileLoopNode with static and dynamic tags."""
+        from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
+
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["iteration-test", "monitoring"]
+        )
+
+        @code_node
+        def halve_with_tags(value: int):
+            new_val = value // 2
+            tags = ["halved"]
+            if new_val < 10:
+                tags.append("small-value")
+            if new_val < 5:
+                tags.append("very-small")
+            return {"new_value": new_val, "$tags": tags}
+
+        with GraphNode(name="while-loop-with-tags") as graph:
+            with WhileLoopNode(
+                name="halve_loop",
+                inputs={"value": PARENT["start_value"]},
+                stop_condition="value < 3",
+                max_iterations=15,
+            ) as while_loop:
+                halve_node = halve_with_tags(
+                    name="halve",
+                    inputs={"value": PARENT["value"]},
+                )
+                halve_node["new_value"] >> PARENT["value"]
+                START >> halve_node >> END
+
+            while_loop["value"] >> PARENT["final_value"]
+            START >> while_loop >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"start_value": 200},
+            request_id="while-loop-tags-001",
+            user_id="bob",
+            session_id="while-tags-session",
+            tracer=tracer,
+        )
+
+        # 200 -> 100 -> 50 -> 25 -> 12 -> 6 -> 3 -> 1 (stops at < 3)
+        assert result["final_value"] == 1
+
+    @pytest.mark.asyncio
+    async def test_complex_pipeline_with_all_loop_types(self):
+        """Test complex pipeline combining MapNode, ForLoopNode, and various node types."""
+        from hush.core.nodes.iteration.for_loop_node import ForLoopNode
+        from hush.core.nodes.iteration.map_node import MapNode
+        from hush.core.nodes.iteration.base import Each
+
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["complex-pipeline", "production", "ml-team"]
+        )
+
+        @code_node
+        def preprocess(text: str):
+            """Preprocess input text."""
+            cleaned = text.strip().lower()
+            tags = ["preprocessed"]
+            if len(cleaned) > 20:
+                tags.append("long-text")
+            return {"cleaned": cleaned, "$tags": tags}
+
+        @code_node
+        def tokenize(text: str):
+            """Split text into tokens."""
+            tokens = text.split()
+            tags = ["tokenized"]
+            if len(tokens) > 5:
+                tags.append("many-tokens")
+            return {"tokens": tokens, "count": len(tokens), "$tags": tags}
+
+        @code_node
+        def analyze_token(token: str, weight: int):
+            """Analyze a single token."""
+            score = len(token) * weight
+            return {"score": score}
+
+        @code_node
+        def aggregate_scores(scores: list):
+            """Aggregate all token scores."""
+            total = sum(scores) if scores else 0
+            avg = total / len(scores) if scores else 0
+            tags = ["aggregated"]
+            if avg > 15:
+                tags.append("high-avg-score")
+            return {"total": total, "average": avg, "$tags": tags}
+
+        @code_node
+        def classify(average: float):
+            """Classify based on average score."""
+            if average > 20:
+                category, confidence = "high", 0.9
+            elif average > 10:
+                category, confidence = "medium", 0.7
+            else:
+                category, confidence = "low", 0.5
+            return {
+                "category": category,
+                "confidence": confidence,
+                "$tags": [f"category:{category}"]
+            }
+
+        with GraphNode(name="complex-text-analysis-pipeline") as graph:
+            preprocess_node = preprocess(
+                name="preprocess",
+                inputs={"text": PARENT["input_text"]},
+            )
+
+            tokenize_node = tokenize(
+                name="tokenize",
+                inputs={"text": preprocess_node["cleaned"]},
+            )
+
+            with MapNode(
+                name="analyze_tokens",
+                inputs={
+                    "token": Each(tokenize_node["tokens"]),
+                    "weight": PARENT["weight"],
+                }
+            ) as map_node:
+                analyze = analyze_token(
+                    name="analyze",
+                    inputs={"token": PARENT["token"], "weight": PARENT["weight"]},
+                    outputs=PARENT,
+                )
+                START >> analyze >> END
+
+            aggregate_node = aggregate_scores(
+                name="aggregate",
+                inputs={"scores": map_node["score"]},
+            )
+
+            classify_node = classify(
+                name="classify",
+                inputs={"average": aggregate_node["average"]},
+                outputs=PARENT,
+            )
+
+            START >> preprocess_node >> tokenize_node >> map_node >> aggregate_node >> classify_node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={
+                "input_text": "Machine learning transforms modern industries significantly",
+                "weight": 3
+            },
+            request_id="complex-pipeline-001",
+            user_id="data-scientist",
+            session_id="analysis-session",
+            tracer=tracer,
+        )
+
+        assert "category" in result
+        assert "confidence" in result
+        assert result["category"] in ["high", "medium", "low"]
+
+
+class TestLangfuseTracerWithTags:
+    """Test LangfuseTracer specifically with static and dynamic tags."""
+
+    @pytest.mark.asyncio
+    async def test_tracer_with_static_tags_only(self):
+        """Test LangfuseTracer with only static tags."""
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["prod", "ml-team", "v2.0"]
+        )
+
+        assert tracer.tags == ["prod", "ml-team", "v2.0"]
+
+        with GraphNode(name="static-tags-only") as graph:
+            node = CodeNode(
+                name="processor",
+                code_fn=lambda x: {"result": x * 2},
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"x": 21},
+            request_id="static-only-001",
+            user_id="user-static",
+            session_id="static-session",
+            tracer=tracer,
+        )
+
+        assert result["result"] == 42
+
+    @pytest.mark.asyncio
+    async def test_tracer_with_dynamic_tags_only(self):
+        """Test LangfuseTracer with only dynamic tags from node output."""
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank")  # No static tags
+
+        @code_node
+        def process_with_tags(x: int):
+            result = x * 3
+            tags = ["computed", "runtime"]
+            if result > 50:
+                tags.append("large-result")
+            return {"result": result, "$tags": tags}
+
+        with GraphNode(name="dynamic-tags-only") as graph:
+            node = process_with_tags(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"x": 20},  # result = 60, triggers "large-result" tag
+            request_id="dynamic-only-001",
+            user_id="user-dynamic",
+            session_id="dynamic-session",
+            tracer=tracer,
+        )
+
+        assert result["result"] == 60
+
+    @pytest.mark.asyncio
+    async def test_tracer_with_merged_tags(self):
+        """Test LangfuseTracer with both static and dynamic tags merged."""
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["static-tag", "env:production"]
+        )
+
+        @code_node
+        def process_with_dynamic(x: int):
+            return {"result": x + 100, "$tags": ["dynamic-tag", "processed"]}
+
+        with GraphNode(name="merged-tags-workflow") as graph:
+            node = process_with_dynamic(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"x": 50},
+            request_id="merged-tags-001",
+            user_id="user-merged",
+            session_id="merged-session",
+            tracer=tracer,
+        )
+
+        assert result["result"] == 150
+
+    @pytest.mark.asyncio
+    async def test_tracer_tags_in_config(self):
+        """Test that tags are correctly stored in tracer config."""
+        tracer = LangfuseTracer(
+            resource_key="langfuse:vpbank",
+            tags=["test-tag", "flush-check"]
+        )
+
+        # Check tags are stored in tracer
+        assert tracer.tags == ["test-tag", "flush-check"]
+
+        # Check tracer config includes resource_key
+        config = tracer._get_tracer_config()
+        assert config["resource_key"] == "langfuse:vpbank"
+
+        with GraphNode(name="tags-config-test") as graph:
+            node = CodeNode(
+                name="processor",
+                code_fn=lambda x: {"y": x},
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT
+            )
+            START >> node >> END
+
+        engine = Hush(graph)
+        result = await engine.run(
+            inputs={"x": 1},
+            request_id="tags-config-001",
+            user_id="test-user",
+            session_id="test-session",
+            tracer=tracer,
+        )
+
+        assert result["y"] == 1
+
+
+# ============================================================================
 # Run tests directly
 # ============================================================================
 
@@ -860,6 +1538,60 @@ if __name__ == "__main__":
 
     print("\n21. Testing LLMChainNode flush data...")
     asyncio.run(TestLLMChainNodeWorkflow().test_llm_chain_flush_data(tracer))
+    print("   PASSED")
+
+    # Complex Loop Workflow tests
+    print("\n22. Testing MapNode workflow...")
+    asyncio.run(TestComplexLoopWorkflows().test_map_node_workflow(tracer))
+    print("   PASSED")
+
+    print("\n23. Testing MapNode with static tags...")
+    asyncio.run(TestComplexLoopWorkflows().test_map_node_with_static_tags())
+    print("   PASSED")
+
+    print("\n24. Testing MapNode with dynamic tags...")
+    asyncio.run(TestComplexLoopWorkflows().test_map_node_with_dynamic_tags())
+    print("   PASSED")
+
+    print("\n25. Testing ForLoopNode workflow...")
+    asyncio.run(TestComplexLoopWorkflows().test_for_loop_workflow(tracer))
+    print("   PASSED")
+
+    print("\n26. Testing nested ForLoopNodes...")
+    asyncio.run(TestComplexLoopWorkflows().test_nested_for_loops(tracer))
+    print("   PASSED")
+
+    print("\n27. Testing nested ForLoopNodes with tags...")
+    asyncio.run(TestComplexLoopWorkflows().test_nested_for_loops_with_tags())
+    print("   PASSED")
+
+    print("\n28. Testing WhileLoopNode workflow...")
+    asyncio.run(TestComplexLoopWorkflows().test_while_loop_workflow(tracer))
+    print("   PASSED")
+
+    print("\n29. Testing WhileLoopNode with tags...")
+    asyncio.run(TestComplexLoopWorkflows().test_while_loop_with_tags())
+    print("   PASSED")
+
+    print("\n30. Testing complex pipeline with all loop types...")
+    asyncio.run(TestComplexLoopWorkflows().test_complex_pipeline_with_all_loop_types())
+    print("   PASSED")
+
+    # Tracer Tag tests
+    print("\n31. Testing tracer with static tags only...")
+    asyncio.run(TestLangfuseTracerWithTags().test_tracer_with_static_tags_only())
+    print("   PASSED")
+
+    print("\n32. Testing tracer with dynamic tags only...")
+    asyncio.run(TestLangfuseTracerWithTags().test_tracer_with_dynamic_tags_only())
+    print("   PASSED")
+
+    print("\n33. Testing tracer with merged tags...")
+    asyncio.run(TestLangfuseTracerWithTags().test_tracer_with_merged_tags())
+    print("   PASSED")
+
+    print("\n34. Testing tracer tags in config...")
+    asyncio.run(TestLangfuseTracerWithTags().test_tracer_tags_in_config())
     print("   PASSED")
 
     print("\n" + "=" * 60)

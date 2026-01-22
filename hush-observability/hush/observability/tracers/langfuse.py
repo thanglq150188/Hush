@@ -188,19 +188,35 @@ class LangfuseTracer(BaseTracer):
                     node_id = f"{node_id}:{context_id}"
 
                 # Check for context-aware parent
+                # For nested contexts like [0].[1], we need to find the right parent:
+                # - First try exact context match: parent:[0].[1]
+                # - Then try parent context (strip last .[N]): parent:[0]
+                # - Finally fall back to parent without context
                 if parent_id and context_id:
+                    # Try exact context match first
                     context_parent_id = f"{parent_id}:{context_id}"
                     if context_parent_id in langfuse_objects:
                         parent_id = context_parent_id
+                    else:
+                        # Try parent context (strip last .[N] or [N])
+                        # e.g., [0].[1] -> [0], [0] -> None
+                        last_dot = context_id.rfind(".")
+                        if last_dot > 0:
+                            parent_context = context_id[:last_dot]
+                            parent_with_parent_ctx = f"{parent_id}:{parent_context}"
+                            if parent_with_parent_ctx in langfuse_objects:
+                                parent_id = parent_with_parent_ctx
 
                 if parent_id is None:
                     # Root node - create trace
+                    # Filter out None values from tags
+                    clean_tags = [t for t in tags if t is not None] if tags else None
                     root_trace = client.trace(
                         id=req_id,
                         name=workflow_name,
                         user_id=user_id,
                         session_id=session_id,
-                        tags=tags if tags else None,
+                        tags=clean_tags if clean_tags else None,
                         start_time=trace_data.get("start_time"),
                         end_time=trace_data.get("end_time"),
                         input=trace_data.get("input"),
@@ -218,6 +234,11 @@ class LangfuseTracer(BaseTracer):
                             node_id,
                         )
                         continue
+
+                        # Use short name (last part after .) for display
+                    full_name = trace_data.get("name", "")
+                    short_name = full_name.rsplit(".", 1)[-1] if "." in full_name else full_name
+                    trace_data["name"] = short_name
 
                     if contain_generation:
                         # Transform usage to Langfuse format

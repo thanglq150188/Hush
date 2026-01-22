@@ -52,6 +52,26 @@ class TestLocalTracerBasic:
             "tracer_config": {"name": "test"},
         })
 
+    def test_local_tracer_with_static_tags(self):
+        """Test LocalTracer can be created with static tags."""
+        tracer = LocalTracer(name="tagged-tracer", tags=["prod", "ml-team"])
+        assert tracer.name == "tagged-tracer"
+        assert tracer.tags == ["prod", "ml-team"]
+
+    def test_local_tracer_tags_are_copied(self):
+        """Test that tags property returns a copy, not the original list."""
+        original_tags = ["tag1", "tag2"]
+        tracer = LocalTracer(tags=original_tags)
+        returned_tags = tracer.tags
+        returned_tags.append("tag3")
+        # Original should not be modified
+        assert tracer.tags == ["tag1", "tag2"]
+
+    def test_local_tracer_empty_tags(self):
+        """Test LocalTracer with no tags defaults to empty list."""
+        tracer = LocalTracer()
+        assert tracer.tags == []
+
 
 class TestBackgroundProcess:
     """Test BackgroundProcess functionality."""
@@ -124,7 +144,7 @@ class TestBackgroundProcess:
             bg.shutdown()
 
     def test_mark_complete_changes_status(self):
-        """Test mark_complete changes status from writing to pending."""
+        """Test mark_complete changes status from writing to flushed for LocalTracer."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             bg = BackgroundProcess(db_path)
@@ -168,7 +188,8 @@ class TestBackgroundProcess:
 
             assert len(rows) == 2
             for row in rows:
-                assert row["status"] == "pending"
+                # LocalTracer marks as 'flushed' directly since it doesn't need external flushing
+                assert row["status"] == "flushed"
                 assert row["tracer_type"] == "LocalTracer"
 
             # Cleanup
@@ -377,6 +398,292 @@ class TestWorkflowTracesWrittenToDb:
             assert row["user_id"] == user_id, f"Expected user_id={user_id}, got {row['user_id']}"
             assert row["session_id"] == session_id, f"Expected session_id={session_id}, got {row['session_id']}"
             assert row["workflow_name"] == "metadata-db-test"
+
+        # Cleanup
+        shutdown_background()
+
+
+class TestTracerTags:
+    """Test static and dynamic tagging functionality."""
+
+    def test_mark_complete_with_static_tags(self):
+        """Test mark_complete stores static tags in database."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "tags_test.db"
+            bg = BackgroundProcess(db_path)
+
+            # Write a trace
+            bg.write_trace(
+                request_id="tags-test-001",
+                workflow_name="test-wf",
+                node_name="test-node",
+                execution_order=0,
+            )
+
+            # Give time to write
+            sleep(0.5)
+
+            # Mark complete with static tags
+            bg.mark_complete(
+                request_id="tags-test-001",
+                tracer_type="LocalTracer",
+                tracer_config={"name": "test"},
+                tags=["prod", "ml-team", "experiment-v1"],
+            )
+
+            # Give time to process
+            sleep(0.5)
+
+            # Check tags were stored
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT tags FROM traces WHERE request_id = ?",
+                ("tags-test-001",)
+            )
+            row = cursor.fetchone()
+            conn.close()
+
+            # Tags should be stored as JSON array
+            tags = json.loads(row["tags"])
+            assert tags == ["prod", "ml-team", "experiment-v1"]
+
+            # Cleanup
+            bg.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_workflow_with_static_tags(self):
+        """Test workflow execution with static tracer tags."""
+        import json
+        from hush.core.background import DEFAULT_DB_PATH
+
+        with GraphNode(name="static-tags-test") as graph:
+            node = CodeNode(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs={"result": PARENT},
+                code_fn=lambda x: {"result": x * 2}
+            )
+            START >> node >> END
+
+        # Create tracer with static tags
+        tracer = LocalTracer(name="tagged", tags=["production", "critical"])
+        engine = Hush(graph)
+
+        request_id = "static-tags-wf-001"
+
+        await engine.run(
+            inputs={"x": 5},
+            request_id=request_id,
+            tracer=tracer,
+        )
+
+        # Give background process time to write
+        sleep(1.0)
+
+        # Verify tags in database
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT tags FROM traces WHERE request_id = ?",
+            (request_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        assert len(rows) >= 1, "Expected traces in database"
+
+        for row in rows:
+            if row["tags"]:
+                tags = json.loads(row["tags"])
+                assert "production" in tags
+                assert "critical" in tags
+
+        # Cleanup
+        shutdown_background()
+
+    @pytest.mark.asyncio
+    async def test_workflow_with_dynamic_tags(self):
+        """Test workflow execution with dynamic tags via $tags in node output."""
+        import json
+        from hush.core.background import DEFAULT_DB_PATH
+
+        # Node that returns dynamic tags
+        def process_with_tags(x):
+            result = x * 2
+            # Add dynamic tags based on result
+            tags = ["computed"]
+            if result > 10:
+                tags.append("high-value")
+            return {"result": result, "$tags": tags}
+
+        with GraphNode(name="dynamic-tags-test") as graph:
+            node = CodeNode(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs={"result": PARENT},
+                code_fn=process_with_tags
+            )
+            START >> node >> END
+
+        # Create tracer without static tags
+        tracer = LocalTracer(name="dynamic-test")
+        engine = Hush(graph)
+
+        request_id = "dynamic-tags-wf-001"
+
+        await engine.run(
+            inputs={"x": 10},  # result will be 20, so "high-value" tag added
+            request_id=request_id,
+            tracer=tracer,
+        )
+
+        # Give background process time to write
+        sleep(1.0)
+
+        # Verify tags in database
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT tags FROM traces WHERE request_id = ?",
+            (request_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        assert len(rows) >= 1, "Expected traces in database"
+
+        # Find row with tags
+        found_tags = False
+        for row in rows:
+            if row["tags"]:
+                tags = json.loads(row["tags"])
+                if "computed" in tags:
+                    found_tags = True
+                    assert "high-value" in tags, "Expected high-value tag for result > 10"
+
+        assert found_tags, "Expected dynamic tags to be stored"
+
+        # Cleanup
+        shutdown_background()
+
+    @pytest.mark.asyncio
+    async def test_workflow_with_merged_tags(self):
+        """Test workflow with both static and dynamic tags merged."""
+        import json
+        from hush.core.background import DEFAULT_DB_PATH
+
+        # Node that returns dynamic tags
+        def process_with_dynamic_tags(x):
+            return {"result": x * 2, "$tags": ["dynamic-tag", "runtime"]}
+
+        with GraphNode(name="merged-tags-test") as graph:
+            node = CodeNode(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs={"result": PARENT},
+                code_fn=process_with_dynamic_tags
+            )
+            START >> node >> END
+
+        # Create tracer with static tags
+        tracer = LocalTracer(name="merged", tags=["static-tag", "env:test"])
+        engine = Hush(graph)
+
+        request_id = "merged-tags-wf-001"
+
+        await engine.run(
+            inputs={"x": 5},
+            request_id=request_id,
+            tracer=tracer,
+        )
+
+        # Give background process time to write
+        sleep(1.0)
+
+        # Verify merged tags in database
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT tags FROM traces WHERE request_id = ?",
+            (request_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        assert len(rows) >= 1, "Expected traces in database"
+
+        # Find row with tags
+        found_merged = False
+        for row in rows:
+            if row["tags"]:
+                tags = json.loads(row["tags"])
+                # Check both static and dynamic tags are present
+                has_static = "static-tag" in tags and "env:test" in tags
+                has_dynamic = "dynamic-tag" in tags and "runtime" in tags
+                if has_static and has_dynamic:
+                    found_merged = True
+
+        assert found_merged, "Expected both static and dynamic tags to be merged"
+
+        # Cleanup
+        shutdown_background()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_tags_are_deduplicated(self):
+        """Test that duplicate tags (static + dynamic) are deduplicated."""
+        import json
+        from hush.core.background import DEFAULT_DB_PATH
+
+        # Node that returns a tag that's also in static tags
+        def process_with_duplicate_tag(x):
+            return {"result": x, "$tags": ["shared-tag", "unique-dynamic"]}
+
+        with GraphNode(name="dedup-tags-test") as graph:
+            node = CodeNode(
+                name="processor",
+                inputs={"x": PARENT["x"]},
+                outputs={"result": PARENT},
+                code_fn=process_with_duplicate_tag
+            )
+            START >> node >> END
+
+        # Create tracer with static tags including one that will be duplicated
+        tracer = LocalTracer(name="dedup", tags=["shared-tag", "unique-static"])
+        engine = Hush(graph)
+
+        request_id = "dedup-tags-wf-001"
+
+        await engine.run(
+            inputs={"x": 1},
+            request_id=request_id,
+            tracer=tracer,
+        )
+
+        # Give background process time to write
+        sleep(1.0)
+
+        # Verify tags in database
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT tags FROM traces WHERE request_id = ?",
+            (request_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Find row with tags and verify no duplicates
+        for row in rows:
+            if row["tags"]:
+                tags = json.loads(row["tags"])
+                # shared-tag should appear only once
+                assert tags.count("shared-tag") == 1, "Duplicate tags should be deduplicated"
+                # All unique tags should be present
+                assert "unique-static" in tags
+                assert "unique-dynamic" in tags
 
         # Cleanup
         shutdown_background()

@@ -355,7 +355,11 @@ def _fetch_pending(conn: sqlite3.Connection, limit: int = 50) -> Dict[str, List[
 
 
 def _rebuild_flush_data(rows: List[sqlite3.Row]) -> Dict[str, Any]:
-    """Rebuild flush_data structure from flattened rows."""
+    """Rebuild flush_data structure from flattened rows.
+
+    Importantly, this function reorders nodes so that parents come before children,
+    which is required for Langfuse hierarchy creation.
+    """
     if not rows:
         return {}
 
@@ -372,17 +376,16 @@ def _rebuild_flush_data(rows: List[sqlite3.Row]) -> Dict[str, Any]:
         "nodes_trace_data": {},
     }
 
+    # Build node data first
+    node_data_map = {}
     for row in rows:
         node_name = row["node_name"]
         context_id = row["context_id"]
         trace_key = f"{node_name}:{context_id}" if context_id else node_name
 
-        flush_data["execution_order"].append({
-            "node": node_name,
-            "parent": row["parent_name"],
-            "context_id": context_id,
-            "contain_generation": bool(row["contain_generation"]),
-        })
+        # Skip duplicates (keep first occurrence)
+        if trace_key in node_data_map:
+            continue
 
         usage = None
         if row["prompt_tokens"] is not None or row["completion_tokens"] is not None:
@@ -394,17 +397,68 @@ def _rebuild_flush_data(rows: List[sqlite3.Row]) -> Dict[str, Any]:
             if row["total_tokens"] is not None:
                 usage["total_tokens"] = row["total_tokens"]
 
-        flush_data["nodes_trace_data"][trace_key] = {
-            "name": node_name,
-            "start_time": row["start_time"],
-            "end_time": row["end_time"],
-            "input": json.loads(row["input"]) if row["input"] else {},
-            "output": json.loads(row["output"]) if row["output"] else {},
-            "model": row["model"],
-            "usage": usage,
-            "cost": row["cost_usd"],
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+        node_data_map[trace_key] = {
+            "node": node_name,
+            "parent": row["parent_name"],
+            "context_id": context_id,
+            "contain_generation": bool(row["contain_generation"]),
+            "trace_data": {
+                "name": node_name,
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "input": json.loads(row["input"]) if row["input"] else {},
+                "output": json.loads(row["output"]) if row["output"] else {},
+                "model": row["model"],
+                "usage": usage,
+                "cost": row["cost_usd"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            }
         }
+
+    # Topological sort: parents before children
+    # Build adjacency: parent_key -> [child_keys]
+    def get_parent_key(node_name: str, parent_name: Optional[str], context_id: Optional[str]) -> Optional[str]:
+        """Get the key for the parent node."""
+        if parent_name is None:
+            return None
+        # Check if parent exists with same context_id
+        parent_with_ctx = f"{parent_name}:{context_id}" if context_id else parent_name
+        if parent_with_ctx in node_data_map:
+            return parent_with_ctx
+        # Check if parent exists without context
+        if parent_name in node_data_map:
+            return parent_name
+        return parent_name  # Return even if not found, for ordering
+
+    # Sort nodes: roots first, then by depth
+    ordered_keys = []
+    visited = set()
+
+    def visit(key: str):
+        if key in visited:
+            return
+        visited.add(key)
+        data = node_data_map.get(key)
+        if data:
+            parent_key = get_parent_key(data["node"], data["parent"], data["context_id"])
+            if parent_key and parent_key in node_data_map:
+                visit(parent_key)
+        ordered_keys.append(key)
+
+    # Visit all nodes
+    for key in node_data_map:
+        visit(key)
+
+    # Build execution_order and nodes_trace_data in correct order
+    for key in ordered_keys:
+        data = node_data_map[key]
+        flush_data["execution_order"].append({
+            "node": data["node"],
+            "parent": data["parent"],
+            "context_id": data["context_id"],
+            "contain_generation": data["contain_generation"],
+        })
+        flush_data["nodes_trace_data"][key] = data["trace_data"]
 
     return flush_data
 
@@ -417,7 +471,10 @@ def _dispatch_flush(flush_data: Dict[str, Any]) -> None:
 
     if tracer_type not in _TRACER_REGISTRY:
         try:
+            # Import LangfuseTracer to register it
             from hush.observability.tracers.langfuse import LangfuseTracer  # noqa: F401
+            # Also import LangfuseConfig and LangfuseClient to register them with ResourceHub
+            from hush.observability import LangfuseConfig, LangfuseClient  # noqa: F401
         except ImportError:
             pass
 
