@@ -12,6 +12,7 @@ dependencies = [
     "hush-providers>=0.1.0",
     "hush-observability>=0.1.0",
     "langfuse>=2.0,<3.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]

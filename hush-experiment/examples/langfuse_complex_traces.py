@@ -1,31 +1,38 @@
 """Generate Langfuse traces for complex workflows with nested loops and tags.
 
-This script creates actual traces in Langfuse cloud using:
+This script demonstrates two ways to use LangfuseTracer:
+
+1. **ResourceHub (production)**: Uses HUSH_CONFIG to load config from resources.yaml
+   ```python
+   tracer = LangfuseTracer(resource_key="langfuse:vpbank")
+   ```
+
+2. **Direct config (simple)**: Uses LangfuseConfig directly, no ResourceHub needed
+   ```python
+   tracer = LangfuseTracer(config=LangfuseConfig.from_env())
+   ```
+
+The script creates traces using:
 - MapNode workflows
 - Nested ForLoopNode workflows
 - WhileLoopNode workflows
 - Complex pipelines combining all loop types
 - Both static tags (set on tracer) and dynamic tags (from node output)
 
-Run with: cd hush-experiment && HUSH_CONFIG=/path/to/resources.yaml uv run python examples/langfuse_complex_traces.py
+Run with: cd hush-experiment && uv run python examples/langfuse_complex_traces.py
 """
 
 import asyncio
 import os
-import sys
+from pathlib import Path
 from time import sleep
 
-# Ensure resources.yaml is loaded
-if "HUSH_CONFIG" not in os.environ:
-    # Default to the resources.yaml in the parent directory
-    default_config = os.path.join(os.path.dirname(__file__), "..", "..", "resources.yaml")
-    if os.path.exists(default_config):
-        os.environ["HUSH_CONFIG"] = os.path.abspath(default_config)
-        print(f"Using config: {os.environ['HUSH_CONFIG']}")
-    else:
-        print("ERROR: HUSH_CONFIG environment variable not set and resources.yaml not found")
-        print("Set HUSH_CONFIG=/path/to/resources.yaml before running")
-        sys.exit(1)
+# Load .env file from hush-experiment root
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
+print(f"Loaded .env from: {env_path}")
+print(f"HUSH_CONFIG: {os.environ.get('HUSH_CONFIG', 'Not set')}")
 
 from hush.core import (
     Hush,
@@ -38,7 +45,7 @@ from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
 from hush.core.nodes.iteration.base import Each
 from hush.core.nodes.transform.code_node import code_node
 from hush.core.tracers import BaseTracer
-from hush.observability import LangfuseTracer, LangfuseConfig, LangfuseClient  # noqa: F401
+from hush.observability import LangfuseTracer, LangfuseConfig
 
 
 # ============================================================================
@@ -313,6 +320,27 @@ async def run_langfuse_traces():
     print("=" * 70)
     print()
 
+    # ========================================================================
+    # Two ways to create LangfuseTracer
+    # ========================================================================
+    print("Creating tracers using two approaches:")
+    print()
+
+    # Approach 1: ResourceHub (production) - uses HUSH_CONFIG
+    print("  [ResourceHub] Using resource_key='langfuse:vpbank'")
+    print(f"                Config loaded from: {os.environ.get('HUSH_CONFIG')}")
+    tracer_resource_hub = LangfuseTracer(resource_key="langfuse:vpbank", tags=["resource-hub"])
+    print(f"                Tracer: {tracer_resource_hub}")
+    print()
+
+    # Approach 2: Direct config (simple) - no ResourceHub needed
+    print("  [Direct Config] Using LangfuseConfig.from_env()")
+    direct_config = LangfuseConfig.from_env()
+    tracer_direct = LangfuseTracer(config=direct_config, tags=["direct-config"])
+    print(f"                  Config: host={direct_config.host}")
+    print(f"                  Tracer: {tracer_direct}")
+    print()
+
     # Build workflows
     map_workflow = build_map_node_workflow()
     text_workflow = build_text_analysis_workflow()
@@ -326,10 +354,10 @@ async def run_langfuse_traces():
     while_engine = Hush(while_workflow)
 
     # ========================================================================
-    # Trace 1: Simple MapNode workflow
+    # Trace 1: Using ResourceHub tracer
     # ========================================================================
-    print("1. MapNode workflow (static tags: production, ml-pipeline)")
-    tracer1 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["production", "ml-pipeline"])
+    print("1. MapNode workflow [ResourceHub] (tags: resource-hub, production)")
+    tracer1 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["resource-hub", "production"])
 
     result = await map_engine.run(
         inputs={"items": [2, 3, 4, 5]},
@@ -341,10 +369,10 @@ async def run_langfuse_traces():
     print(f"   Results: {result.get('results')}")
 
     # ========================================================================
-    # Trace 2: Text analysis with dynamic tags
+    # Trace 2: Using Direct Config tracer
     # ========================================================================
-    print("2. Text analysis pipeline (static: staging, dynamic: from nodes)")
-    tracer2 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["staging", "nlp-team"])
+    print("2. Text analysis pipeline [Direct Config] (tags: direct-config, staging)")
+    tracer2 = LangfuseTracer(config=LangfuseConfig.from_env(), tags=["direct-config", "staging"])
 
     result = await text_engine.run(
         inputs={"input_text": "Machine learning transforms how we process data", "multiplier": 3},
@@ -356,10 +384,10 @@ async def run_langfuse_traces():
     print(f"   Result: {result.get('result')}")
 
     # ========================================================================
-    # Trace 3: Text analysis with long text (triggers long-text tag)
+    # Trace 3: Using ResourceHub tracer
     # ========================================================================
-    print("3. Text analysis - long text (triggers 'long-text' dynamic tag)")
-    tracer3 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["development"])
+    print("3. Text analysis - long text [ResourceHub] (tags: resource-hub, development)")
+    tracer3 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["resource-hub", "development"])
 
     result = await text_engine.run(
         inputs={
@@ -374,10 +402,10 @@ async def run_langfuse_traces():
     print(f"   Result: {result.get('result')}")
 
     # ========================================================================
-    # Trace 4: Nested ForLoops
+    # Trace 4: Using Direct Config tracer
     # ========================================================================
-    print("4. Nested ForLoop workflow (static: experiment, batch-processing)")
-    tracer4 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["experiment", "batch-processing"])
+    print("4. Nested ForLoop workflow [Direct Config] (tags: direct-config, experiment)")
+    tracer4 = LangfuseTracer(config=LangfuseConfig.from_env(), tags=["direct-config", "experiment"])
 
     result = await nested_engine.run(
         inputs={},
@@ -389,10 +417,10 @@ async def run_langfuse_traces():
     print(f"   Results: {result.get('results')}")
 
     # ========================================================================
-    # Trace 5: WhileLoop with high start value
+    # Trace 5: Using ResourceHub tracer
     # ========================================================================
-    print("5. WhileLoop - high start value (many iterations)")
-    tracer5 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["iteration-test", "performance"])
+    print("5. WhileLoop - high start value [ResourceHub] (tags: resource-hub, performance)")
+    tracer5 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["resource-hub", "performance"])
 
     result = await while_engine.run(
         inputs={"start_value": 256},
@@ -404,10 +432,10 @@ async def run_langfuse_traces():
     print(f"   256 -> {result.get('final_value')}")
 
     # ========================================================================
-    # Trace 6: WhileLoop with low start value
+    # Trace 6: Using Direct Config tracer
     # ========================================================================
-    print("6. WhileLoop - low start value (few iterations)")
-    tracer6 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["iteration-test"])
+    print("6. WhileLoop - low start value [Direct Config] (tags: direct-config, iteration)")
+    tracer6 = LangfuseTracer(config=LangfuseConfig.from_env(), tags=["direct-config", "iteration"])
 
     result = await while_engine.run(
         inputs={"start_value": 20},
@@ -419,10 +447,10 @@ async def run_langfuse_traces():
     print(f"   20 -> {result.get('final_value')}")
 
     # ========================================================================
-    # Trace 7: High score text (triggers high-avg-score tag)
+    # Trace 7: Using ResourceHub tracer
     # ========================================================================
-    print("7. Text analysis - high scores (triggers 'high-avg-score' tag)")
-    tracer7 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["monitoring", "alerts-enabled"])
+    print("7. Text analysis - high scores [ResourceHub] (tags: resource-hub, monitoring)")
+    tracer7 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["resource-hub", "monitoring"])
 
     result = await text_engine.run(
         inputs={
@@ -437,10 +465,10 @@ async def run_langfuse_traces():
     print(f"   Result: {result.get('result')}")
 
     # ========================================================================
-    # Trace 8: Different user tracking
+    # Trace 8: Using Direct Config tracer
     # ========================================================================
-    print("8. Same workflow, different user (for user tracking)")
-    tracer8 = LangfuseTracer(resource_key="langfuse:vpbank", tags=["user-tracking"])
+    print("8. Same workflow, different user [Direct Config] (tags: direct-config, user-tracking)")
+    tracer8 = LangfuseTracer(config=LangfuseConfig.from_env(), tags=["direct-config", "user-tracking"])
 
     result = await text_engine.run(
         inputs={"input_text": "Cloud computing scalability microservices", "multiplier": 2},
@@ -466,17 +494,21 @@ async def run_langfuse_traces():
     BaseTracer.shutdown_executor()
 
     print()
-    print("Traces should now be visible at: https://cloud.langfuse.com")
+    print("Traces should now be visible at: https://langfuse.aws.coreai.vpbank.dev")
     print()
     print(f"Generated traces (run_id={run_id}):")
-    print(f"  - langfuse-map-{run_id}: MapNode workflow")
-    print(f"  - langfuse-text-{run_id}-1: Text analysis (staging)")
-    print(f"  - langfuse-text-{run_id}-2: Text analysis (long text)")
-    print(f"  - langfuse-nested-{run_id}: Nested ForLoops")
-    print(f"  - langfuse-while-{run_id}-1: WhileLoop (256 iterations)")
-    print(f"  - langfuse-while-{run_id}-2: WhileLoop (20 start)")
-    print(f"  - langfuse-text-{run_id}-3: Text analysis (high scores)")
-    print(f"  - langfuse-text-{run_id}-4: Text analysis (user tracking)")
+    print(f"  [ResourceHub]   langfuse-map-{run_id}: MapNode workflow")
+    print(f"  [Direct Config] langfuse-text-{run_id}-1: Text analysis (staging)")
+    print(f"  [ResourceHub]   langfuse-text-{run_id}-2: Text analysis (long text)")
+    print(f"  [Direct Config] langfuse-nested-{run_id}: Nested ForLoops")
+    print(f"  [ResourceHub]   langfuse-while-{run_id}-1: WhileLoop (256 start)")
+    print(f"  [Direct Config] langfuse-while-{run_id}-2: WhileLoop (20 start)")
+    print(f"  [ResourceHub]   langfuse-text-{run_id}-3: Text analysis (high scores)")
+    print(f"  [Direct Config] langfuse-text-{run_id}-4: Text analysis (user tracking)")
+    print()
+    print("Filter by tags in Langfuse:")
+    print("  - 'resource-hub': traces created via ResourceHub")
+    print("  - 'direct-config': traces created via direct LangfuseConfig")
 
 
 def main():
