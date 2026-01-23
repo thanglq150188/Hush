@@ -51,15 +51,6 @@ class ObservabilityPlugin:
             register_config_class(LangfuseConfig)
             register_factory_handler(LangfuseConfig, lambda c: LangfuseClient(c))
 
-            # Register Opik
-            from hush.observability.backends.opik import (
-                OpikConfig,
-                OpikClient,
-            )
-
-            register_config_class(OpikConfig)
-            register_factory_handler(OpikConfig, lambda c: OpikClient(c))
-
             # Register OpenTelemetry
             from hush.observability.backends.otel import (
                 OTELConfig,
@@ -68,15 +59,6 @@ class ObservabilityPlugin:
 
             register_config_class(OTELConfig)
             register_factory_handler(OTELConfig, lambda c: OTELClient(c))
-
-            # Register Phoenix
-            from hush.observability.backends.phoenix import (
-                PhoenixConfig,
-                PhoenixClient,
-            )
-
-            register_config_class(PhoenixConfig)
-            register_factory_handler(PhoenixConfig, lambda c: PhoenixClient(c))
 
             cls._registered = True
             LOGGER.debug("ObservabilityPlugin registered successfully")

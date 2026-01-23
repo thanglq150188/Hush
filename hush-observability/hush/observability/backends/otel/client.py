@@ -59,27 +59,40 @@ class OTELClient:
                 "opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-otlp-proto-http"
             )
 
-        # Create resource with service info
-        resource_attributes = {
-            "service.name": self._config.service_name,
-        }
-        if self._config.service_version:
-            resource_attributes["service.version"] = self._config.service_version
+        # Check if global provider is already set (by another OTELClient or user code)
+        existing_provider = trace.get_tracer_provider()
+        is_noop = type(existing_provider).__name__ == "ProxyTracerProvider"
 
-        resource = Resource.create(resource_attributes)
+        if is_noop:
+            # No provider set yet, create and set one
+            # Create resource with service info
+            resource_attributes = {
+                "service.name": self._config.service_name,
+            }
+            if self._config.service_version:
+                resource_attributes["service.version"] = self._config.service_version
 
-        # Create tracer provider
-        self._provider = TracerProvider(resource=resource)
+            resource = Resource.create(resource_attributes)
 
-        # Create exporter based on protocol
-        exporter = self._create_exporter()
+            # Create tracer provider
+            self._provider = TracerProvider(resource=resource)
 
-        # Add batch processor
-        processor = BatchSpanProcessor(exporter)
-        self._provider.add_span_processor(processor)
+            # Create exporter based on protocol
+            exporter = self._create_exporter()
 
-        # Set as global provider
-        trace.set_tracer_provider(self._provider)
+            # Add batch processor
+            processor = BatchSpanProcessor(exporter)
+            self._provider.add_span_processor(processor)
+
+            # Set as global provider
+            trace.set_tracer_provider(self._provider)
+        else:
+            # Use existing provider but add our exporter
+            self._provider = existing_provider
+            if hasattr(self._provider, "add_span_processor"):
+                exporter = self._create_exporter()
+                processor = BatchSpanProcessor(exporter)
+                self._provider.add_span_processor(processor)
 
         # Create tracer
         self._tracer = trace.get_tracer(

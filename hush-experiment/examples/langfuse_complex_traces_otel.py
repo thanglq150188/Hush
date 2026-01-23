@@ -1,22 +1,26 @@
-"""Demo script to generate traces for the Hush Trace Viewer UI.
+"""Generate Langfuse traces using OTEL SDK instead of Langfuse SDK.
 
-This script demonstrates:
-- Various node types (CodeNode, ForLoopNode, MapNode, WhileLoopNode)
-- Static tags (set on tracer initialization)
-- Dynamic tags (returned via $tags in node output)
-- Nested loops
-- Different users and sessions
+This script demonstrates sending traces to Langfuse via OpenTelemetry,
+proving you don't need the Langfuse SDK - just standard OTEL.
 
-Generates traces to HUSH_TRACES_DB (default: ~/.hush/traces.db).
+Uses the same workflows as langfuse_complex_traces.py for comparison.
+
+Run with: cd hush-experiment && uv run python examples/langfuse_complex_traces_otel.py
 """
 
 import asyncio
+import base64
+from pathlib import Path
 from time import sleep
+
+# Load .env file from hush-experiment root
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
 
 from hush.core import (
     Hush,
     GraphNode,
-    CodeNode,
     START, END, PARENT,
 )
 from hush.core.nodes.iteration.for_loop_node import ForLoopNode
@@ -24,11 +28,30 @@ from hush.core.nodes.iteration.map_node import MapNode
 from hush.core.nodes.iteration.while_loop_node import WhileLoopNode
 from hush.core.nodes.iteration.base import Each
 from hush.core.nodes.transform.code_node import code_node
-from hush.core.tracers import LocalTracer
+from hush.core.tracers import BaseTracer
+from hush.observability import OTELTracer
+from hush.observability.backends.otel import OTELConfig
+
+
+# Langfuse credentials (same as langfuse:vpbank)
+LANGFUSE_PUBLIC_KEY = "pk-lf-2edb3eb7-c4a5-4264-b41b-01e91dc91801"
+LANGFUSE_SECRET_KEY = "sk-lf-06032612-18ac-48d8-9a13-6aeaa9f42076"
+LANGFUSE_HOST = "https://langfuse.aws.coreai.vpbank.dev"
+
+
+def create_langfuse_otel_config(service_name: str = "hush-workflow") -> OTELConfig:
+    """Create OTELConfig that points to Langfuse's OTEL endpoint."""
+    auth = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
+    return OTELConfig(
+        endpoint=f"{LANGFUSE_HOST}/api/public/otel/v1/traces",
+        protocol="http",
+        headers={"Authorization": f"Basic {auth}"},
+        service_name=service_name,
+    )
 
 
 # ============================================================================
-# Code Nodes with Dynamic Tags
+# Code Nodes (same as langfuse_complex_traces.py)
 # ============================================================================
 
 @code_node
@@ -36,7 +59,6 @@ def preprocess(text: str):
     """Preprocess input text with dynamic tags."""
     sleep(0.01)
     cleaned = text.strip().lower()
-    # Add dynamic tag based on text length
     tags = ["preprocessed"]
     if len(cleaned) > 30:
         tags.append("long-text")
@@ -49,7 +71,6 @@ def tokenize(text: str):
     sleep(0.02)
     tokens = text.split()
     count = len(tokens)
-    # Dynamic tags based on token count
     tags = ["tokenized"]
     if count > 5:
         tags.append("many-tokens")
@@ -70,7 +91,6 @@ def aggregate_scores(scores: list):
     sleep(0.01)
     total = sum(scores) if scores else 0
     avg = total / len(scores) if scores else 0
-    # Tag based on score
     tags = ["aggregated"]
     if avg > 20:
         tags.append("high-avg-score")
@@ -87,7 +107,6 @@ def classify(score: float):
         category, confidence = "medium", 0.7
     else:
         category, confidence = "low", 0.5
-    # Dynamic tag for category
     return {"category": category, "confidence": confidence, "$tags": [f"category:{category}"]}
 
 
@@ -106,16 +125,68 @@ def halve_value(value: int):
     """Halve a value (for while loop demo)."""
     sleep(0.005)
     new_val = value // 2
-    # Tag when value gets small
     tags = []
     if new_val < 10:
         tags.append("small-value")
     return {"new_value": new_val, "$tags": tags} if tags else {"new_value": new_val}
 
 
+@code_node
+def square(x: int):
+    """Square a number."""
+    sleep(0.005)
+    return {"squared": x * x}
+
+
+@code_node
+def validate(x: int):
+    """Validate input."""
+    sleep(0.005)
+    return {"validated_x": x, "$tags": ["validated"]}
+
+
+@code_node
+def multiply(x: int, y: int):
+    """Multiply two numbers."""
+    sleep(0.005)
+    product = x * y
+    tags = ["multiplied"]
+    if product > 50:
+        tags.append("large-product")
+    return {"product": product, "$tags": tags}
+
+
+@code_node
+def summarize(products: list):
+    """Summarize products."""
+    sleep(0.006)
+    total = sum(products) if products else 0
+    return {"total": total}
+
+
 # ============================================================================
-# Build Workflows
+# Build Workflows (same as langfuse_complex_traces.py)
 # ============================================================================
+
+def build_map_node_workflow():
+    """Build a workflow with MapNode for parallel processing."""
+    with GraphNode(name="map-node-workflow") as graph:
+        with MapNode(
+            name="square_items",
+            inputs={"x": Each(PARENT["items"])}
+        ) as map_node:
+            square_node = square(
+                name="square",
+                inputs={"x": PARENT["x"]},
+                outputs=PARENT,
+            )
+            START >> square_node >> END
+
+        map_node["squared"] >> PARENT["results"]
+        START >> map_node >> END
+
+    return graph
+
 
 def build_text_analysis_workflow():
     """Build text analysis workflow with MapNode."""
@@ -174,31 +245,10 @@ def build_text_analysis_workflow():
 
 def build_nested_loop_workflow():
     """Build workflow with nested ForLoops."""
-
-    @code_node
-    def validate(x: int):
-        sleep(0.005)
-        return {"validated_x": x, "$tags": ["validated"]}
-
-    @code_node
-    def multiply(x: int, y: int):
-        sleep(0.005)
-        product = x * y
-        tags = ["multiplied"]
-        if product > 50:
-            tags.append("large-product")
-        return {"product": product, "$tags": tags}
-
-    @code_node
-    def summarize(products: list):
-        sleep(0.006)
-        total = sum(products) if products else 0
-        return {"total": total}
-
-    with GraphNode(name="nested-loop-demo") as graph:
+    with GraphNode(name="nested-loop-workflow") as graph:
         with ForLoopNode(
             name="outer_loop",
-            inputs={"x": Each([2, 3])}
+            inputs={"x": Each([2, 3, 4])}
         ) as outer:
             validate_node = validate(
                 name="validate",
@@ -208,7 +258,7 @@ def build_nested_loop_workflow():
             with ForLoopNode(
                 name="inner_loop",
                 inputs={
-                    "y": Each([10, 20]),
+                    "y": Each([10, 20, 30]),
                     "x": validate_node["validated_x"],
                 }
             ) as inner:
@@ -235,7 +285,7 @@ def build_nested_loop_workflow():
 
 def build_while_loop_workflow():
     """Build workflow with WhileLoopNode."""
-    with GraphNode(name="while-loop-demo") as graph:
+    with GraphNode(name="while-loop-workflow") as graph:
         with WhileLoopNode(
             name="halve_loop",
             inputs={"value": PARENT["start_value"]},
@@ -259,212 +309,190 @@ def build_while_loop_workflow():
 # Run Demo
 # ============================================================================
 
-async def run_demo():
-    """Run demo workflows with different tag configurations."""
+async def run_otel_traces():
+    """Run workflows and generate traces via OTEL to Langfuse."""
+    import time
 
-    print("Hush Trace Viewer Demo")
-    print("=" * 60)
-    print("Generating traces with static and dynamic tags...")
+    run_id = int(time.time())
+
+    print("=" * 70)
+    print("Langfuse Traces via OTEL SDK (no Langfuse SDK needed!)")
+    print(f"Run ID: {run_id}")
+    print(f"Endpoint: {LANGFUSE_HOST}/api/public/otel/v1/traces")
+    print("=" * 70)
     print()
 
     # Build workflows
+    map_workflow = build_map_node_workflow()
     text_workflow = build_text_analysis_workflow()
     nested_workflow = build_nested_loop_workflow()
     while_workflow = build_while_loop_workflow()
 
     # Create engines
+    map_engine = Hush(map_workflow)
     text_engine = Hush(text_workflow)
     nested_engine = Hush(nested_workflow)
     while_engine = Hush(while_workflow)
 
     # ========================================================================
-    # Case 1: Text analysis with static tags (production environment)
+    # Trace 1: MapNode workflow
     # ========================================================================
-    print("1. Text analysis - production environment (static tags)")
-    tracer_prod = LocalTracer(name="prod-tracer", tags=["production", "ml-team"])
+    print("1. MapNode workflow via OTEL (tags: otel, production)")
+    tracer1 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "production"])
 
-    result = await text_engine.run(
-        inputs={"input_text": "Machine learning is transforming industries", "multiplier": 3},
-        request_id="text-prod-001",
+    result = await map_engine.run(
+        inputs={"items": [2, 3, 4, 5]},
+        request_id=f"otel-map-{run_id}",
         user_id="user-alice",
-        session_id="session-prod-1",
-        tracer=tracer_prod,
-    )
-    print(f"   Result: {result.get('result')}")
-
-    # ========================================================================
-    # Case 2: Text analysis with different static tags (staging)
-    # ========================================================================
-    print("2. Text analysis - staging environment (different static tags)")
-    tracer_staging = LocalTracer(name="staging-tracer", tags=["staging", "qa-team"])
-
-    result = await text_engine.run(
-        inputs={"input_text": "Hello world test", "multiplier": 2},
-        request_id="text-staging-001",
-        user_id="user-bob",
-        session_id="session-staging-1",
-        tracer=tracer_staging,
-    )
-    print(f"   Result: {result.get('result')}")
-
-    # ========================================================================
-    # Case 3: Text analysis - long text triggers dynamic tag
-    # ========================================================================
-    print("3. Text analysis - long text (triggers 'long-text' dynamic tag)")
-    tracer_dev = LocalTracer(name="dev-tracer", tags=["development"])
-
-    result = await text_engine.run(
-        inputs={
-            "input_text": "The quick brown fox jumps over the lazy dog and runs away",
-            "multiplier": 4
-        },
-        request_id="text-dev-001",
-        user_id="user-charlie",
-        session_id="session-dev-1",
-        tracer=tracer_dev,
-    )
-    print(f"   Result: {result.get('result')}")
-
-    # ========================================================================
-    # Case 4: Nested loops with static tags
-    # ========================================================================
-    print("4. Nested loop workflow (static tags: 'experiment', 'batch-job')")
-    tracer_experiment = LocalTracer(name="experiment-tracer", tags=["experiment", "batch-job"])
-
-    result = await nested_engine.run(
-        inputs={},
-        request_id="nested-001",
-        user_id="user-alice",
-        session_id="session-experiment-1",
-        tracer=tracer_experiment,
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer1,
     )
     print(f"   Results: {result.get('results')}")
 
     # ========================================================================
-    # Case 5: While loop - high start value (many iterations)
+    # Trace 2: Text analysis pipeline
     # ========================================================================
-    print("5. While loop - high start value (triggers 'small-value' tag near end)")
-    tracer_loop = LocalTracer(name="loop-tracer", tags=["iteration-test"])
+    print("2. Text analysis pipeline via OTEL (tags: otel, staging)")
+    tracer2 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "staging"])
+
+    result = await text_engine.run(
+        inputs={"input_text": "Machine learning transforms how we process data", "multiplier": 3},
+        request_id=f"otel-text-{run_id}-1",
+        user_id="user-bob",
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer2,
+    )
+    print(f"   Result: {result.get('result')}")
+
+    # ========================================================================
+    # Trace 3: Text analysis - long text
+    # ========================================================================
+    print("3. Text analysis - long text via OTEL (tags: otel, development)")
+    tracer3 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "development"])
+
+    result = await text_engine.run(
+        inputs={
+            "input_text": "The quick brown fox jumps over the lazy dog and runs away into the forest",
+            "multiplier": 4
+        },
+        request_id=f"otel-text-{run_id}-2",
+        user_id="user-charlie",
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer3,
+    )
+    print(f"   Result: {result.get('result')}")
+
+    # ========================================================================
+    # Trace 4: Nested ForLoop workflow
+    # ========================================================================
+    print("4. Nested ForLoop workflow via OTEL (tags: otel, experiment)")
+    tracer4 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "experiment"])
+
+    result = await nested_engine.run(
+        inputs={},
+        request_id=f"otel-nested-{run_id}",
+        user_id="user-alice",
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer4,
+    )
+    print(f"   Results: {result.get('results')}")
+
+    # ========================================================================
+    # Trace 5: WhileLoop - high start value
+    # ========================================================================
+    print("5. WhileLoop - high start value via OTEL (tags: otel, performance)")
+    tracer5 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "performance"])
 
     result = await while_engine.run(
-        inputs={"start_value": 100},
-        request_id="while-high-001",
+        inputs={"start_value": 256},
+        request_id=f"otel-while-{run_id}-1",
         user_id="user-bob",
-        session_id="session-loop-1",
-        tracer=tracer_loop,
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer5,
     )
-    print(f"   100 -> {result.get('final_value')}")
+    print(f"   256 -> {result.get('final_value')}")
 
     # ========================================================================
-    # Case 6: While loop - low start value (few iterations)
+    # Trace 6: WhileLoop - low start value
     # ========================================================================
-    print("6. While loop - low start value (fewer iterations)")
+    print("6. WhileLoop - low start value via OTEL (tags: otel, iteration)")
+    tracer6 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "iteration"])
 
     result = await while_engine.run(
         inputs={"start_value": 20},
-        request_id="while-low-001",
+        request_id=f"otel-while-{run_id}-2",
         user_id="user-charlie",
-        session_id="session-loop-2",
-        tracer=tracer_loop,
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer6,
     )
     print(f"   20 -> {result.get('final_value')}")
 
     # ========================================================================
-    # Case 7: Mixed tags - static + dynamic combination
+    # Trace 7: Text analysis - high scores
     # ========================================================================
-    print("7. Text analysis - mixed static/dynamic tags with high score")
-    tracer_mixed = LocalTracer(name="mixed-tracer", tags=["monitoring", "alerts-enabled"])
+    print("7. Text analysis - high scores via OTEL (tags: otel, monitoring)")
+    tracer7 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "monitoring"])
 
     result = await text_engine.run(
         inputs={
-            "input_text": "Artificial intelligence deep learning neural networks powerful",
+            "input_text": "Artificial intelligence deep learning neural networks powerful computing",
             "multiplier": 5
         },
-        request_id="text-mixed-001",
+        request_id=f"otel-text-{run_id}-3",
         user_id="user-alice",
-        session_id="session-mixed-1",
-        tracer=tracer_mixed,
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer7,
     )
     print(f"   Result: {result.get('result')}")
 
     # ========================================================================
-    # Case 8: Same workflow, different user
+    # Trace 8: Different user
     # ========================================================================
-    print("8. Same workflow, different user (user tracking)")
+    print("8. Same workflow, different user via OTEL (tags: otel, user-tracking)")
+    tracer8 = OTELTracer(config=create_langfuse_otel_config(), tags=["otel", "user-tracking"])
 
     result = await text_engine.run(
-        inputs={"input_text": "Cloud computing scalability", "multiplier": 2},
-        request_id="text-mixed-002",
+        inputs={"input_text": "Cloud computing scalability microservices", "multiplier": 2},
+        request_id=f"otel-text-{run_id}-4",
         user_id="user-david",
-        session_id="session-mixed-2",
-        tracer=tracer_mixed,
+        session_id=f"session-otel-{run_id}",
+        tracer=tracer8,
     )
     print(f"   Result: {result.get('result')}")
 
     # ========================================================================
-    # Finish
+    # Flush and cleanup
     # ========================================================================
     print()
-    print("=" * 60)
-    print("Generated 8 diverse traces!")
-    print("Waiting for background process to flush...")
+    print("=" * 70)
+    print("All workflows completed! Waiting for traces to flush via OTEL...")
+    print("=" * 70)
 
-    sleep(3)  # Give time for background to write all traces
+    # Wait for background flush to complete
+    sleep(5)
+
+    # Shutdown the executor
+    BaseTracer.shutdown_executor()
 
     print()
-    from hush.core.background import DEFAULT_DB_PATH
-    print(f"Traces saved to {DEFAULT_DB_PATH}")
+    print(f"Traces should now be visible at: {LANGFUSE_HOST}")
+    print()
+    print(f"Generated traces via OTEL (run_id={run_id}):")
+    print(f"  otel-map-{run_id}: MapNode workflow")
+    print(f"  otel-text-{run_id}-1: Text analysis (staging)")
+    print(f"  otel-text-{run_id}-2: Text analysis (long text)")
+    print(f"  otel-nested-{run_id}: Nested ForLoops")
+    print(f"  otel-while-{run_id}-1: WhileLoop (256 start)")
+    print(f"  otel-while-{run_id}-2: WhileLoop (20 start)")
+    print(f"  otel-text-{run_id}-3: Text analysis (high scores)")
+    print(f"  otel-text-{run_id}-4: Text analysis (user tracking)")
+    print()
+    print("Filter by tag 'otel' in Langfuse to see these traces!")
 
 
 def main():
-    """Main entry point - run demo and start UI server."""
-    import os
-    import signal
-    import webbrowser
-    from pathlib import Path
-
-    # Remove old traces database for a clean demo
-    db_path = Path.home() / ".hush" / "traces.db"
-    if db_path.exists():
-        db_path.unlink()
-        print(f"Removed old database: {db_path}")
-        print()
-
-    # Kill any existing server on port 8765
-    from hush.core.ui.server import DEFAULT_PORT
-    try:
-        import subprocess
-        result = subprocess.run(
-            f"lsof -i :{DEFAULT_PORT} -t",
-            shell=True, capture_output=True, text=True
-        )
-        if result.stdout.strip():
-            for pid in result.stdout.strip().split('\n'):
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                    print(f"Killed existing server (PID {pid}) on port {DEFAULT_PORT}")
-                except (ProcessLookupError, ValueError):
-                    pass
-            sleep(1)
-    except Exception:
-        pass
-
-    # Run the demo to generate traces
-    asyncio.run(run_demo())
-
-    # Start the UI server
-    print()
-    print("=" * 60)
-    print("Starting Trace Viewer UI...")
-    print()
-
-    from hush.core.ui.server import run_server
-
-    # Open browser automatically
-    webbrowser.open(f"http://localhost:{DEFAULT_PORT}")
-
-    # Start server (blocking)
-    run_server()
+    """Main entry point."""
+    asyncio.run(run_otel_traces())
 
 
 if __name__ == "__main__":

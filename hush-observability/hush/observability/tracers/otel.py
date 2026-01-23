@@ -4,9 +4,12 @@ This tracer inherits from hush.core.tracers.BaseTracer and uses
 ResourceHub to get the OTELClient in the subprocess.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from hush.core.tracers import BaseTracer, register_tracer
+
+if TYPE_CHECKING:
+    from hush.observability.backends.otel import OTELConfig
 
 
 @register_tracer
@@ -14,8 +17,7 @@ class OTELTracer(BaseTracer):
     """Tracer that sends workflow traces via OpenTelemetry.
 
     This tracer uses subprocess-based flushing to avoid blocking
-    the main workflow execution. It references an OTELClient
-    from ResourceHub using a resource_key.
+    the main workflow execution.
 
     OpenTelemetry is a vendor-neutral observability framework that
     can export traces to any OTLP-compatible backend (Jaeger, Zipkin,
@@ -23,15 +25,16 @@ class OTELTracer(BaseTracer):
 
     Example:
         ```python
-        from hush.observability import OTELTracer
+        from hush.observability import OTELTracer, OTELConfig
 
-        # Use with ResourceHub (recommended)
-        tracer = OTELTracer(resource_key="otel:jaeger", tags=["prod", "ml-team"])
+        # Simple: Direct config (no ResourceHub needed)
+        tracer = OTELTracer(config=OTELConfig.jaeger())
+
+        # Production: Use ResourceHub for centralized config
+        tracer = OTELTracer(resource_key="otel:jaeger", tags=["prod"])
 
         # Use with workflow engine
-        workflow = MyWorkflow(tracer=tracer)
-        result = await workflow.run(inputs={...})
-        # Traces are automatically flushed in background
+        result = await engine.run(inputs={...}, tracer=tracer)
         ```
 
     References:
@@ -39,22 +42,61 @@ class OTELTracer(BaseTracer):
         - GitHub: https://github.com/open-telemetry/opentelemetry-python
     """
 
-    def __init__(self, resource_key: str = "otel:default", tags: Optional[List[str]] = None):
+    def __init__(
+        self,
+        config: Optional["OTELConfig"] = None,
+        resource_key: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ):
         """Initialize the OpenTelemetry tracer.
 
         Args:
+            config: Direct OTELConfig (simple usage, no ResourceHub needed)
             resource_key: ResourceHub key for OTELClient (e.g., "otel:jaeger")
             tags: Optional list of static tags for filtering/grouping traces
+
+        Raises:
+            ValueError: If neither config nor resource_key is provided, or both are provided
         """
         super().__init__(tags=tags)
-        self.resource_key = resource_key
+        if config is None and resource_key is None:
+            raise ValueError("Must provide either 'config' or 'resource_key'")
+        if config is not None and resource_key is not None:
+            raise ValueError("Cannot provide both 'config' and 'resource_key'")
+        self._config = config
+        self._resource_key = resource_key
+
+    @property
+    def resource_key(self) -> Optional[str]:
+        """Get the resource key (for backward compatibility)."""
+        return self._resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
-        """Return configuration for subprocess.
+        """Return configuration for subprocess."""
+        if self._config is not None:
+            return {"config": self._config.model_dump()}
+        return {"resource_key": self._resource_key}
 
-        Returns resource_key so subprocess can load client from ResourceHub.
-        """
-        return {"resource_key": self.resource_key}
+    @staticmethod
+    def _datetime_to_ns(dt) -> Optional[int]:
+        """Convert datetime to nanoseconds since epoch."""
+        if dt is None:
+            return None
+        from datetime import datetime
+
+        if isinstance(dt, str):
+            # Parse ISO format string
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        if isinstance(dt, datetime):
+            return int(dt.timestamp() * 1_000_000_000)
+        return None
+
+    @staticmethod
+    def _get_short_name(full_name: str) -> str:
+        """Extract short name from full path (last part after '.')."""
+        if not full_name:
+            return full_name
+        return full_name.rsplit(".", 1)[-1]
 
     @staticmethod
     def flush(flush_data: Dict[str, Any]) -> None:
@@ -74,13 +116,16 @@ class OTELTracer(BaseTracer):
             from opentelemetry import trace
             from opentelemetry.trace import Status, StatusCode
 
-            from hush.core.registry import get_hub
-
             tracer_config = flush_data["tracer_config"]
-            resource_key = tracer_config["resource_key"]
 
-            # Get OTELClient from ResourceHub
-            client = get_hub().otel(resource_key)
+            # Get client: direct config or ResourceHub
+            if "config" in tracer_config:
+                from hush.observability.backends.otel import OTELClient, OTELConfig
+                config = OTELConfig(**tracer_config["config"])
+                client = OTELClient(config)
+            else:
+                from hush.core.registry import get_hub
+                client = get_hub().otel(tracer_config["resource_key"])
 
             workflow_name = flush_data["workflow_name"]
             req_id = flush_data["request_id"]
@@ -100,7 +145,9 @@ class OTELTracer(BaseTracer):
             otel_tracer = client.tracer
 
             # Track created spans for parent-child linking
+            # Store tuples of (span, end_time_ns) for proper ending
             spans: Dict[str, Any] = {}
+            span_end_times: Dict[str, Optional[int]] = {}
 
             for execution in execution_order:
                 node_id = execution["node"]
@@ -122,24 +169,52 @@ class OTELTracer(BaseTracer):
                     node_id = f"{node_id}:{context_id}"
 
                 # Check for context-aware parent
+                # For nested contexts like [0].[1], we need to find the right parent:
+                # - First try exact context match: parent:[0].[1]
+                # - Then try parent context (strip last .[N]): parent:[0]
+                # - Finally fall back to parent without context
                 if parent_id and context_id:
+                    # Try exact context match first
                     context_parent_id = f"{parent_id}:{context_id}"
                     if context_parent_id in spans:
                         parent_id = context_parent_id
+                    else:
+                        # Try parent context (strip last .[N] or [N])
+                        # e.g., [0].[1] -> [0], [0] -> None
+                        last_dot = context_id.rfind(".")
+                        if last_dot > 0:
+                            parent_context = context_id[:last_dot]
+                            parent_with_parent_ctx = f"{parent_id}:{parent_context}"
+                            if parent_with_parent_ctx in spans:
+                                parent_id = parent_with_parent_ctx
+
+                # Extract timing
+                start_time_ns = OTELTracer._datetime_to_ns(trace_data.get("start_time"))
+                end_time_ns = OTELTracer._datetime_to_ns(trace_data.get("end_time"))
+
+                # Get short name (last part after '.')
+                full_name = trace_data.get("name", node_id)
+                short_name = OTELTracer._get_short_name(full_name)
 
                 # Build span attributes
                 attributes = {
                     "workflow.name": workflow_name,
                     "workflow.request_id": req_id,
-                    "node.name": trace_data.get("name", node_id),
+                    "node.name": full_name,  # Keep full name in attributes
                 }
 
                 if user_id:
                     attributes["user.id"] = user_id
+                    attributes["langfuse.user.id"] = user_id  # Langfuse-specific
                 if session_id:
                     attributes["session.id"] = session_id
+                    attributes["langfuse.session.id"] = session_id  # Langfuse-specific
                 if tags:
-                    attributes["tags"] = ",".join(tags)
+                    # Filter out None values - use langfuse.* namespace for Langfuse compatibility
+                    clean_tags = [t for t in tags if t is not None]
+                    if clean_tags:
+                        # Langfuse expects langfuse.tags as array
+                        attributes["langfuse.tags"] = clean_tags
 
                 # Add LLM-specific attributes for generations
                 if contain_generation:
@@ -148,12 +223,12 @@ class OTELTracer(BaseTracer):
                         attributes["llm.model"] = trace_data["model"]
                     if "usage" in trace_data:
                         usage = trace_data["usage"]
-                        if "input" in usage:
-                            attributes["llm.usage.prompt_tokens"] = usage["input"]
-                        if "output" in usage:
-                            attributes["llm.usage.completion_tokens"] = usage["output"]
-                        if "total" in usage:
-                            attributes["llm.usage.total_tokens"] = usage["total"]
+                        if "prompt_tokens" in usage:
+                            attributes["llm.usage.prompt_tokens"] = usage["prompt_tokens"]
+                        if "completion_tokens" in usage:
+                            attributes["llm.usage.completion_tokens"] = usage["completion_tokens"]
+                        if "total_tokens" in usage:
+                            attributes["llm.usage.total_tokens"] = usage["total_tokens"]
 
                 # Add input/output as attributes (serialized)
                 if trace_data.get("input"):
@@ -182,14 +257,16 @@ class OTELTracer(BaseTracer):
                         if isinstance(value, (str, int, float, bool)):
                             attributes[f"metadata.{key}"] = value
 
-                # Create span
+                # Create span with proper timing
                 if parent_id is None:
-                    # Root span
+                    # Root span - use workflow name
                     span = otel_tracer.start_span(
                         name=workflow_name,
                         attributes=attributes,
+                        start_time=start_time_ns,
                     )
                     spans[node_id] = span
+                    span_end_times[node_id] = end_time_ns
                 else:
                     # Child span - need to use parent context
                     parent_span = spans.get(parent_id)
@@ -201,19 +278,23 @@ class OTELTracer(BaseTracer):
                         )
                         continue
 
-                    # Create child span with parent context
+                    # Create child span with parent context and timing
                     ctx = trace.set_span_in_context(parent_span)
                     span = otel_tracer.start_span(
-                        name=trace_data.get("name", node_id),
+                        name=short_name,  # Use short name for display
                         context=ctx,
                         attributes=attributes,
+                        start_time=start_time_ns,
                     )
                     spans[node_id] = span
+                    span_end_times[node_id] = end_time_ns
 
-            # End all spans (in reverse order - children first)
-            for span in reversed(list(spans.values())):
+            # End all spans with proper end times (in reverse order - children first)
+            for node_id in reversed(list(spans.keys())):
+                span = spans[node_id]
+                end_time = span_end_times.get(node_id)
                 span.set_status(Status(StatusCode.OK))
-                span.end()
+                span.end(end_time=end_time)
 
             # Flush to ensure traces are sent
             client.flush()
@@ -247,4 +328,6 @@ class OTELTracer(BaseTracer):
 
     def __repr__(self) -> str:
         """String representation."""
-        return f"<OTELTracer resource_key={self.resource_key}>"
+        if self._resource_key:
+            return f"<OTELTracer resource_key={self._resource_key}>"
+        return f"<OTELTracer endpoint={self._config.endpoint}>"

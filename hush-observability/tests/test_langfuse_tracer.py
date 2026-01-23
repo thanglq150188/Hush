@@ -238,9 +238,9 @@ def test_langfuse_tracer_flush_with_resource_hub():
                 "output": {"completion": "Test response"},
                 "metadata": {"temperature": 0.7},
                 "usage": {
-                    "input": 10,
-                    "output": 20,
-                    "total": 30,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
                 },
             },
         },

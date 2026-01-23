@@ -119,4 +119,4 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.uv.sources]
-hush-core = { path = "../hush-core" }
+hush-core = { path = "../hush-core", editable = true }

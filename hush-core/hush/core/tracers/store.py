@@ -48,7 +48,8 @@ class TraceStore:
         """Initialize TraceStore.
 
         Args:
-            db_path: Path to SQLite database. Defaults to ~/.hush/traces.db
+            db_path: Path to SQLite database. Defaults to HUSH_TRACES_DB env var
+                     or ~/.hush/traces.db if not set.
         """
         self._db_path = db_path or DEFAULT_DB_PATH
 

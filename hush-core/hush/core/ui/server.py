@@ -10,6 +10,8 @@ Usage:
 Environment variables:
     HUSH_TRACES_DB: Path to traces database (default: ~/.hush/traces.db)
     HUSH_VIEWER_PORT: Server port (default: 8765)
+
+Note: Set HUSH_TRACES_DB to customize the database location.
 """
 
 import os
@@ -18,7 +20,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Default paths
+# Default paths (fallback when HUSH_TRACES_DB is not set)
 DEFAULT_DB_PATH = Path.home() / ".hush" / "traces.db"
 DEFAULT_PORT = 8765
 

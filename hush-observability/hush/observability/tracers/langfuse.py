@@ -5,9 +5,12 @@ ResourceHub to get the LangfuseClient in the subprocess.
 """
 
 import base64
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from hush.core.tracers import BaseTracer, register_tracer
+
+if TYPE_CHECKING:
+    from hush.observability.backends.langfuse import LangfuseConfig
 
 
 @register_tracer
@@ -15,39 +18,57 @@ class LangfuseTracer(BaseTracer):
     """Tracer that sends workflow traces to Langfuse.
 
     This tracer uses subprocess-based flushing to avoid blocking
-    the main workflow execution. It references a LangfuseClient
-    from ResourceHub using a resource_key.
+    the main workflow execution.
 
     Example:
         ```python
-        from hush.observability import LangfuseTracer
+        from hush.observability import LangfuseTracer, LangfuseConfig
 
-        # Use with ResourceHub (recommended)
-        tracer = LangfuseTracer(resource_key="langfuse:vpbank", tags=["prod", "ml-team"])
+        # Simple: Direct config (no ResourceHub needed)
+        tracer = LangfuseTracer(config=LangfuseConfig.from_env())
+
+        # Production: Use ResourceHub for centralized config
+        tracer = LangfuseTracer(resource_key="langfuse:vpbank", tags=["prod"])
 
         # Use with workflow engine
-        workflow = MyWorkflow(tracer=tracer)
-        result = await workflow.run(inputs={...})
-        # Traces are automatically flushed in background
+        result = await engine.run(inputs={...}, tracer=tracer)
         ```
     """
 
-    def __init__(self, resource_key: str = "langfuse:default", tags: Optional[List[str]] = None):
+    def __init__(
+        self,
+        config: Optional["LangfuseConfig"] = None,
+        resource_key: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ):
         """Initialize the Langfuse tracer.
 
         Args:
+            config: Direct LangfuseConfig (simple usage, no ResourceHub needed)
             resource_key: ResourceHub key for LangfuseClient (e.g., "langfuse:vpbank")
             tags: Optional list of static tags for filtering/grouping traces
+
+        Raises:
+            ValueError: If neither config nor resource_key is provided, or both are provided
         """
         super().__init__(tags=tags)
-        self.resource_key = resource_key
+        if config is None and resource_key is None:
+            raise ValueError("Must provide either 'config' or 'resource_key'")
+        if config is not None and resource_key is not None:
+            raise ValueError("Cannot provide both 'config' and 'resource_key'")
+        self._config = config
+        self._resource_key = resource_key
+
+    @property
+    def resource_key(self) -> Optional[str]:
+        """Get the resource key (for backward compatibility)."""
+        return self._resource_key
 
     def _get_tracer_config(self) -> Dict[str, Any]:
-        """Return configuration for subprocess.
-
-        Returns resource_key so subprocess can load client from ResourceHub.
-        """
-        return {"resource_key": self.resource_key}
+        """Return configuration for subprocess."""
+        if self._config is not None:
+            return {"config": self._config.model_dump()}
+        return {"resource_key": self._resource_key}
 
     @staticmethod
     def _resolve_media(
@@ -141,13 +162,16 @@ class LangfuseTracer(BaseTracer):
         from hush.core.loggings import LOGGER
 
         try:
-            from hush.core.registry import get_hub
-
             tracer_config = flush_data["tracer_config"]
-            resource_key = tracer_config["resource_key"]
 
-            # Get LangfuseClient from ResourceHub
-            client = get_hub().langfuse(resource_key)
+            # Get client: direct config or ResourceHub
+            if "config" in tracer_config:
+                from hush.observability.backends.langfuse import LangfuseClient, LangfuseConfig
+                config = LangfuseConfig(**tracer_config["config"])
+                client = LangfuseClient(config)
+            else:
+                from hush.core.registry import get_hub
+                client = get_hub().langfuse(tracer_config["resource_key"])
 
             workflow_name = flush_data["workflow_name"]
             req_id = flush_data["request_id"]
@@ -315,4 +339,6 @@ class LangfuseTracer(BaseTracer):
 
     def __repr__(self) -> str:
         """String representation."""
-        return f"<LangfuseTracer resource_key={self.resource_key}>"
+        if self._resource_key:
+            return f"<LangfuseTracer resource_key={self._resource_key}>"
+        return f"<LangfuseTracer host={self._config.host}>"

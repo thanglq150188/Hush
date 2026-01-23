@@ -1,6 +1,11 @@
-"""Pytest configuration for hush-observability tests."""
+"""Pytest configuration and shared fixtures for hush-observability tests."""
 
 import os
+import uuid
+from datetime import datetime
+from typing import Any, Dict
+
+import pytest
 
 
 def pytest_configure(config):
@@ -10,3 +15,246 @@ def pytest_configure(config):
     """
     # Set terminal width for Rich console output
     os.environ["COLUMNS"] = "200"
+
+    # Register custom markers
+    config.addinivalue_line("markers", "integration: mark test as integration test (requires credentials)")
+
+
+# ============================================================================
+# Test Data Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def sample_request_id():
+    """Generate a unique request ID for testing."""
+    return f"test-{uuid.uuid4()}"
+
+
+@pytest.fixture
+def sample_flush_data(sample_request_id):
+    """Create sample flush data structure for tracer tests."""
+    return {
+        "tracer_type": "LangfuseTracer",
+        "tracer_config": {"resource_key": "langfuse:test"},
+        "workflow_name": "test-workflow",
+        "request_id": sample_request_id,
+        "user_id": "test-user",
+        "session_id": "test-session",
+        "tags": ["test", "unit"],
+        "execution_order": [
+            {
+                "node": "root",
+                "parent": None,
+                "context_id": None,
+                "contain_generation": False,
+            },
+            {
+                "node": "child-1",
+                "parent": "root",
+                "context_id": None,
+                "contain_generation": False,
+            },
+            {
+                "node": "llm-node",
+                "parent": "root",
+                "context_id": None,
+                "contain_generation": True,
+            },
+        ],
+        "nodes_trace_data": {
+            "root": {
+                "name": "test-workflow.root",
+                "start_time": "2024-01-15T10:00:00Z",
+                "end_time": "2024-01-15T10:00:01Z",
+                "input": {"workflow": "test"},
+                "output": {"status": "completed"},
+                "metadata": {"version": "1.0"},
+            },
+            "child-1": {
+                "name": "test-workflow.child-1",
+                "start_time": "2024-01-15T10:00:00.100Z",
+                "end_time": "2024-01-15T10:00:00.500Z",
+                "input": {"step": 1},
+                "output": {"processed": True},
+                "metadata": {},
+            },
+            "llm-node": {
+                "name": "test-workflow.llm-node",
+                "start_time": "2024-01-15T10:00:00.500Z",
+                "end_time": "2024-01-15T10:00:00.900Z",
+                "model": "gpt-4",
+                "input": {"prompt": "Test prompt"},
+                "output": {"completion": "Test response"},
+                "metadata": {"temperature": 0.7},
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
+            },
+        },
+    }
+
+
+@pytest.fixture
+def sample_iteration_flush_data(sample_request_id):
+    """Create flush data with iteration context (MapNode, ForLoop)."""
+    return {
+        "tracer_type": "LangfuseTracer",
+        "tracer_config": {"resource_key": "langfuse:test"},
+        "workflow_name": "iteration-workflow",
+        "request_id": sample_request_id,
+        "user_id": "test-user",
+        "session_id": "test-session",
+        "tags": ["iteration", "test"],
+        "execution_order": [
+            {"node": "root", "parent": None, "context_id": None, "contain_generation": False},
+            {"node": "map_node", "parent": "root", "context_id": None, "contain_generation": False},
+            {"node": "process", "parent": "map_node", "context_id": "[0]", "contain_generation": False},
+            {"node": "process", "parent": "map_node", "context_id": "[1]", "contain_generation": False},
+            {"node": "process", "parent": "map_node", "context_id": "[2]", "contain_generation": False},
+            {"node": "aggregate", "parent": "root", "context_id": None, "contain_generation": False},
+        ],
+        "nodes_trace_data": {
+            "root": {"name": "root", "input": {"items": [1, 2, 3]}, "output": {"result": 6}},
+            "map_node": {"name": "map_node", "input": {}, "output": {}},
+            "process:[0]": {"name": "process", "input": {"item": 1}, "output": {"doubled": 2}},
+            "process:[1]": {"name": "process", "input": {"item": 2}, "output": {"doubled": 4}},
+            "process:[2]": {"name": "process", "input": {"item": 3}, "output": {"doubled": 6}},
+            "aggregate": {"name": "aggregate", "input": {"values": [2, 4, 6]}, "output": {"sum": 12}},
+        },
+    }
+
+
+# ============================================================================
+# Mock Fixtures
+# ============================================================================
+
+
+class MockNode:
+    """Mock node for testing."""
+
+    def __init__(self, node_id: str, contain_generation: bool = False):
+        self.node_id = node_id
+        self.contain_generation = contain_generation
+        self._trace_data = {
+            "name": node_id,
+            "start_time": datetime.now(),
+            "end_time": datetime.now(),
+            "input": {"test": "input"},
+            "output": {"test": "output"},
+            "metadata": {"source": "test"},
+        }
+
+    def trace_data(self, state: Any, context_id: str = None) -> Dict[str, Any]:
+        return self._trace_data
+
+
+class MockIndexer:
+    """Mock indexer for testing."""
+
+    def __init__(self):
+        self._nodes = {}
+
+    def add_node(self, node: MockNode):
+        self._nodes[node.node_id] = node
+
+
+class MockMemoryState:
+    """Mock MemoryState for testing."""
+
+    def __init__(self):
+        self.request_id = str(uuid.uuid4())
+        self.user_id = "test-user"
+        self.session_id = "test-session"
+        self.execution_order = []
+        self.trace_metadata = {}
+        self.tags = []
+        self._indexer = MockIndexer()
+        self.has_trace_store = False
+        self._trace_store = None
+
+    def add_execution(
+        self, node_id: str, parent_id: str = None, context_id: str = None
+    ):
+        """Add an execution to the order."""
+        node = MockNode(node_id)
+        self._indexer.add_node(node)
+        self.execution_order.append(
+            {
+                "node": node_id,
+                "parent": parent_id,
+                "context_id": context_id,
+            }
+        )
+
+
+@pytest.fixture
+def mock_node():
+    """Create a mock node factory."""
+    return MockNode
+
+
+@pytest.fixture
+def mock_state():
+    """Create a mock MemoryState."""
+    return MockMemoryState()
+
+
+# ============================================================================
+# Tracer Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def langfuse_tracer():
+    """Create LangfuseTracer with test resource key."""
+    from hush.observability import LangfuseTracer
+    return LangfuseTracer(resource_key="langfuse:test")
+
+
+@pytest.fixture
+def langfuse_tracer_with_tags():
+    """Create LangfuseTracer with static tags."""
+    from hush.observability import LangfuseTracer
+    return LangfuseTracer(resource_key="langfuse:test", tags=["test", "unit"])
+
+
+@pytest.fixture
+def otel_tracer():
+    """Create OTELTracer with test resource key."""
+    from hush.observability import OTELTracer
+    return OTELTracer(resource_key="otel:test")
+
+
+@pytest.fixture
+def otel_tracer_with_config():
+    """Create OTELTracer with direct config."""
+    from hush.observability import OTELConfig, OTELTracer
+    config = OTELConfig.jaeger()
+    return OTELTracer(config=config)
+
+
+@pytest.fixture
+def local_tracer():
+    """Create LocalTracer for testing."""
+    from hush.core.tracers import LocalTracer
+    return LocalTracer(name="test", tags=["local", "test"])
+
+
+# ============================================================================
+# Session Fixtures
+# ============================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_after_tests():
+    """Cleanup after all tests complete."""
+    yield
+    # Shutdown background worker gracefully
+    try:
+        from hush.core.tracers import BaseTracer
+        BaseTracer.shutdown_executor()
+    except Exception:
+        pass

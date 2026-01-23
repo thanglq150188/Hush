@@ -18,13 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = [
-    "langfuse==2.6.0",
-]
-phoenix = [
-    "arize-phoenix>=4.0.0",
-]
-opik = [
-    "opik>=0.1.0",
+    "langfuse>=2.6.0",
 ]
 otel = [
     "opentelemetry-api>=1.20.0",
@@ -33,9 +27,7 @@ otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
 all = [
-    "langfuse==2.6.0",
-    "arize-phoenix>=4.0.0",
-    "opik>=0.1.0",
+    "langfuse>=2.6.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
@@ -79,6 +71,10 @@ hush-providers = { path = "../hush-providers", editable = true }
 [dependency-groups]
 dev = [
     "langfuse>=2.6.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "pytest>=9.0.1",
     "pytest-asyncio>=0.24.0",
     "python-dotenv>=1.0.0",

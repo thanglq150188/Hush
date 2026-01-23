@@ -5,7 +5,8 @@ This tracer is useful for:
 - Testing the tracing infrastructure
 - Offline trace collection for later analysis
 
-Traces are stored in ~/.hush/traces.db by default.
+Traces are stored in the path specified by HUSH_TRACES_DB env var,
+or ~/.hush/traces.db if not set.
 """
 
 from typing import Any, Dict, List, Optional
@@ -36,7 +37,7 @@ class LocalTracer(BaseTracer):
         engine = Hush(graph)
         result = await engine.run(inputs={...}, tracer=tracer)
 
-        # Traces are now in ~/.hush/traces.db
+        # Traces are now in HUSH_TRACES_DB (default: ~/.hush/traces.db)
         # Query with: SELECT * FROM traces WHERE request_id = '...'
         # Filter by tags: WHERE tags LIKE '%"dev"%'
         ```

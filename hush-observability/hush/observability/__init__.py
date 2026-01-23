@@ -4,24 +4,18 @@ Hush Observability Package
 Backend-agnostic observability with support for multiple tracing frameworks.
 
 This package provides:
-- Backend clients (LangfuseClient, OpikClient, OTELClient, PhoenixClient) registered to ResourceHub
-- Tracers (LangfuseTracer, OpikTracer, OTELTracer, PhoenixTracer) that use ResourceHub to get clients
+- Backend clients (LangfuseClient, OTELClient) registered to ResourceHub
+- Tracers (LangfuseTracer, OTELTracer) that use ResourceHub to get clients
 
 Example:
     ```python
-    from hush.observability import LangfuseTracer, OpikTracer, OTELTracer, PhoenixTracer
+    from hush.observability import LangfuseTracer, OTELTracer
 
     # Langfuse tracer
     tracer = LangfuseTracer(resource_key="langfuse:vpbank")
 
-    # Opik tracer
-    tracer = OpikTracer(resource_key="opik:default")
-
     # OpenTelemetry tracer (exports to Jaeger, Zipkin, etc.)
     tracer = OTELTracer(resource_key="otel:jaeger")
-
-    # Phoenix tracer (open-source LLM observability)
-    tracer = PhoenixTracer(resource_key="phoenix:local")
 
     # Use with workflow
     workflow = MyWorkflow(tracer=tracer)
@@ -36,18 +30,10 @@ Example:
     langfuse = get_hub().langfuse("vpbank")
     prompt = langfuse.get_prompt("my-prompt")
 
-    # Opik client
-    opik = get_hub().opik("default")
-    trace = opik.trace(name="my-trace")
-
     # OpenTelemetry client
     otel = get_hub().otel("jaeger")
     with otel.start_span("my-operation") as span:
         span.set_attribute("key", "value")
-
-    # Phoenix client
-    phoenix = get_hub().phoenix("local")
-    tracer = phoenix.tracer
     ```
 """
 
@@ -58,20 +44,14 @@ from hush.observability.plugin import ObservabilityPlugin  # noqa: F401
 from hush.observability.backends import (
     LangfuseConfig,
     LangfuseClient,
-    OpikConfig,
-    OpikClient,
     OTELConfig,
     OTELClient,
-    PhoenixConfig,
-    PhoenixClient,
 )
 
 # Tracers
 from hush.observability.tracers import (
     LangfuseTracer,
-    OpikTracer,
     OTELTracer,
-    PhoenixTracer,
 )
 
 # Re-export core utilities for convenience
@@ -89,19 +69,13 @@ __version__ = "0.1.0"
 __all__ = [
     # Backends - Configs
     "LangfuseConfig",
-    "OpikConfig",
     "OTELConfig",
-    "PhoenixConfig",
     # Backends - Clients
     "LangfuseClient",
-    "OpikClient",
     "OTELClient",
-    "PhoenixClient",
     # Tracers
     "LangfuseTracer",
-    "OpikTracer",
     "OTELTracer",
-    "PhoenixTracer",
     # Core utilities (re-exported)
     "BaseTracer",
     "register_tracer",

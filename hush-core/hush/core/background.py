@@ -28,6 +28,7 @@ Example:
 import atexit
 import json
 import multiprocessing
+import os
 import signal
 import sqlite3
 import threading
@@ -37,8 +38,8 @@ from pathlib import Path
 from time import time, sleep
 from typing import Any, Dict, List, Optional, Tuple
 
-# Default database path
-DEFAULT_DB_PATH = Path.home() / ".hush" / "traces.db"
+# Default database path - can be overridden via HUSH_TRACES_DB env var
+DEFAULT_DB_PATH = Path(os.environ.get("HUSH_TRACES_DB", Path.home() / ".hush" / "traces.db"))
 
 
 class TaskType(str, Enum):
@@ -117,6 +118,13 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_model ON traces(model) WHERE model IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_cost ON traces(cost_usd) WHERE cost_usd IS NOT NULL;
     """)
+
+    # Migration: Add tags column if it doesn't exist (for databases created before tags support)
+    cursor = conn.execute("PRAGMA table_info(traces)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "tags" not in columns:
+        conn.execute("ALTER TABLE traces ADD COLUMN tags TEXT")
+
     conn.commit()
     return conn
 
@@ -471,10 +479,9 @@ def _dispatch_flush(flush_data: Dict[str, Any]) -> None:
 
     if tracer_type not in _TRACER_REGISTRY:
         try:
-            # Import LangfuseTracer to register it
-            from hush.observability.tracers.langfuse import LangfuseTracer  # noqa: F401
-            # Also import LangfuseConfig and LangfuseClient to register them with ResourceHub
-            from hush.observability import LangfuseConfig, LangfuseClient  # noqa: F401
+            # Import hush.observability to register all external tracers
+            # This registers LangfuseTracer, OTELTracer and their backends
+            import hush.observability  # noqa: F401
         except ImportError:
             pass
 
@@ -646,7 +653,8 @@ class BackgroundProcess:
         """Initialize BackgroundProcess.
 
         Args:
-            db_path: Path to SQLite database. Defaults to ~/.hush/traces.db
+            db_path: Path to SQLite database. Defaults to HUSH_TRACES_DB env var
+                     or ~/.hush/traces.db if not set.
         """
         self._db_path = db_path or DEFAULT_DB_PATH
         self._process: Optional[multiprocessing.Process] = None
