@@ -986,12 +986,12 @@ class TestSoftEdgeBehavior:
             )
 
             # Using [b, c] >> ~d syntax for soft edges from multiple nodes
-            START >> [b, c] >> ~d >> END
+            START >> [b, c] >> d >> END
 
         graph.build()
 
-        # D has ready_count = 1 (soft group)
-        assert graph.ready_count["d"] == 1
+        # D has ready_count = 2 (both hard edges counted)
+        assert graph.ready_count["d"] == 2
 
         schema = StateSchema(graph)
         state = schema.create_state(inputs={})

@@ -3,9 +3,17 @@
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 import pytest
+from dotenv import load_dotenv
+
+# Load .env file from package root
+load_dotenv(Path(__file__).parent.parent / ".env")
+
+# Get config path from environment
+CONFIGS_PATH = Path(os.environ.get("HUSH_CONFIG", ""))
 
 
 def pytest_configure(config):
@@ -246,6 +254,37 @@ def local_tracer():
 # ============================================================================
 # Session Fixtures
 # ============================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_resource_hub():
+    """Setup ResourceHub with configurations for the entire test session."""
+    from hush.core.registry import ResourceHub, set_global_hub
+
+    # Import plugins to auto-register config classes and factory handlers
+    from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
+
+    # Create hub from config file
+    if CONFIGS_PATH.exists():
+        hub = ResourceHub.from_yaml(CONFIGS_PATH)
+        set_global_hub(hub)
+        ResourceHub.set_instance(hub)
+    else:
+        # Create empty hub if no config file
+        hub = ResourceHub()
+        set_global_hub(hub)
+        ResourceHub.set_instance(hub)
+
+    yield hub
+
+    # Cleanup
+    ResourceHub._instance = None
+
+
+@pytest.fixture
+def hub(setup_resource_hub):
+    """Get the ResourceHub instance."""
+    return setup_resource_hub
 
 
 @pytest.fixture(scope="session", autouse=True)
