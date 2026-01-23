@@ -1,10 +1,10 @@
 """Prompt Node for hush-providers.
 
 This module provides PromptNode for building chat messages from templates.
-Flat input design: reserved keys for prompts, everything else is template variables.
+Unified design: single `prompt` input that accepts multiple formats.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 from hush.core.nodes import BaseNode
 from hush.core.configs import NodeType
@@ -13,81 +13,104 @@ from hush.core.utils.common import Param
 
 # Reserved keys that are not template variables
 RESERVED_KEYS = frozenset([
+    'prompt',
+    'conversation_history',
+    'tool_results',
+    # Legacy keys for backward compatibility
     'system_prompt',
     'user_prompt',
     'messages_template',
-    'conversation_history',
-    'tool_results',
 ])
 
 
 class PromptNode(BaseNode):
     """Node for building chat messages from prompt templates.
 
-    Flat input design - reserved keys for prompts, everything else becomes
-    template variables for formatting.
+    Unified design - single `prompt` input that accepts 3 formats:
 
-    Reserved keys:
-    - system_prompt: Optional system prompt template string
-    - user_prompt: User prompt template string
-    - messages_template: Optional list of message dicts (takes precedence)
-    - conversation_history: Optional list of previous messages
-    - tool_results: Optional list of tool results
+    1. **String** → Simple user message
+       ```python
+       prompt = "Hello {name}"  # → [{"role": "user", "content": "Hello Alice"}]
+       ```
 
-    All other input keys are used as template variables.
+    2. **Dict with system/user keys** → System + user messages
+       ```python
+       prompt = {
+           "system": "You are {role}.",
+           "user": "Help with: {task}"
+       }
+       ```
+
+    3. **List** → Full messages array (for multimodal, complex cases)
+       ```python
+       prompt = [
+           {"role": "system", "content": "You are helpful."},
+           {"role": "user", "content": [
+               {"type": "text", "text": "Describe: {query}"},
+               {"type": "image_url", "image_url": {"url": "{image_url}"}}
+           ]}
+       ]
+       ```
+
+    All other input keys are used as template variables for formatting.
 
     Example:
         ```python
-        # Simple usage - flat inputs
+        # Simple usage - string prompt
         prompt = PromptNode(
             name="chat_prompt",
             inputs={
-                "system_prompt": "You are {role}.",
-                "user_prompt": "Help me with: {task}",
-                "role": "Claude",      # template var
-                "task": "coding"       # template var
+                "prompt": "Help me with: {task}",
+                "task": "coding"
             }
         )
 
-        # With PARENT forwarding
+        # Dict prompt with system/user
+        prompt = PromptNode(
+            name="chat_prompt",
+            inputs={
+                "prompt": {"system": "You are {role}.", "user": "{query}"},
+                "role": "helpful",
+                "query": "Hello"
+            }
+        )
+
+        # Dynamic prompt from parent node (Pattern 2)
         prompt = PromptNode(
             name="prompt",
             inputs={
-                "system_prompt": "You are helpful.",
-                "user_prompt": "Query: {query}",
-                "*": PARENT  # forwards query and other vars from parent
+                "prompt": PARENT["generated_prompt"],  # Dynamic from workflow
+                "query": PARENT["query"],
+                "*": PARENT
             }
         )
 
-        # Complex messages_template
+        # With conversation history and tool results
         prompt = PromptNode(
-            name="vision_prompt",
+            name="prompt",
             inputs={
-                "messages_template": [
-                    {"role": "system", "content": "You are a vision expert."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": "Analyze: {query}"},
-                        {"type": "image_url", "image_url": {"url": "{image_url}"}}
-                    ]}
-                ],
-                "query": "What is this?",
-                "image_url": "https://..."
+                "prompt": {"system": "You are helpful.", "user": "{query}"},
+                "conversation_history": PARENT["history"],
+                "tool_results": PARENT["tool_results"],
+                "*": PARENT
             }
         )
         ```
     """
 
-    __slots__ = ['system_prompt', 'user_prompt', 'messages_template']
+    __slots__ = []
 
     type: NodeType = "prompt"
 
     # Fixed input schema - only reserved keys
     INPUT_SCHEMA = {
+        'prompt': Param(type=(str, dict, list), required=False, default=None),
+        'conversation_history': Param(type=list, required=False, default=[]),
+        'tool_results': Param(type=list, required=False, default=[]),
+        # Legacy support
         'system_prompt': Param(type=str, required=False, default=None),
         'user_prompt': Param(type=str, required=False, default=None),
         'messages_template': Param(type=list, required=False, default=None),
-        'conversation_history': Param(type=list, required=False, default=[]),
-        'tool_results': Param(type=list, required=False, default=[]),
     }
 
     # Fixed output schema
@@ -132,47 +155,77 @@ class PromptNode(BaseNode):
         self.inputs = self._merge_params(parsed_inputs, normalized_inputs)
         self.outputs = self._merge_params(parsed_outputs, normalized_outputs)
 
-        # Extract static values for precompilation (optional optimization)
-        self.system_prompt = None
-        self.user_prompt = None
-        self.messages_template = None
-
-        if 'system_prompt' in self.inputs:
-            val = self.inputs['system_prompt'].value
-            if isinstance(val, str):
-                self.system_prompt = val
-
-        if 'user_prompt' in self.inputs:
-            val = self.inputs['user_prompt'].value
-            if isinstance(val, str):
-                self.user_prompt = val
-
-        if 'messages_template' in self.inputs:
-            val = self.inputs['messages_template'].value
-            if isinstance(val, list):
-                self.messages_template = val
-
         # Set core function
         self.core = self._format
 
     def _format_value(self, value: Any, vars: Dict[str, Any]) -> Any:
         """Recursively format template variables in a value."""
         if isinstance(value, str):
-            return value.format_map(vars) if '{' in value else value
+            try:
+                return value.format_map(vars) if '{' in value else value
+            except KeyError:
+                # Return as-is if variable not found
+                return value
         elif isinstance(value, dict):
             return {k: self._format_value(v, vars) for k, v in value.items()}
         elif isinstance(value, list):
             return [self._format_value(item, vars) for item in value]
         return value
 
-    def _build_messages(
+    def _prompt_to_messages(
+        self,
+        prompt: Union[str, Dict, List],
+        vars: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Convert prompt to messages array.
+
+        Args:
+            prompt: Prompt in one of 3 formats (str, dict, list)
+            vars: Template variables for formatting
+
+        Returns:
+            List of message dicts
+        """
+        if prompt is None:
+            return []
+
+        # Form 1: String → user message only
+        if isinstance(prompt, str):
+            content = self._format_value(prompt, vars)
+            return [{"role": "user", "content": content}]
+
+        # Form 2: Dict with system/user keys
+        if isinstance(prompt, dict):
+            messages = []
+
+            # Check for system/user keys (new format)
+            if "system" in prompt or "user" in prompt:
+                if "system" in prompt:
+                    content = self._format_value(prompt["system"], vars)
+                    messages.append({"role": "system", "content": content})
+                if "user" in prompt:
+                    content = self._format_value(prompt["user"], vars)
+                    messages.append({"role": "user", "content": content})
+                return messages
+
+            # Otherwise treat as a single message dict
+            formatted = self._format_value(prompt, vars)
+            return [formatted]
+
+        # Form 3: List → full messages array
+        if isinstance(prompt, list):
+            return [self._format_value(msg, vars) for msg in prompt]
+
+        raise TypeError(f"Invalid prompt type: {type(prompt)}. Expected str, dict, or list.")
+
+    def _build_messages_legacy(
         self,
         system_prompt: Optional[str],
         user_prompt: Optional[str],
         messages_template: Optional[List[Dict]],
         vars: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Build messages from templates and vars."""
+        """Build messages from legacy format (backward compatibility)."""
         messages = []
 
         # messages_template takes precedence
@@ -184,11 +237,11 @@ class PromptNode(BaseNode):
 
         # Build from system_prompt + user_prompt
         if system_prompt:
-            content = system_prompt.format_map(vars) if '{' in system_prompt else system_prompt
+            content = self._format_value(system_prompt, vars)
             messages.append({"role": "system", "content": content})
 
         if user_prompt:
-            content = user_prompt.format_map(vars) if '{' in user_prompt else user_prompt
+            content = self._format_value(user_prompt, vars)
             messages.append({"role": "user", "content": content})
 
         return messages
@@ -199,19 +252,28 @@ class PromptNode(BaseNode):
         Pops reserved keys, uses remaining kwargs as template variables.
         """
         # Pop reserved keys
+        prompt = kwargs.pop('prompt', None)
+        conversation_history = kwargs.pop('conversation_history', None) or []
+        tool_results = kwargs.pop('tool_results', None) or []
+
+        # Legacy keys
         system_prompt = kwargs.pop('system_prompt', None)
         user_prompt = kwargs.pop('user_prompt', None)
         messages_template = kwargs.pop('messages_template', None)
-        conversation_history = kwargs.pop('conversation_history', None) or []
-        tool_results = kwargs.pop('tool_results', None) or []
 
         # Remaining kwargs are template variables
         vars = kwargs
 
-        # Build base messages
-        messages = self._build_messages(
-            system_prompt, user_prompt, messages_template, vars
-        )
+        # Build base messages - prefer new `prompt` format over legacy
+        if prompt is not None:
+            messages = self._prompt_to_messages(prompt, vars)
+        elif system_prompt or user_prompt or messages_template:
+            # Legacy format
+            messages = self._build_messages_legacy(
+                system_prompt, user_prompt, messages_template, vars
+            )
+        else:
+            messages = []
 
         # Insert conversation history before last user message
         if conversation_history:
@@ -236,11 +298,26 @@ class PromptNode(BaseNode):
         """Return prompt-specific metadata."""
         metadata = {}
 
-        if self.system_prompt:
-            metadata["system_prompt"] = self.system_prompt
-        if self.user_prompt:
-            metadata["user_prompt"] = self.user_prompt
-        if self.messages_template:
-            metadata["messages_template"] = self.messages_template
+        # Check for prompt input
+        if 'prompt' in self.inputs:
+            val = self.inputs['prompt'].value
+            if val is not None:
+                metadata["prompt"] = val
+
+        # Legacy metadata
+        if 'system_prompt' in self.inputs:
+            val = self.inputs['system_prompt'].value
+            if isinstance(val, str):
+                metadata["system_prompt"] = val
+
+        if 'user_prompt' in self.inputs:
+            val = self.inputs['user_prompt'].value
+            if isinstance(val, str):
+                metadata["user_prompt"] = val
+
+        if 'messages_template' in self.inputs:
+            val = self.inputs['messages_template'].value
+            if isinstance(val, list):
+                metadata["messages_template"] = val
 
         return metadata

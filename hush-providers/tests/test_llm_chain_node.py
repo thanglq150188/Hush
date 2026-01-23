@@ -174,6 +174,435 @@ class TestLLMChainNode:
             assert metadata["parser"] == "json"
 
 
+class TestLLMChainNodeLoadBalancing:
+    """Tests for LLMChainNode load balancing features."""
+
+    def test_load_balancing_creation(self):
+        """Test creating LLMChainNode with load balancing."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="lb_chain",
+                resource_key=["gpt-4o", "gpt-4o-mini"],
+                ratios=[0.7, 0.3],
+                inputs={
+                    "system_prompt": "You are helpful.",
+                    "user_prompt": "Hello {name}",
+                    "name": "Alice"
+                }
+            )
+
+            assert node.resource_key == ["gpt-4o", "gpt-4o-mini"]
+            assert node.ratios == [0.7, 0.3]
+
+    def test_load_balancing_metadata(self):
+        """Test metadata includes load balancing info."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="lb_metadata_test",
+                resource_key=["gpt-4o", "claude-sonnet"],
+                ratios=[0.6, 0.4],
+                inputs={"user_prompt": "Test"}
+            )
+
+            metadata = node.specific_metadata()
+            assert metadata["resource_key"] == ["gpt-4o", "claude-sonnet"]
+            assert metadata["load_balancing"] is True
+            assert metadata["ratios"] == [0.6, 0.4]
+
+
+class TestLLMChainNodeFallback:
+    """Tests for LLMChainNode fallback features."""
+
+    def test_fallback_creation(self):
+        """Test creating LLMChainNode with fallback."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="fallback_chain",
+                resource_key="gpt-4o",
+                fallback=["claude-sonnet", "gpt-3.5-turbo"],
+                inputs={
+                    "user_prompt": "Hello {name}",
+                    "name": "Alice"
+                }
+            )
+
+            assert node.resource_key == "gpt-4o"
+            assert node.fallback == ["claude-sonnet", "gpt-3.5-turbo"]
+
+    def test_fallback_metadata(self):
+        """Test metadata includes fallback info."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="fallback_metadata_test",
+                resource_key="gpt-4o",
+                fallback=["claude-sonnet"],
+                inputs={"user_prompt": "Test"}
+            )
+
+            metadata = node.specific_metadata()
+            assert metadata["fallback"] == ["claude-sonnet"]
+
+
+class TestLLMChainNodeResponseFormat:
+    """Tests for LLMChainNode response_format (JSON mode) features."""
+
+    def test_response_format_creation(self):
+        """Test creating LLMChainNode with response_format."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="json_chain",
+                resource_key="gpt-4o",
+                response_format={"type": "json_object"},
+                inputs={
+                    "system_prompt": "Return JSON.",
+                    "user_prompt": "Extract entities from: {text}",
+                    "text": "sample"
+                }
+            )
+
+            assert node.response_format == {"type": "json_object"}
+
+    def test_response_format_json_schema(self):
+        """Test creating LLMChainNode with JSON schema response_format."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            json_schema = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "classification",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string"},
+                            "confidence": {"type": "number"}
+                        },
+                        "required": ["category", "confidence"]
+                    }
+                }
+            }
+
+            node = LLMChainNode(
+                name="schema_chain",
+                resource_key="gpt-4o",
+                response_format=json_schema,
+                inputs={"user_prompt": "Classify: {text}", "text": "sample"}
+            )
+
+            assert node.response_format == json_schema
+
+    def test_response_format_metadata(self):
+        """Test metadata includes response_format info."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="rf_metadata_test",
+                resource_key="gpt-4o",
+                response_format={"type": "json_object"},
+                inputs={"user_prompt": "Test"}
+            )
+
+            metadata = node.specific_metadata()
+            assert metadata["response_format"] == {"type": "json_object"}
+
+
+class TestLLMChainNodeCombined:
+    """Tests for LLMChainNode with combined features."""
+
+    def test_combined_load_balancing_and_fallback(self):
+        """Test LLMChainNode with both load balancing and fallback."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="combined_chain",
+                resource_key=["gpt-4o", "gpt-4o-mini"],
+                ratios=[0.8, 0.2],
+                fallback=["claude-sonnet"],
+                inputs={
+                    "user_prompt": "Hello {name}",
+                    "name": "Alice"
+                }
+            )
+
+            assert node.resource_key == ["gpt-4o", "gpt-4o-mini"]
+            assert node.ratios == [0.8, 0.2]
+            assert node.fallback == ["claude-sonnet"]
+
+            metadata = node.specific_metadata()
+            assert metadata["load_balancing"] is True
+            assert metadata["ratios"] == [0.8, 0.2]
+            assert metadata["fallback"] == ["claude-sonnet"]
+
+    def test_all_features_combined(self):
+        """Test LLMChainNode with all new features."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="full_chain",
+                resource_key=["gpt-4o", "gpt-4o-mini"],
+                ratios=[0.7, 0.3],
+                fallback=["claude-sonnet"],
+                response_format={"type": "json_object"},
+                extract_schema=["result: str"],
+                parser="json",
+                inputs={
+                    "system_prompt": "Return JSON.",
+                    "user_prompt": "Process: {text}",
+                    "text": "sample"
+                }
+            )
+
+            metadata = node.specific_metadata()
+            assert metadata["resource_key"] == ["gpt-4o", "gpt-4o-mini"]
+            assert metadata["load_balancing"] is True
+            assert metadata["ratios"] == [0.7, 0.3]
+            assert metadata["fallback"] == ["claude-sonnet"]
+            assert metadata["response_format"] == {"type": "json_object"}
+            assert metadata["extract_schema"] == ["result: str"]
+            assert metadata["parser"] == "json"
+
+
+class TestLLMChainNodeUnifiedPrompt:
+    """Tests for LLMChainNode with unified prompt parameter."""
+
+    def test_string_prompt(self):
+        """Test LLMChainNode with string prompt (user message only)."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="string_prompt_chain",
+                resource_key="gpt-4",
+                inputs={
+                    "prompt": "Hello {name}, help me with {task}.",
+                    "name": "Alice",
+                    "task": "coding"
+                }
+            )
+
+            assert node.name == "string_prompt_chain"
+            assert node.resource_key == "gpt-4"
+
+    def test_dict_prompt_with_system_user(self):
+        """Test LLMChainNode with dict prompt containing system/user keys."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="dict_prompt_chain",
+                resource_key="gpt-4",
+                inputs={
+                    "prompt": {
+                        "system": "You are a {role}.",
+                        "user": "Help with: {task}"
+                    },
+                    "role": "helpful assistant",
+                    "task": "coding"
+                }
+            )
+
+            assert node.name == "dict_prompt_chain"
+            assert "prompt" in node._nodes
+
+    def test_list_prompt_multimodal(self):
+        """Test LLMChainNode with list prompt (full messages array)."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="list_prompt_chain",
+                resource_key="gpt-4o",
+                inputs={
+                    "prompt": [
+                        {"role": "system", "content": "You are a vision expert."},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "Analyze: {query}"},
+                            {"type": "image_url", "image_url": {"url": "{image_url}"}}
+                        ]}
+                    ],
+                    "query": "What is this?",
+                    "image_url": "https://example.com/image.png"
+                }
+            )
+
+            assert node.name == "list_prompt_chain"
+
+    def test_unified_prompt_with_load_balancing(self):
+        """Test unified prompt with load balancing features."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="unified_lb_chain",
+                resource_key=["gpt-4o", "gpt-4o-mini"],
+                ratios=[0.7, 0.3],
+                fallback=["claude-sonnet"],
+                inputs={
+                    "prompt": {"system": "You are helpful.", "user": "{query}"},
+                    "query": "Hello"
+                }
+            )
+
+            assert node.resource_key == ["gpt-4o", "gpt-4o-mini"]
+            assert node.ratios == [0.7, 0.3]
+            assert node.fallback == ["claude-sonnet"]
+
+    def test_unified_prompt_with_json_mode(self):
+        """Test unified prompt with JSON response_format."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="unified_json_chain",
+                resource_key="gpt-4o",
+                response_format={"type": "json_object"},
+                inputs={
+                    "prompt": {"user": "Classify and return JSON: {text}"},
+                    "text": "sample"
+                }
+            )
+
+            assert node.response_format == {"type": "json_object"}
+
+    def test_unified_prompt_with_extract_schema(self):
+        """Test unified prompt with structured output parsing."""
+        from hush.providers.nodes import LLMChainNode
+
+        with patch('hush.providers.nodes.llm.ResourceHub') as mock_hub:
+            mock_instance = Mock()
+            mock_instance.llm.return_value = Mock(
+                generate=AsyncMock(),
+                stream=AsyncMock()
+            )
+            mock_hub.instance.return_value = mock_instance
+
+            node = LLMChainNode(
+                name="unified_parser_chain",
+                resource_key="gpt-4",
+                inputs={
+                    "prompt": {"user": "Classify: {text}\n<category>...</category>"},
+                    "text": "sample"
+                },
+                extract_schema=["category: str", "confidence: float"],
+                parser="xml"
+            )
+
+            assert node.extract_schema == ["category: str", "confidence: float"]
+            assert "parser" in node._nodes
+
+
 class TestLLMChainNodeIntegration:
     """Integration tests for LLMChainNode with real ResourceHub."""
 
@@ -183,13 +612,12 @@ class TestLLMChainNodeIntegration:
         from hush.providers.nodes import LLMChainNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if or-claude-4-sonnet is available
-        if not hub.has("llm:or-claude-4-sonnet"):
-            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
 
         node = LLMChainNode(
             name="simple_chain",
-            resource_key="or-claude-4-sonnet",
+            resource_key="gpt-4o",
             inputs={
                 "system_prompt": "You are a helpful assistant.",
                 "user_prompt": "Say hello to {name} in one sentence.",
@@ -211,13 +639,12 @@ class TestLLMChainNodeIntegration:
         from hush.providers.nodes import LLMChainNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if or-claude-4-sonnet is available
-        if not hub.has("llm:or-claude-4-sonnet"):
-            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
 
         node = LLMChainNode(
             name="structured_chain",
-            resource_key="or-claude-4-sonnet",
+            resource_key="gpt-4o",
             inputs={
                 "user_prompt": """Classify the sentiment of this text: "{text}"
 
@@ -238,6 +665,290 @@ Output your response in XML format:
         assert "sentiment" in result
         assert "confidence" in result
         print(f"Sentiment: {result['sentiment']}, Confidence: {result['confidence']}")
+
+    @pytest.mark.asyncio
+    async def test_llm_chain_json_mode(self, hub):
+        """Test LLMChainNode with JSON response_format."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+        import json
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="json_chain",
+            resource_key="gpt-4o",
+            response_format={"type": "json_object"},
+            inputs={
+                "system_prompt": "You are a helpful assistant that always responds in JSON format.",
+                "user_prompt": "List 3 programming languages with their year of creation. Return as JSON with 'languages' array.",
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        # Verify it's valid JSON
+        parsed = json.loads(result["content"])
+        assert isinstance(parsed, dict)
+        print(f"JSON response: {parsed}")
+
+    @pytest.mark.asyncio
+    async def test_llm_chain_json_schema(self, hub):
+        """Test LLMChainNode with JSON schema response_format."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+        import json
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="schema_chain",
+            resource_key="gpt-4o",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "language_info",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "year": {"type": "integer"},
+                            "paradigm": {"type": "string"}
+                        },
+                        "required": ["name", "year", "paradigm"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            inputs={
+                "user_prompt": "Give me info about Python programming language."
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        parsed = json.loads(result["content"])
+        assert "name" in parsed
+        assert "year" in parsed
+        assert "paradigm" in parsed
+        print(f"Structured JSON: {parsed}")
+
+    @pytest.mark.asyncio
+    async def test_llm_chain_load_balancing(self, hub):
+        """Test LLMChainNode with load balancing."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        # Use same model twice to test load balancing mechanism
+        node = LLMChainNode(
+            name="lb_chain",
+            resource_key=["gpt-4o", "gpt-4o"],  # Same model for testing
+            ratios=[0.5, 0.5],
+            inputs={
+                "system_prompt": "You are helpful.",
+                "user_prompt": "Say 'hello' in one word."
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        assert "model_used" in result
+        print(f"Load balanced response: {result['content']}")
+        print(f"Model used: {result['model_used']}")
+
+    @pytest.mark.asyncio
+    async def test_llm_chain_with_fallback(self, hub):
+        """Test LLMChainNode with fallback configuration."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        # Primary should work, fallback shouldn't be needed
+        node = LLMChainNode(
+            name="fallback_chain",
+            resource_key="gpt-4o",
+            fallback=["gpt-4o"],  # Same as fallback for testing
+            inputs={
+                "system_prompt": "You are helpful.",
+                "user_prompt": "Say 'test' in one word."
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        print(f"Fallback chain response: {result['content']}")
+
+    @pytest.mark.asyncio
+    async def test_llm_chain_combined_features(self, hub):
+        """Test LLMChainNode with load balancing + JSON mode combined."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+        import json
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="combined_chain",
+            resource_key=["gpt-4o", "gpt-4o"],
+            ratios=[0.5, 0.5],
+            response_format={"type": "json_object"},
+            inputs={
+                "system_prompt": "You respond in JSON format only.",
+                "user_prompt": "Return a JSON object with 'greeting' key containing 'hello'."
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        parsed = json.loads(result["content"])
+        assert "greeting" in parsed
+        print(f"Combined features response: {parsed}")
+
+    @pytest.mark.asyncio
+    async def test_unified_string_prompt_generation(self, hub):
+        """Test LLMChainNode with unified string prompt."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="string_prompt_chain",
+            resource_key="gpt-4o",
+            inputs={
+                "prompt": "Say hello to {name} in one sentence.",
+                "name": "Bob"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        print(f"String prompt response: {result['content']}")
+
+    @pytest.mark.asyncio
+    async def test_unified_dict_prompt_generation(self, hub):
+        """Test LLMChainNode with unified dict prompt (system + user)."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="dict_prompt_chain",
+            resource_key="gpt-4o",
+            inputs={
+                "prompt": {
+                    "system": "You are a friendly assistant who speaks like a {style}.",
+                    "user": "Greet {name}."
+                },
+                "style": "pirate",
+                "name": "Captain Jack"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        print(f"Dict prompt response: {result['content']}")
+
+    @pytest.mark.asyncio
+    async def test_unified_prompt_with_json_mode(self, hub):
+        """Test unified prompt combined with JSON response mode."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+        import json
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="unified_json_chain",
+            resource_key="gpt-4o",
+            response_format={"type": "json_object"},
+            inputs={
+                "prompt": {
+                    "system": "You always respond in JSON format.",
+                    "user": "Return a JSON with 'message' key saying hello to {name}."
+                },
+                "name": "World"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        parsed = json.loads(result["content"])
+        assert "message" in parsed
+        print(f"Unified JSON response: {parsed}")
+
+    @pytest.mark.asyncio
+    async def test_unified_prompt_with_load_balancing(self, hub):
+        """Test unified prompt with load balancing."""
+        from hush.providers.nodes import LLMChainNode
+        from hush.core.states import StateSchema, MemoryState
+
+        if not hub.has("llm:gpt-4o"):
+            pytest.skip("llm:gpt-4o not configured in resources.yaml")
+
+        node = LLMChainNode(
+            name="unified_lb_chain",
+            resource_key=["gpt-4o", "gpt-4o"],
+            ratios=[0.5, 0.5],
+            inputs={
+                "prompt": {"system": "You are helpful.", "user": "Say '{word}' in one word."},
+                "word": "test"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        assert "content" in result
+        assert "model_used" in result
+        print(f"Unified LB response: {result['content']}")
 
 
 if __name__ == "__main__":
