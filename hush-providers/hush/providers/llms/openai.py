@@ -4,6 +4,7 @@ from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.chat.chat_completion import ChatCompletion
 from typing import List, AsyncGenerator, Optional, Sequence, Union
 from hush.providers.llms.config import LLMConfig, OpenAIConfig
+from hush.core import LOGGER
 from .base import BaseLLM
 import httpx
 import asyncio
@@ -95,11 +96,12 @@ class OpenAISDKModel(BaseLLM):
             - Local image file paths are automatically converted to base64 data URLs
             - Chinese character detection covers CJK Unified Ideographs (U+4E00-U+9FFF)
         """
-        # Prepare parameters
+        # Prepare parameters with stream_options for token usage
         params = self._prepare_params(
             model=self.config.model,
             messages=messages,
             stream=True,
+            stream_options={"include_usage": True},  # Always include token usage
             temperature=temperature,
             top_p=top_p,
             n=n,
@@ -249,6 +251,301 @@ class OpenAISDKModel(BaseLLM):
         """Clean up resources"""
         await self.client.close()
         await self.http_client.aclose()
+
+    # =========================================================================
+    # Batch API Methods
+    # =========================================================================
+
+    async def batch_create(
+        self,
+        requests: List[dict],
+        metadata: Optional[dict] = None,
+        completion_window: str = "24h"
+    ) -> dict:
+        """Create a batch job with multiple requests.
+
+        Args:
+            requests: List of request dicts, each containing:
+                - custom_id: Unique identifier for the request
+                - method: HTTP method (usually "POST")
+                - url: API endpoint (e.g., "/v1/chat/completions")
+                - body: Request body with messages, model, etc.
+            metadata: Optional metadata for the batch job
+            completion_window: Time window for completion ("24h")
+
+        Returns:
+            dict: Batch job info including batch_id, status, etc.
+        """
+        import json
+        import tempfile
+
+        # Create JSONL content
+        jsonl_content = "\n".join(json.dumps(req) for req in requests)
+
+        # Upload file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+            f.write(jsonl_content)
+            temp_path = f.name
+
+        try:
+            with open(temp_path, 'rb') as f:
+                file_response = await self.client.files.create(
+                    file=f,
+                    purpose="batch"
+                )
+
+            # Create batch job
+            batch = await self.client.batches.create(
+                input_file_id=file_response.id,
+                endpoint="/v1/chat/completions",
+                completion_window=completion_window,
+                metadata=metadata
+            )
+
+            return batch.model_dump()
+
+        finally:
+            # Cleanup temp file
+            import os as _os
+            _os.unlink(temp_path)
+
+    async def batch_status(self, batch_id: str) -> dict:
+        """Check the status of a batch job.
+
+        Args:
+            batch_id: The batch job ID
+
+        Returns:
+            dict: Batch status info including status, request_counts, etc.
+        """
+        batch = await self.client.batches.retrieve(batch_id)
+        return batch.model_dump()
+
+    async def batch_retrieve(self, batch_id: str) -> List[dict]:
+        """Retrieve results from a completed batch job.
+
+        Args:
+            batch_id: The batch job ID
+
+        Returns:
+            List[dict]: List of results, each containing custom_id and response
+        """
+        import json
+
+        # Get batch status to get output file ID
+        batch = await self.client.batches.retrieve(batch_id)
+
+        if batch.status != "completed":
+            raise ValueError(f"Batch not completed. Status: {batch.status}")
+
+        if not batch.output_file_id:
+            raise ValueError("No output file available")
+
+        # Download output file
+        file_response = await self.client.files.content(batch.output_file_id)
+        content = file_response.text
+
+        # Parse JSONL results
+        results = []
+        for line in content.strip().split("\n"):
+            if line:
+                results.append(json.loads(line))
+
+        return results
+
+    async def batch_cancel(self, batch_id: str) -> dict:
+        """Cancel a batch job.
+
+        Args:
+            batch_id: The batch job ID
+
+        Returns:
+            dict: Updated batch info
+        """
+        batch = await self.client.batches.cancel(batch_id)
+        return batch.model_dump()
+
+    async def submit_batch(
+        self,
+        batch_messages: List[List[ChatCompletionMessageParam]],
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, Sequence[str]]] = None,
+        max_tokens: Optional[int] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[dict] = None,
+        tools: Optional[dict] = None,
+        **kwargs
+    ) -> dict:
+        """Submit batch job and return immediately (non-blocking).
+
+        Use this for fire-and-forget batch jobs. Check status later with
+        batch_status() and retrieve results with batch_retrieve().
+
+        Args:
+            batch_messages: List of message lists, each representing a conversation
+            temperature: Controls randomness (0.0-2.0)
+            top_p: Nucleus sampling threshold (0.0-1.0)
+            **kwargs: Additional parameters
+
+        Returns:
+            dict: Batch info including 'id' (batch_id) for later retrieval
+                  Keys: id, status, request_counts, created_at, etc.
+        """
+        import uuid
+
+        # Build batch requests
+        requests = []
+        for idx, messages in enumerate(batch_messages):
+            custom_id = f"request-{idx}-{uuid.uuid4().hex[:8]}"
+            body = {
+                "model": self.config.model,
+                "messages": [self.resolve_image_paths(msg) for msg in messages],
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+            if n is not None:
+                body["n"] = n
+            if stop is not None:
+                body["stop"] = stop
+            if max_tokens is not None:
+                body["max_tokens"] = max_tokens
+            if frequency_penalty is not None:
+                body["frequency_penalty"] = frequency_penalty
+            if presence_penalty is not None:
+                body["presence_penalty"] = presence_penalty
+            if response_format is not None:
+                body["response_format"] = response_format
+            if tools is not None:
+                body["tools"] = tools
+
+            requests.append({
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": body
+            })
+
+        # Create and return batch job info immediately
+        batch_info = await self.batch_create(requests)
+        LOGGER.warning(f"Batch {batch_info['id']} | Submitted {len(requests)} requests")
+        return batch_info
+
+    async def wait_for_batch(
+        self,
+        batch_id: str,
+        poll_interval: float = 10.0,
+        timeout: float = 86400.0
+    ) -> List[ChatCompletion]:
+        """Wait for a batch job to complete and retrieve results.
+
+        Use this after submit_batch() to wait and get results.
+
+        Args:
+            batch_id: The batch ID from submit_batch()
+            poll_interval: Seconds between status checks
+            timeout: Maximum wait time in seconds
+
+        Returns:
+            List[ChatCompletion]: Results in order of submission
+        """
+        import time
+
+        start_time = time.time()
+
+        while True:
+            status = await self.batch_status(batch_id)
+            batch_status = status["status"]
+            request_counts = status.get("request_counts", {})
+            completed = request_counts.get("completed", 0)
+            total = request_counts.get("total", 0)
+            failed = request_counts.get("failed", 0)
+            elapsed = time.time() - start_time
+
+            LOGGER.warning(
+                f"Batch {batch_id} | Status: {batch_status} | "
+                f"Progress: {completed}/{total} | "
+                f"Failed: {failed} | Elapsed: {elapsed:.1f}s"
+            )
+
+            if batch_status == "completed":
+                LOGGER.warning(f"Batch {batch_id} | Completed in {elapsed:.1f}s")
+                break
+            elif batch_status in ("failed", "expired", "cancelled"):
+                raise RuntimeError(f"Batch job {batch_status}: {status}")
+
+            if elapsed > timeout:
+                await self.batch_cancel(batch_id)
+                raise TimeoutError(f"Batch job timed out after {timeout}s")
+
+            await asyncio.sleep(poll_interval)
+
+        # Retrieve and parse results
+        results = await self.batch_retrieve(batch_id)
+
+        # Convert to ChatCompletion objects
+        ordered_results = []
+        for result in sorted(results, key=lambda r: r["custom_id"]):
+            if result.get("response", {}).get("body"):
+                completion = ChatCompletion.model_validate(result["response"]["body"])
+                ordered_results.append(completion)
+            elif result.get("error"):
+                raise RuntimeError(f"Request {result['custom_id']} failed: {result['error']}")
+
+        return ordered_results
+
+    async def generate_batch(
+        self,
+        batch_messages: List[List[ChatCompletionMessageParam]],
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, Sequence[str]]] = None,
+        max_tokens: Optional[int] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[dict] = None,
+        tools: Optional[dict] = None,
+        poll_interval: float = 10.0,
+        timeout: float = 86400.0,
+        **kwargs
+    ) -> List[ChatCompletion]:
+        """Generate completions for multiple message lists using Batch API.
+
+        Convenience method that submits and waits for results.
+        Uses submit_batch() + wait_for_batch() internally.
+
+        Args:
+            batch_messages: List of message lists, each representing a conversation
+            temperature: Controls randomness (0.0-2.0)
+            top_p: Nucleus sampling threshold (0.0-1.0)
+            poll_interval: Seconds between status checks (default: 10.0)
+            timeout: Maximum wait time in seconds (default: 86400 = 24h)
+            **kwargs: Additional parameters
+
+        Returns:
+            List[ChatCompletion]: Results in same order as input
+        """
+        batch_info = await self.submit_batch(
+            batch_messages=batch_messages,
+            temperature=temperature,
+            top_p=top_p,
+            n=n,
+            stop=stop,
+            max_tokens=max_tokens,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            response_format=response_format,
+            tools=tools,
+            **kwargs
+        )
+        return await self.wait_for_batch(
+            batch_id=batch_info["id"],
+            poll_interval=poll_interval,
+            timeout=timeout
+        )
 
 
 async def main():

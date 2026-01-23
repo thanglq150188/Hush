@@ -116,11 +116,20 @@ class OpenAIConfig(LLMConfig):
         api_key: Authentication key for the OpenAI API
         base_url: Base URL for API requests
         model: Name of the model to use
+        batch_size: Maximum requests per batch job (default: 50000, OpenAI limit)
+        batch_flush_interval: Seconds before auto-flushing pending batch requests (default: 60.0)
+        batch_poll_interval: Seconds between batch status checks (default: 30.0)
+        batch_timeout: Maximum wait time for batch completion in seconds (default: 86400 = 24h)
     """
     api_type: LLMType = LLMType.OPENAI  # Auto-assigned
     api_key: str
     base_url: str
     model: str
+    # Batch API configuration
+    batch_size: int = 50000
+    batch_flush_interval: float = 60.0
+    batch_poll_interval: float = 30.0
+    batch_timeout: float = 86400.0
 
 
 class AzureConfig(LLMConfig):
