@@ -35,7 +35,7 @@ class LLMNode(BaseNode):
                 name="chat",
                 resource_key="gpt-4",
                 inputs={"messages": PARENT["messages"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> llm >> END
 
@@ -92,9 +92,11 @@ class LLMNode(BaseNode):
             "error_message": Param(type=str, default=None),
         }
 
-        # Merge with user-provided
-        self.inputs = self._merge_params(input_schema, inputs)
-        self.outputs = self._merge_params(output_schema, outputs)
+        # Normalize and merge with user-provided
+        normalized_inputs = self._normalize_params(inputs)
+        normalized_outputs = self._normalize_params(outputs)
+        self.inputs = self._merge_params(input_schema, normalized_inputs)
+        self.outputs = self._merge_params(output_schema, normalized_outputs)
 
         # Set up LLM backend
         if not self.instant_response:
@@ -115,7 +117,8 @@ class LLMNode(BaseNode):
     async def run(
         self,
         state: 'MemoryState',
-        context_id: Optional[str] = None
+        context_id: Optional[str] = None,
+        parent_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """Run the LLM node with streaming support via STREAM_SERVICE.
 

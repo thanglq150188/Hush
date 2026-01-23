@@ -111,13 +111,13 @@ class TestLLMNodeIntegration:
         from hush.providers.nodes import LLMNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if claude-4-sonnet is available
-        if not hub.has("llm:claude-4-sonnet"):
-            pytest.skip("llm:claude-4-sonnet not configured in resources.yaml")
+        # Check if or-claude-4-sonnet is available
+        if not hub.has("llm:or-claude-4-sonnet"):
+            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
 
         node = LLMNode(
             name="chat",
-            resource_key="claude-4-sonnet"
+            resource_key="or-claude-4-sonnet"
         )
 
         schema = StateSchema(node=node)
@@ -139,13 +139,13 @@ class TestLLMNodeIntegration:
         from hush.core.states import StateSchema, MemoryState
         from hush.core import STREAM_SERVICE
 
-        # Check if claude-4-sonnet is available
-        if not hub.has("llm:claude-4-sonnet"):
-            pytest.skip("llm:claude-4-sonnet not configured in resources.yaml")
+        # Check if or-claude-4-sonnet is available
+        if not hub.has("llm:or-claude-4-sonnet"):
+            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
 
         node = LLMNode(
             name="stream_chat",
-            resource_key="claude-4-sonnet",
+            resource_key="or-claude-4-sonnet",
             stream=True
         )
 

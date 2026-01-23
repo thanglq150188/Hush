@@ -27,7 +27,7 @@ class EmbeddingNode(BaseNode):
                 name="embed",
                 resource_key="bge-m3",
                 inputs={"texts": PARENT["texts"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> embed >> END
 

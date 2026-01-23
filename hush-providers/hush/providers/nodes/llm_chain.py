@@ -35,26 +35,22 @@ class LLMChainNode(GraphNode):
        - Parses the LLM output into structured data based on extract_schema
        - Returns parsed structured data
 
-    Features:
-    - Auto-variable detection from prompt templates
-    - Flexible prompting with system and user prompts
-    - Support for complex message templates (multi-turn, images)
-    - Streaming support
-    - Parser integration for structured outputs
-
     Example:
         ```python
         from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
         from hush.providers.nodes import LLMChainNode
 
-        # Simple text generation
+        # Simple text generation - prompts passed via inputs
         with WorkflowEngine(name="chat") as workflow:
             chain = LLMChainNode(
                 name="summarizer",
                 resource_key="gpt-4",
-                system_prompt="You are a helpful summarization assistant.",
-                user_prompt="Summarize: {text}",
-                inputs={"text": INPUT},
+                inputs={
+                    "system_prompt": "You are a helpful summarization assistant.",
+                    "user_prompt": "Summarize: {text}",
+                    "text": INPUT,
+                    "*": PARENT
+                },
                 outputs={"content": OUTPUT}
             )
             START >> chain >> END
@@ -64,10 +60,13 @@ class LLMChainNode(GraphNode):
             chain = LLMChainNode(
                 name="classifier",
                 resource_key="gpt-4",
-                user_prompt="Classify this text: {text}\\n\\nOutput XML: <category>...</category><confidence>...</confidence>",
                 extract_schema=["category: str", "confidence: float"],
                 parser="xml",
-                inputs={"text": INPUT},
+                inputs={
+                    "user_prompt": "Classify: {text}\\n<category>...</category>",
+                    "text": INPUT,
+                    "*": PARENT
+                },
                 outputs=OUTPUT
             )
             START >> chain >> END
@@ -76,9 +75,6 @@ class LLMChainNode(GraphNode):
 
     __slots__ = [
         'resource_key',
-        'user_prompt',
-        'system_prompt',
-        'messages_template',
         'extract_schema',
         'parser',
         'enable_thinking'
@@ -89,9 +85,6 @@ class LLMChainNode(GraphNode):
     def __init__(
         self,
         resource_key: Optional[str] = None,
-        user_prompt: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        messages_template: Optional[List[Dict[str, Any]]] = None,
         extract_schema: Optional[List[str]] = None,
         parser: str = "xml",
         enable_thinking: bool = False,
@@ -101,21 +94,17 @@ class LLMChainNode(GraphNode):
 
         Args:
             resource_key: Resource key for LLM in ResourceHub (e.g., "gpt-4")
-            user_prompt: User prompt template with {variable} placeholders
-            system_prompt: System prompt template with {variable} placeholders
-            messages_template: Complex message template for multi-turn conversations
             extract_schema: List of output variables for structured parsing
                            (e.g., ["category: str", "confidence: float"])
             parser: Parser format for structured output ("xml", "json", "yaml")
             enable_thinking: Whether to enable thinking mode in the LLM
             **kwargs: Additional keyword arguments for GraphNode
+                     - inputs: Should include system_prompt, user_prompt, or
+                       messages_template along with {"*": PARENT} for forwarding
         """
         super().__init__(**kwargs)
 
         self.resource_key = resource_key
-        self.user_prompt = user_prompt
-        self.system_prompt = system_prompt
-        self.messages_template = messages_template
         self.extract_schema = extract_schema
         self.parser = parser
         self.enable_thinking = enable_thinking
@@ -126,13 +115,10 @@ class LLMChainNode(GraphNode):
     def _build_graph(self):
         """Build the internal processing graph based on configuration."""
         with self:
-            # Step 1: Create prompt formatting node
+            # Step 1: Create prompt formatting node - forwards all inputs from parent
             _prompt = PromptNode(
                 name="prompt",
-                system_prompt=self.system_prompt,
-                user_prompt=self.user_prompt,
-                messages_template=self.messages_template,
-                inputs=PARENT
+                inputs={"*": PARENT}
             )
 
             if self.extract_schema:
@@ -148,7 +134,7 @@ class LLMChainNode(GraphNode):
                     format=self.parser,
                     extract_schema=self.extract_schema,
                     inputs={"text": _llm["content"]},
-                    outputs=PARENT
+                    outputs={"*": PARENT}
                 )
 
                 START >> _prompt >> _llm >> _parser >> END
@@ -159,7 +145,7 @@ class LLMChainNode(GraphNode):
                     name="llm",
                     resource_key=self.resource_key,
                     inputs={"messages": _prompt["messages"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                     stream=getattr(self, 'stream', False)
                 )
 
@@ -172,18 +158,10 @@ class LLMChainNode(GraphNode):
         """Return LLMChainNode-specific metadata."""
         metadata = {
             "resource_key": self.resource_key,
-            "parser": self.parser if self.extract_schema else None
         }
-
-        if self.messages_template:
-            metadata["messages_template"] = self.messages_template
-        else:
-            if self.system_prompt:
-                metadata["system_prompt"] = self.system_prompt
-            if self.user_prompt:
-                metadata["user_prompt"] = self.user_prompt
 
         if self.extract_schema:
             metadata["extract_schema"] = self.extract_schema
+            metadata["parser"] = self.parser
 
         return {k: v for k, v in metadata.items() if v is not None}

@@ -61,7 +61,7 @@ class TestCodeNodeWorkflow:
                 name="processor",
                 code_fn=lambda text: {"processed": text.upper(), "length": len(text)},
                 inputs={"text": PARENT["text"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> code >> END
 
@@ -82,7 +82,7 @@ class TestCodeNodeWorkflow:
                 name="adder",
                 code_fn=lambda a, b: {"sum": a + b},
                 inputs={"a": PARENT["a"], "b": PARENT["b"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> code >> END
 
@@ -123,7 +123,7 @@ class TestCodeNodeWorkflow:
         with GraphNode(name="chained-workflow") as graph:
             node1 = CodeNode(name="double", code_fn=lambda x: {"y": x * 2}, inputs={"x": PARENT["x"]})
             node2 = CodeNode(name="add_ten", code_fn=lambda y: {"z": y + 10}, inputs={"y": node1["y"]})
-            node3 = CodeNode(name="square", code_fn=lambda z: {"result": z ** 2}, inputs={"z": node2["z"]}, outputs=PARENT)
+            node3 = CodeNode(name="square", code_fn=lambda z: {"result": z ** 2}, inputs={"z": node2["z"]}, outputs={"*": PARENT})
 
             START >> node1 >> node2 >> node3 >> END
 
@@ -158,14 +158,14 @@ class TestBranchNodeWorkflow:
                 name="high_path",
                 code_fn=lambda score: {"grade": "A", "message": "Excellent!"},
                 inputs={"score": PARENT["score"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             low = CodeNode(
                 name="low_path",
                 code_fn=lambda score: {"grade": "F", "message": "Try harder!"},
                 inputs={"score": PARENT["score"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> branch
@@ -198,13 +198,13 @@ class TestBranchNodeWorkflow:
                 name="positive",
                 code_fn=lambda value: {"output": value},
                 inputs={"value": PARENT["value"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             neg = CodeNode(
                 name="negative",
                 code_fn=lambda value: {"output": value},
                 inputs={"value": PARENT["value"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> branch
@@ -252,7 +252,7 @@ class TestParserNodeWorkflow:
                 format="xml",
                 extract_schema=["category: str", "confidence: str"],
                 inputs={"text": generator["response"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> generator >> parser >> END
@@ -278,7 +278,7 @@ class TestParserNodeWorkflow:
                 format="json",
                 extract_schema=["name: str", "age: str"],
                 inputs={"text": generator["json_str"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> generator >> parser >> END
@@ -306,7 +306,7 @@ class TestLangfuseTracerIntegration:
                 name="doubler",
                 code_fn=lambda x: {"y": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -336,7 +336,7 @@ class TestLangfuseTracerIntegration:
                 name="doubler",
                 code_fn=lambda value: {"doubled": value * 2},
                 inputs={"value": PARENT["value"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -423,7 +423,7 @@ class TestComplexWorkflow:
         with GraphNode(name="full-trace-workflow") as graph:
             a = CodeNode(name="step_a", code_fn=lambda x: {"a_out": x + 1}, inputs={"x": PARENT["x"]})
             b = CodeNode(name="step_b", code_fn=lambda y: {"b_out": y * 2}, inputs={"y": a["a_out"]})
-            c = CodeNode(name="step_c", code_fn=lambda z: {"c_out": z ** 2}, inputs={"z": b["b_out"]}, outputs=PARENT)
+            c = CodeNode(name="step_c", code_fn=lambda z: {"c_out": z ** 2}, inputs={"z": b["b_out"]}, outputs={"*": PARENT})
 
             START >> a >> b >> c >> END
 
@@ -458,7 +458,7 @@ class TestComplexWorkflow:
                 name="multiplier",
                 code_fn=lambda a, b: {"product": a * b},
                 inputs={"a": PARENT["a"], "b": PARENT["b"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -500,7 +500,7 @@ class TestLLMNodeWorkflow:
                 name="chat",
                 resource_key="qwen3-30b-a3b",
                 inputs={"messages": PARENT["messages"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> llm >> END
 
@@ -524,7 +524,7 @@ class TestLLMNodeWorkflow:
                 name="generator",
                 resource_key="qwen3-30b-a3b",
                 inputs={"messages": PARENT["messages"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> llm >> END
 
@@ -565,7 +565,7 @@ class TestLLMNodeWorkflow:
                     "messages": PARENT["messages"],
                     "temperature": PARENT["temperature"]
                 },
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> llm >> END
 
@@ -599,7 +599,7 @@ class TestLLMChainNodeWorkflow:
                 system_prompt="You are a helpful assistant.",
                 user_prompt="Repeat exactly: {text}",
                 inputs={"text": PARENT["text"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> chain >> END
 
@@ -625,7 +625,7 @@ class TestLLMChainNodeWorkflow:
                 extract_schema=["sentiment: str", "confidence: str"],
                 parser="xml",
                 inputs={"text": PARENT["text"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> chain >> END
 
@@ -650,7 +650,7 @@ class TestLLMChainNodeWorkflow:
                 extract_schema=["result: str"],
                 parser="xml",
                 inputs={"query": PARENT["query"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> chain >> END
 
@@ -678,7 +678,7 @@ class TestLLMChainNodeWorkflow:
                 resource_key="qwen3-30b-a3b",
                 user_prompt="Say '{word}' exactly.",
                 inputs={"word": PARENT["word"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> chain >> END
 
@@ -720,7 +720,7 @@ class TestCodeNodeDecorator:
             return {"squared": n ** 2}
 
         with GraphNode(name="decorator-workflow") as graph:
-            node = square_fn(inputs={"n": PARENT["n"]}, outputs=PARENT)
+            node = square_fn(inputs={"n": PARENT["n"]}, outputs={"*": PARENT})
             START >> node >> END
 
         engine = Hush(graph)
@@ -744,7 +744,7 @@ class TestCallableSyntax:
                 name="adder",
                 code_fn=lambda x, y: {"sum": x + y},
                 inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -792,14 +792,14 @@ class TestComplexLoopWorkflows:
                 proc = process_item(
                     name="processor",
                     inputs={"item": PARENT["item"], "multiplier": PARENT["multiplier"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
                 START >> proc >> END
 
             agg = aggregate(
                 name="aggregator",
                 inputs={"results": map_node["result"]},
-                outputs=PARENT,
+                outputs={"*": PARENT},
             )
 
             START >> map_node >> agg >> END
@@ -835,7 +835,7 @@ class TestComplexLoopWorkflows:
                 name="square_items",
                 inputs={"n": Each(PARENT["numbers"])}
             ) as map_node:
-                sq = square(name="square", inputs={"n": PARENT["n"]}, outputs=PARENT)
+                sq = square(name="square", inputs={"n": PARENT["n"]}, outputs={"*": PARENT})
                 START >> sq >> END
 
             START >> map_node >> END
@@ -886,14 +886,14 @@ class TestComplexLoopWorkflows:
                 analyze = analyze_item(
                     name="analyzer",
                     inputs={"value": PARENT["value"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
                 START >> analyze >> END
 
             summary = summarize(
                 name="summary",
                 inputs={"scores": map_node["score"]},
-                outputs=PARENT,
+                outputs={"*": PARENT},
             )
 
             START >> map_node >> summary >> END
@@ -927,7 +927,7 @@ class TestComplexLoopWorkflows:
                 proc = process_x(
                     name="doubler",
                     inputs={"x": PARENT["x"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
                 START >> proc >> END
 
@@ -987,14 +987,14 @@ class TestComplexLoopWorkflows:
                     mult_node = multiply(
                         name="multiply",
                         inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                        outputs=PARENT,
+                        outputs={"*": PARENT},
                     )
                     START >> mult_node >> END
 
                 summarize_node = summarize(
                     name="summarize",
                     inputs={"products": inner["product"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
 
                 START >> validate_node >> inner >> summarize_node >> END
@@ -1067,14 +1067,14 @@ class TestComplexLoopWorkflows:
                     mult_node = multiply(
                         name="multiply",
                         inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                        outputs=PARENT,
+                        outputs={"*": PARENT},
                     )
                     START >> mult_node >> END
 
                 summarize_node = summarize(
                     name="summarize",
                     inputs={"products": inner["product"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
 
                 START >> validate_node >> inner >> summarize_node >> END
@@ -1269,7 +1269,7 @@ class TestComplexLoopWorkflows:
                 analyze = analyze_token(
                     name="analyze",
                     inputs={"token": PARENT["token"], "weight": PARENT["weight"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
                 START >> analyze >> END
 
@@ -1281,7 +1281,7 @@ class TestComplexLoopWorkflows:
             classify_node = classify(
                 name="classify",
                 inputs={"average": aggregate_node["average"]},
-                outputs=PARENT,
+                outputs={"*": PARENT},
             )
 
             START >> preprocess_node >> tokenize_node >> map_node >> aggregate_node >> classify_node >> END
@@ -1321,7 +1321,7 @@ class TestLangfuseTracerWithTags:
                 name="processor",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -1353,7 +1353,7 @@ class TestLangfuseTracerWithTags:
             node = process_with_tags(
                 name="processor",
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -1384,7 +1384,7 @@ class TestLangfuseTracerWithTags:
             node = process_with_dynamic(
                 name="processor",
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -1419,7 +1419,7 @@ class TestLangfuseTracerWithTags:
                 name="processor",
                 code_fn=lambda x: {"y": x},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 

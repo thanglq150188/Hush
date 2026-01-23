@@ -24,23 +24,24 @@ class TestNodeIntegration:
         assert PromptNode is not None
         assert LLMChainNode is not None
 
-    def test_prompt_node_with_parent_inputs(self):
-        """Test PromptNode with PARENT reference for inputs."""
+    def test_prompt_node_with_parent_outputs(self):
+        """Test PromptNode with PARENT reference for outputs."""
         from hush.providers.nodes import PromptNode
 
         with GraphNode(name="test_graph") as graph:
             prompt = PromptNode(
                 name="prompt",
-                user_prompt="Query: {query}",
-                inputs=PARENT,
-                outputs=PARENT
+                inputs={
+                    "user_prompt": "Hello world",
+                },
+                outputs={"*": PARENT}
             )
             START >> prompt >> END
 
         graph.build()
 
-        # PARENT inputs should be resolved
-        assert "query" in graph.inputs
+        # PARENT outputs should be resolved - messages is forwarded
+        assert "messages" in graph.outputs
 
     @pytest.mark.asyncio
     async def test_prompt_node_execution(self):
@@ -49,12 +50,15 @@ class TestNodeIntegration:
 
         prompt = PromptNode(
             name="prompt",
-            system_prompt="You are helpful.",
-            user_prompt="Task: {task}"
+            inputs={
+                "system_prompt": "You are helpful.",
+                "user_prompt": "Task: {task}",
+                "task": "write code"
+            }
         )
 
         schema = StateSchema(node=prompt)
-        state = MemoryState(schema, inputs={"task": "write code"})
+        state = MemoryState(schema)
 
         result = await prompt.run(state)
 
@@ -99,8 +103,8 @@ class TestResourceHubIntegration:
 
     def test_hub_has_llm_config(self, hub):
         """Test hub has LLM configurations."""
-        if hub.has("llm:claude-4-sonnet"):
-            config = hub.get_config("llm:claude-4-sonnet")
+        if hub.has("llm:or-claude-4-sonnet"):
+            config = hub.get_config("llm:or-claude-4-sonnet")
             assert config is not None
             print(f"LLM config: {config}")
 
@@ -113,8 +117,8 @@ class TestResourceHubIntegration:
 
     def test_hub_has_reranking_config(self, hub):
         """Test hub has reranking configurations."""
-        if hub.has("reranking:bge-m3"):
-            config = hub.get_config("reranking:bge-m3")
+        if hub.has("reranking:bge-m3-onnx"):
+            config = hub.get_config("reranking:bge-m3-onnx")
             assert config is not None
             print(f"Reranking config: {config}")
 
@@ -127,24 +131,26 @@ class TestEndToEndPipeline:
         """Test a pipeline from PromptNode to LLMNode."""
         from hush.providers.nodes import PromptNode, LLMNode
 
-        if not hub.has("llm:claude-4-sonnet"):
-            pytest.skip("llm:claude-4-sonnet not configured")
+        if not hub.has("llm:or-claude-4-sonnet"):
+            pytest.skip("llm:or-claude-4-sonnet not configured")
 
         # Create a graph with Prompt -> LLM
         with GraphNode(name="chat_pipeline") as pipeline:
             prompt = PromptNode(
                 name="prompt",
-                system_prompt="You are a helpful assistant.",
-                user_prompt="Answer briefly: {question}",
-                inputs=PARENT,
+                inputs={
+                    "system_prompt": "You are a helpful assistant.",
+                    "user_prompt": "Answer briefly: {question}",
+                    "*": PARENT
+                },
                 outputs={"messages": PARENT["messages"]}
             )
 
             llm = LLMNode(
                 name="llm",
-                resource_key="claude-4-sonnet",
+                resource_key="or-claude-4-sonnet",
                 inputs={"messages": prompt["messages"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> prompt >> llm >> END

@@ -179,12 +179,46 @@ class TestRerankNodeIntegration:
         from hush.providers.nodes import RerankNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if bge-m3 reranker is available
+        # Check if bge-m3-onnx reranker is available
+        if not hub.has("reranking:bge-m3-onnx"):
+            pytest.skip("reranking:bge-m3-onnx not configured in resources.yaml")
+
+        node = RerankNode(
+            name="rerank",
+            resource_key="bge-m3-onnx"
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema, inputs={
+            "query": "What is machine learning?",
+            "documents": [
+                "Machine learning is a subset of artificial intelligence.",
+                "The weather today is sunny.",
+                "Deep learning uses neural networks."
+            ],
+            "top_k": 2
+        })
+
+        result = await node.run(state)
+
+        assert "reranks" in result
+        reranks = result["reranks"]
+        assert len(reranks) == 2
+        assert "score" in reranks[0]
+        print(f"Reranked results (ONNX): {reranks}")
+
+    @pytest.mark.asyncio
+    async def test_rerank_node_with_pinecone(self, hub):
+        """Test RerankNode works with Pinecone API."""
+        from hush.providers.nodes import RerankNode
+        from hush.core.states import StateSchema, MemoryState
+
+        # Check if bge-m3 (Pinecone) reranker is available
         if not hub.has("reranking:bge-m3"):
             pytest.skip("reranking:bge-m3 not configured in resources.yaml")
 
         node = RerankNode(
-            name="rerank",
+            name="rerank_pinecone",
             resource_key="bge-m3"
         )
 
@@ -205,7 +239,7 @@ class TestRerankNodeIntegration:
         reranks = result["reranks"]
         assert len(reranks) == 2
         assert "score" in reranks[0]
-        print(f"Reranked results: {reranks}")
+        print(f"Reranked results (Pinecone): {reranks}")
 
 
 if __name__ == "__main__":

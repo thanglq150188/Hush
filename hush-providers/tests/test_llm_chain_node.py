@@ -27,8 +27,11 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="simple_chain",
                 resource_key="gpt-4",
-                system_prompt="You are helpful.",
-                user_prompt="Help with: {task}"
+                inputs={
+                    "system_prompt": "You are helpful.",
+                    "user_prompt": "Help with: {task}",
+                    "task": "coding"
+                }
             )
 
             assert node.name == "simple_chain"
@@ -50,7 +53,10 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="structured_chain",
                 resource_key="gpt-4",
-                user_prompt="Classify: {text}\n<category>...</category>",
+                inputs={
+                    "user_prompt": "Classify: {text}\n<category>...</category>",
+                    "text": "sample"
+                },
                 extract_schema=["category: str", "confidence: float"],
                 parser="xml"
             )
@@ -73,16 +79,20 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="vision_chain",
                 resource_key="gpt-4o",
-                messages_template=[
-                    {"role": "system", "content": "You are a vision expert."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": "Analyze: {query}"},
-                        {"type": "image_url", "image_url": {"url": "{image_url}"}}
-                    ]}
-                ]
+                inputs={
+                    "messages_template": [
+                        {"role": "system", "content": "You are a vision expert."},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "Analyze: {query}"},
+                            {"type": "image_url", "image_url": {"url": "{image_url}"}}
+                        ]}
+                    ],
+                    "query": "What is this?",
+                    "image_url": "https://..."
+                }
             )
 
-            assert node.messages_template is not None
+            assert node.name == "vision_chain"
 
     def test_chain_has_internal_nodes(self):
         """Test that LLMChainNode creates internal nodes."""
@@ -99,7 +109,10 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="internal_test",
                 resource_key="gpt-4",
-                user_prompt="Test {var}"
+                inputs={
+                    "user_prompt": "Test {var}",
+                    "var": "value"
+                }
             )
 
             # Should have internal nodes (prompt, llm)
@@ -121,7 +134,10 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="parser_test",
                 resource_key="gpt-4",
-                user_prompt="Extract: {text}",
+                inputs={
+                    "user_prompt": "Extract: {text}",
+                    "text": "sample"
+                },
                 extract_schema=["result: str"]
             )
 
@@ -143,16 +159,17 @@ class TestLLMChainNode:
             node = LLMChainNode(
                 name="metadata_test",
                 resource_key="gpt-4",
-                system_prompt="System",
-                user_prompt="User {var}",
+                inputs={
+                    "system_prompt": "System",
+                    "user_prompt": "User {var}",
+                    "var": "value"
+                },
                 extract_schema=["field: str"],
                 parser="json"
             )
 
             metadata = node.specific_metadata()
             assert metadata["resource_key"] == "gpt-4"
-            assert metadata["system_prompt"] == "System"
-            assert metadata["user_prompt"] == "User {var}"
             assert metadata["extract_schema"] == ["field: str"]
             assert metadata["parser"] == "json"
 
@@ -166,19 +183,22 @@ class TestLLMChainNodeIntegration:
         from hush.providers.nodes import LLMChainNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if claude-4-sonnet is available
-        if not hub.has("llm:claude-4-sonnet"):
-            pytest.skip("llm:claude-4-sonnet not configured in resources.yaml")
+        # Check if or-claude-4-sonnet is available
+        if not hub.has("llm:or-claude-4-sonnet"):
+            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
 
         node = LLMChainNode(
             name="simple_chain",
-            resource_key="claude-4-sonnet",
-            system_prompt="You are a helpful assistant.",
-            user_prompt="Say hello to {name} in one sentence."
+            resource_key="or-claude-4-sonnet",
+            inputs={
+                "system_prompt": "You are a helpful assistant.",
+                "user_prompt": "Say hello to {name} in one sentence.",
+                "name": "Alice"
+            }
         )
 
         schema = StateSchema(node=node)
-        state = MemoryState(schema, inputs={"name": "Alice"})
+        state = MemoryState(schema)
 
         result = await node.run(state)
 
@@ -191,26 +211,27 @@ class TestLLMChainNodeIntegration:
         from hush.providers.nodes import LLMChainNode
         from hush.core.states import StateSchema, MemoryState
 
-        # Check if claude-4-sonnet is available
-        if not hub.has("llm:claude-4-sonnet"):
-            pytest.skip("llm:claude-4-sonnet not configured in resources.yaml")
+        # Check if or-claude-4-sonnet is available
+        if not hub.has("llm:or-claude-4-sonnet"):
+            pytest.skip("llm:or-claude-4-sonnet not configured in resources.yaml")
 
         node = LLMChainNode(
             name="structured_chain",
-            resource_key="claude-4-sonnet",
-            user_prompt="""Classify the sentiment of this text: "{text}"
+            resource_key="or-claude-4-sonnet",
+            inputs={
+                "user_prompt": """Classify the sentiment of this text: "{text}"
 
 Output your response in XML format:
 <sentiment>positive/negative/neutral</sentiment>
 <confidence>0.0-1.0</confidence>""",
+                "text": "I love this product! It's amazing!"
+            },
             extract_schema=["sentiment: str", "confidence: float"],
             parser="xml"
         )
 
         schema = StateSchema(node=node)
-        state = MemoryState(schema, inputs={
-            "text": "I love this product! It's amazing!"
-        })
+        state = MemoryState(schema)
 
         result = await node.run(state)
 

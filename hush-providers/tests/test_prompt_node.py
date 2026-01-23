@@ -18,8 +18,12 @@ class TestPromptNode:
 
         node = PromptNode(
             name="test_prompt",
-            system_prompt="You are {assistant_name}.",
-            user_prompt="Help me with {task}."
+            inputs={
+                "system_prompt": "You are {assistant_name}.",
+                "user_prompt": "Help me with {task}.",
+                "assistant_name": "Claude",
+                "task": "coding"
+            }
         )
 
         assert node.name == "test_prompt"
@@ -35,33 +39,40 @@ class TestPromptNode:
 
         node = PromptNode(
             name="vision_prompt",
-            messages_template=[
-                {"role": "system", "content": "You are a vision expert."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": "Analyze: {query}"},
-                    {"type": "image_url", "image_url": {"url": "{image_url}"}}
-                ]}
-            ]
+            inputs={
+                "messages_template": [
+                    {"role": "system", "content": "You are a vision expert."},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "Analyze: {query}"},
+                        {"type": "image_url", "image_url": {"url": "{image_url}"}}
+                    ]}
+                ],
+                "query": "What is this?",
+                "image_url": "https://example.com/image.png"
+            }
         )
 
         assert node.name == "vision_prompt"
         assert "query" in node.inputs
         assert "image_url" in node.inputs
 
-    def test_variable_extraction(self):
-        """Test that variables are correctly extracted from templates."""
+    def test_fixed_schema(self):
+        """Test that PromptNode has fixed input schema."""
         from hush.providers.nodes import PromptNode
 
         node = PromptNode(
-            name="multi_var",
-            system_prompt="Context: {context}, Time: {time}",
-            user_prompt="Query: {query}, Format: {format}"
+            name="schema_test",
+            inputs={
+                "user_prompt": "Test"
+            }
         )
 
-        assert "context" in node.inputs
-        assert "time" in node.inputs
-        assert "query" in node.inputs
-        assert "format" in node.inputs
+        # Should have all fixed schema keys
+        assert "system_prompt" in node.inputs
+        assert "user_prompt" in node.inputs
+        assert "messages_template" in node.inputs
+        assert "conversation_history" in node.inputs
+        assert "tool_results" in node.inputs
 
     @pytest.mark.asyncio
     async def test_format_simple_prompts(self):
@@ -70,15 +81,16 @@ class TestPromptNode:
 
         node = PromptNode(
             name="format_test",
-            system_prompt="You are {name}.",
-            user_prompt="Help with {task}."
+            inputs={
+                "system_prompt": "You are {name}.",
+                "user_prompt": "Help with {task}.",
+                "name": "Claude",
+                "task": "coding"
+            }
         )
 
         schema = StateSchema(node=node)
-        state = MemoryState(schema, inputs={
-            "name": "Claude",
-            "task": "coding"
-        })
+        state = MemoryState(schema)
 
         result = await node.run(state)
 
@@ -97,18 +109,19 @@ class TestPromptNode:
 
         node = PromptNode(
             name="history_test",
-            system_prompt="You are an assistant.",
-            user_prompt="Continue: {message}"
+            inputs={
+                "system_prompt": "You are an assistant.",
+                "user_prompt": "Continue: {message}",
+                "message": "What was my question?",
+                "conversation_history": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi there!"}
+                ]
+            }
         )
 
         schema = StateSchema(node=node)
-        state = MemoryState(schema, inputs={
-            "message": "What was my question?",
-            "conversation_history": [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi there!"}
-            ]
-        })
+        state = MemoryState(schema)
 
         result = await node.run(state)
         messages = result["messages"]
@@ -122,7 +135,9 @@ class TestPromptNode:
 
         node = PromptNode(
             name="output_test",
-            user_prompt="Test {var}"
+            inputs={
+                "user_prompt": "Test"
+            }
         )
 
         assert "messages" in node.outputs
@@ -133,13 +148,151 @@ class TestPromptNode:
 
         node = PromptNode(
             name="metadata_test",
-            system_prompt="System prompt",
-            user_prompt="User prompt"
+            inputs={
+                "system_prompt": "System prompt",
+                "user_prompt": "User prompt"
+            }
         )
 
         metadata = node.specific_metadata()
         assert metadata["system_prompt"] == "System prompt"
         assert metadata["user_prompt"] == "User prompt"
+
+
+class TestPromptNodeWithVars:
+    """Tests for PromptNode with template variables."""
+
+    @pytest.mark.asyncio
+    async def test_vars_formatting(self):
+        """Test that template vars are used for formatting."""
+        from hush.providers.nodes import PromptNode
+
+        node = PromptNode(
+            name="vars_test",
+            inputs={
+                "user_prompt": "Hello {name}, teach me about {topic}.",
+                "name": "Alice",
+                "topic": "Python"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        messages = result["messages"]
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Hello Alice, teach me about Python."
+
+    @pytest.mark.asyncio
+    async def test_vars_from_state(self):
+        """Test vars passed via state override defaults."""
+        from hush.providers.nodes import PromptNode
+
+        # Declare variables in inputs (with defaults) to add them to schema
+        node = PromptNode(
+            name="vars_state_test",
+            inputs={
+                "system_prompt": "You are {role}.",
+                "user_prompt": "Task: {task}",
+                "role": "default role",  # placeholder, will be overridden
+                "task": "default task"   # placeholder, will be overridden
+            }
+        )
+
+        schema = StateSchema(node=node)
+        # Override via state inputs
+        state = MemoryState(schema, inputs={
+            "role": "a helpful assistant",
+            "task": "explain code"
+        })
+
+        result = await node.run(state)
+
+        messages = result["messages"]
+        assert len(messages) == 2
+        assert messages[0]["content"] == "You are a helpful assistant."
+        assert messages[1]["content"] == "Task: explain code"
+
+    @pytest.mark.asyncio
+    async def test_empty_vars(self):
+        """Test with no template variables (empty vars)."""
+        from hush.providers.nodes import PromptNode
+
+        node = PromptNode(
+            name="no_vars_test",
+            inputs={
+                "system_prompt": "You are helpful.",
+                "user_prompt": "Hello!"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        messages = result["messages"]
+        assert len(messages) == 2
+        assert messages[0]["content"] == "You are helpful."
+        assert messages[1]["content"] == "Hello!"
+
+
+class TestPromptNodeMessagesTemplate:
+    """Tests for PromptNode with messages_template."""
+
+    @pytest.mark.asyncio
+    async def test_messages_template_formatting(self):
+        """Test messages_template with vars formatting."""
+        from hush.providers.nodes import PromptNode
+
+        node = PromptNode(
+            name="template_test",
+            inputs={
+                "messages_template": [
+                    {"role": "system", "content": "You are {role}."},
+                    {"role": "user", "content": "Help with {task}."}
+                ],
+                "role": "Claude",
+                "task": "coding"
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        messages = result["messages"]
+        assert len(messages) == 2
+        assert messages[0]["content"] == "You are Claude."
+        assert messages[1]["content"] == "Help with coding."
+
+    @pytest.mark.asyncio
+    async def test_messages_template_precedence(self):
+        """Test that messages_template takes precedence over prompts."""
+        from hush.providers.nodes import PromptNode
+
+        node = PromptNode(
+            name="precedence_test",
+            inputs={
+                "system_prompt": "This should be ignored.",
+                "user_prompt": "This too.",
+                "messages_template": [
+                    {"role": "user", "content": "Only this should appear."}
+                ]
+            }
+        )
+
+        schema = StateSchema(node=node)
+        state = MemoryState(schema)
+
+        result = await node.run(state)
+
+        messages = result["messages"]
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Only this should appear."
 
 
 if __name__ == "__main__":

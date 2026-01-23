@@ -27,7 +27,7 @@ class RerankNode(BaseNode):
                 name="rerank",
                 resource_key="bge-m3",
                 inputs={"query": PARENT["query"], "documents": PARENT["documents"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> rerank >> END
 
