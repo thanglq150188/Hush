@@ -143,7 +143,7 @@ def build_text_analysis_workflow():
                     "token": PARENT["token"],
                     "multiplier": PARENT["multiplier"],
                 },
-                outputs=PARENT,
+                outputs={"*": PARENT},
             )
             START >> analyze >> END
 
@@ -164,7 +164,7 @@ def build_text_analysis_workflow():
                 "confidence": classify_node["confidence"],
                 "total": aggregate_node["total"],
             },
-            outputs=PARENT,
+            outputs={"*": PARENT},
         )
 
         START >> preprocess_node >> tokenize_node >> map_node >> aggregate_node >> classify_node >> format_node >> END
@@ -215,14 +215,14 @@ def build_nested_loop_workflow():
                 mult_node = multiply(
                     name="multiply",
                     inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                    outputs=PARENT,
+                    outputs={"*": PARENT},
                 )
                 START >> mult_node >> END
 
             summarize_node = summarize(
                 name="summarize",
                 inputs={"products": inner["product"]},
-                outputs=PARENT,
+                outputs={"*": PARENT},
             )
 
             START >> validate_node >> inner >> summarize_node >> END

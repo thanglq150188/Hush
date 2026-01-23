@@ -211,9 +211,13 @@ class CodeNode(BaseNode):
         # Gọi super().__init__ không truyền inputs/outputs
         super().__init__(**kwargs)
 
-        # Merge parsed schema với user-provided inputs/outputs
-        self.inputs = self._merge_params(parsed_inputs, inputs)
-        self.outputs = self._merge_params(parsed_outputs, outputs)
+        # Normalize user-provided inputs/outputs first (handles {"*": PARENT} wildcard)
+        normalized_inputs = self._normalize_params(inputs)
+        normalized_outputs = self._normalize_params(outputs)
+
+        # Merge parsed schema với normalized inputs/outputs
+        self.inputs = self._merge_params(parsed_inputs, normalized_inputs)
+        self.outputs = self._merge_params(parsed_outputs, normalized_outputs)
 
         self.code_fn = code_fn
         self.core = ensure_async(code_fn) if code_fn else None

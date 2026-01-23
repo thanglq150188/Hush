@@ -131,7 +131,7 @@ class TestHushRun:
                 name="doubler",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -148,7 +148,7 @@ class TestHushRun:
                 name="adder",
                 code_fn=lambda a, b: {"sum": a + b},
                 inputs={"a": PARENT["a"], "b": PARENT["b"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -272,7 +272,7 @@ class TestHushStateAccess:
                 name="processor",
                 code_fn=lambda x: {"y": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -318,7 +318,7 @@ class TestHushMultipleRuns:
                 name="echo",
                 code_fn=lambda n: {"value": n},
                 inputs={"n": PARENT["n"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 

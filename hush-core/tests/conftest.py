@@ -57,7 +57,7 @@ def simple_graph():
         return {"result": x * 2}
 
     with GraphNode(name="simple_graph") as graph:
-        node = double(inputs={"x": PARENT["x"]}, outputs=PARENT)
+        node = double(inputs={"x": PARENT["x"]}, outputs={"*": PARENT})
         START >> node >> END
 
     graph.build()
@@ -77,7 +77,7 @@ def linear_graph():
             name="multiply_2",
             code_fn=lambda x: {"result": x * 2},
             inputs={"x": node_a["result"]},
-            outputs=PARENT
+            outputs={"*": PARENT}
         )
         START >> node_a >> node_b >> END
 

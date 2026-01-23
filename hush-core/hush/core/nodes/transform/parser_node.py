@@ -151,9 +151,11 @@ class ParserNode(BaseNode):
         # Gọi super().__init__ không truyền inputs/outputs
         super().__init__(**kwargs)
 
-        # Merge parsed với user-provided
-        self.inputs = self._merge_params(parsed_inputs, inputs)
-        self.outputs = self._merge_params(parsed_outputs, outputs)
+        # Normalize and merge with user-provided
+        normalized_inputs = self._normalize_params(inputs)
+        normalized_outputs = self._normalize_params(outputs)
+        self.inputs = self._merge_params(parsed_inputs, normalized_inputs)
+        self.outputs = self._merge_params(parsed_outputs, normalized_outputs)
 
         self.format = format or "xml"
         self.separator = separator

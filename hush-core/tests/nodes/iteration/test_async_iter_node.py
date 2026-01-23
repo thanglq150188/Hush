@@ -41,7 +41,7 @@ class TestSimpleStreaming:
         ) as stream_node:
             processor = double_value(
                 inputs={"value": PARENT["value"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> processor >> END
 
@@ -83,7 +83,7 @@ class TestStreamingWithBroadcast:
         ) as stream_node:
             processor = multiply(
                 inputs={"value": PARENT["value"], "multiplier": PARENT["multiplier"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> processor >> END
 
@@ -122,7 +122,7 @@ class TestStreamingWithBatching:
         ) as stream_node:
             processor = sum_batch(
                 inputs={"batch": PARENT["batch"], "batch_size": PARENT["batch_size"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> processor >> END
 
@@ -170,7 +170,7 @@ class TestStreamingWithRef:
                     "factor": config_node["factor"],   # broadcast Ref
                     "offset": config_node["offset"]    # broadcast Ref
                 },
-                outputs=PARENT
+                outputs={"*": PARENT}
             ) as stream_node:
                 processor = compute(
                     inputs={
@@ -178,7 +178,7 @@ class TestStreamingWithRef:
                         "factor": PARENT["factor"],
                         "offset": PARENT["offset"]
                     },
-                    outputs=PARENT
+                    outputs={"*": PARENT}
                 )
                 START >> processor >> END
 
@@ -225,7 +225,7 @@ class TestDictItemsInStream:
         ) as stream_node:
             processor = grade_user(
                 inputs={"user": PARENT["user"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> processor >> END
 
@@ -266,7 +266,7 @@ class TestConcurrencyLimit:
         ) as stream_node:
             processor = slow_process(
                 inputs={"value": PARENT["value"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> processor >> END
 
@@ -317,14 +317,14 @@ class TestStreamFromUpstreamNode:
                     "item": Each(source_creator["stream"]),
                     "prefix": PARENT["prefix"]
                 },
-                outputs=PARENT
+                outputs={"*": PARENT}
             ) as stream_node:
                 processor = process_item(
                     inputs={
                         "item": PARENT["item"],
                         "prefix": PARENT["prefix"]
                     },
-                    outputs=PARENT
+                    outputs={"*": PARENT}
                 )
                 START >> processor >> END
 

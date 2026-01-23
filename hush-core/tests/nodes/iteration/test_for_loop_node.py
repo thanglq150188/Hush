@@ -29,7 +29,7 @@ class TestSimpleIteration:
             name="double_loop",
             inputs={"value": Each([1, 2, 3, 4, 5])}
         ) as loop:
-            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = double(inputs={"value": PARENT["value"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()
@@ -63,7 +63,7 @@ class TestBroadcastIteration:
         ) as loop:
             node = multiply(
                 inputs={"value": PARENT["value"], "multiplier": PARENT["multiplier"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -96,7 +96,7 @@ class TestMultipleEachVariables:
                 "y": Each([10, 20, 30])
             }
         ) as loop:
-            node = add(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs=PARENT)
+            node = add(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()
@@ -137,7 +137,7 @@ class TestNestedForLoop:
             ) as inner:
                 node = multiply(
                     inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                    outputs=PARENT
+                    outputs={"*": PARENT}
                 )
                 START >> node >> END
 
@@ -183,7 +183,7 @@ class TestNestedForLoop:
                 ) as l3:
                     node = combine(
                         inputs={"a": PARENT["a"], "b": PARENT["b"], "c": PARENT["c"]},
-                        outputs=PARENT
+                        outputs={"*": PARENT}
                     )
                     START >> node >> END
 
@@ -269,7 +269,7 @@ class TestEmptyIteration:
             name="empty_loop",
             inputs={"value": Each([])}
         ) as loop:
-            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = double(inputs={"value": PARENT["value"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()
@@ -308,11 +308,11 @@ class TestRefFromPreviousNode:
                     "item": Each(gen_node["numbers"]),
                     "factor": gen_node["factor"]  # broadcast Ref
                 },
-                outputs=PARENT
+                outputs={"*": PARENT}
             ) as loop:
                 proc_node = process_item(
                     inputs={"item": PARENT["item"], "factor": PARENT["factor"]},
-                    outputs=PARENT
+                    outputs={"*": PARENT}
                 )
                 START >> proc_node >> END
 
@@ -344,7 +344,7 @@ class TestIterationMetrics:
             name="metrics_loop",
             inputs={"value": Each([1, 2, 3])}
         ) as loop:
-            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = double(inputs={"value": PARENT["value"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()
@@ -381,7 +381,7 @@ class TestMismatchedLengths:
                 "y": Each([10, 20])  # Different length!
             }
         ) as loop:
-            node = dummy(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs=PARENT)
+            node = dummy(inputs={"x": PARENT["x"], "y": PARENT["y"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()
@@ -424,7 +424,7 @@ class TestAccumulationPattern:
             name="accumulate_loop",
             inputs={"value": Each([1, 2, 3, 4, 5])}
         ) as loop:
-            node = accumulate(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = accumulate(inputs={"value": PARENT["value"]}, outputs={"*": PARENT})
             START >> node >> END
 
         loop.build()

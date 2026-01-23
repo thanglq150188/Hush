@@ -32,7 +32,7 @@ class TestSingleNodeGraph:
                 name="double",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -52,7 +52,7 @@ class TestSingleNodeGraph:
             return {"result": x * 3}
 
         with GraphNode(name="decorator_graph") as graph:
-            node = triple(inputs={"x": PARENT["x"]}, outputs=PARENT)
+            node = triple(inputs={"x": PARENT["x"]}, outputs={"*": PARENT})
             START >> node >> END
 
         graph.build()
@@ -104,7 +104,7 @@ class TestLinearGraph:
                 name="multiply_2",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": node_a["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node_a >> node_b >> END
 
@@ -135,7 +135,7 @@ class TestLinearGraph:
                 name="subtract_5",
                 code_fn=lambda x: {"result": x - 5},
                 inputs={"x": node_b["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node_a >> node_b >> node_c >> END
 
@@ -156,7 +156,7 @@ class TestLinearGraph:
             n2 = CodeNode(name="n2", code_fn=lambda x: {"v": x + 2}, inputs={"x": n1["v"]})
             n3 = CodeNode(name="n3", code_fn=lambda x: {"v": x + 3}, inputs={"x": n2["v"]})
             n4 = CodeNode(name="n4", code_fn=lambda x: {"v": x + 4}, inputs={"x": n3["v"]})
-            n5 = CodeNode(name="n5", code_fn=lambda x: {"v": x + 5}, inputs={"x": n4["v"]}, outputs=PARENT)
+            n5 = CodeNode(name="n5", code_fn=lambda x: {"v": x + 5}, inputs={"x": n4["v"]}, outputs={"*": PARENT})
 
             START >> n1 >> n2 >> n3 >> n4 >> n5 >> END
 
@@ -200,7 +200,7 @@ class TestParallelGraph:
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
                 inputs={"a": branch_a["result"], "b": branch_b["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> start >> [branch_a, branch_b] >> merge >> END
@@ -231,7 +231,7 @@ class TestParallelGraph:
                 name="merge",
                 code_fn=lambda a, b, c: {"total": a + b + c},
                 inputs={"a": b1["r"], "b": b2["r"], "c": b3["r"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> start >> [b1, b2, b3] >> merge >> END
@@ -256,7 +256,7 @@ class TestParallelGraph:
                 name="d",
                 code_fn=lambda x, y: {"result": x + y},
                 inputs={"x": b["out"], "y": c["out"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> a >> [b, c] >> d >> END
@@ -289,7 +289,7 @@ class TestParallelGraph:
                 name="merge",
                 code_fn=lambda a, b: {"sum": a + b},
                 inputs={"a": branch_a["result"], "b": branch_b["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> [branch_a, branch_b] >> merge >> END
@@ -319,7 +319,7 @@ class TestMultipleIO:
                 name="add",
                 code_fn=lambda a, b, c: {"sum": a + b + c},
                 inputs={"a": PARENT["a"], "b": PARENT["b"], "c": PARENT["c"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -339,7 +339,7 @@ class TestMultipleIO:
                 name="split",
                 code_fn=lambda x: {"double": x * 2, "triple": x * 3, "quad": x * 4},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -395,7 +395,7 @@ class TestComplexDataTypes:
                     "count": len(data)
                 },
                 inputs={"data": PARENT["data"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -422,7 +422,7 @@ class TestComplexDataTypes:
                 name="sum",
                 code_fn=lambda items: {"total": sum(items)},
                 inputs={"items": double["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> double >> sum_all >> END
 
@@ -448,7 +448,7 @@ class TestComplexDataTypes:
                 name="reverse",
                 code_fn=lambda text: {"result": text[::-1]},
                 inputs={"text": upper["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> upper >> reverse >> END
 
@@ -483,7 +483,7 @@ class TestAsyncOperations:
                 code_fn=async_double,
                 return_keys=["result"],
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -518,7 +518,7 @@ class TestAsyncOperations:
                 code_fn=async_multiply,
                 return_keys=["result"],
                 inputs={"x": add["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> add >> mult >> END
 
@@ -560,7 +560,7 @@ class TestAsyncOperations:
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
                 inputs={"a": a["result"], "b": b["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> start >> [a, b] >> merge >> END
@@ -595,7 +595,7 @@ class TestErrorHandling:
                 name="failing",
                 code_fn=failing_fn,
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -627,7 +627,7 @@ class TestErrorHandling:
                 name="last",
                 code_fn=lambda x: {"result": x * 2},
                 inputs={"x": failing["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> first >> failing >> last >> END
@@ -661,7 +661,7 @@ class TestEdgeCases:
                 name="handle_empty",
                 code_fn=lambda x: {"result": x if x else "default"},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -681,7 +681,7 @@ class TestEdgeCases:
                 name="process",
                 code_fn=lambda data: {"count": len(data), "sum": sum(data)},
                 inputs={"data": PARENT["data"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -703,7 +703,7 @@ class TestEdgeCases:
                 name="process",
                 code_fn=lambda text: {"result": f"Processed: {text}"},
                 inputs={"text": PARENT["text"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -723,7 +723,7 @@ class TestEdgeCases:
                 name="compute",
                 code_fn=lambda x, y: {"sum": x + y, "product": x * y},
                 inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
@@ -752,7 +752,7 @@ class TestCodeNodeDecorator:
             return {"result": x + 1}
 
         with GraphNode(name="decorator_basic") as graph:
-            node = add_one(inputs={"x": PARENT["x"]}, outputs=PARENT)
+            node = add_one(inputs={"x": PARENT["x"]}, outputs={"*": PARENT})
             START >> node >> END
 
         graph.build()
@@ -771,7 +771,7 @@ class TestCodeNodeDecorator:
             return {"result": x + amount}
 
         with GraphNode(name="decorator_defaults") as graph:
-            node = add(inputs={"x": PARENT["x"]}, outputs=PARENT)
+            node = add(inputs={"x": PARENT["x"]}, outputs={"*": PARENT})
             START >> node >> END
 
         graph.build()
@@ -801,7 +801,7 @@ class TestCodeNodeDecorator:
         with GraphNode(name="decorator_pipeline") as graph:
             n1 = step1(inputs={"x": PARENT["x"]})
             n2 = step2(inputs={"x": n1["value"]})
-            n3 = step3(inputs={"x": n2["value"]}, outputs=PARENT)
+            n3 = step3(inputs={"x": n2["value"]}, outputs={"*": PARENT})
 
             START >> n1 >> n2 >> n3 >> END
 
@@ -864,7 +864,7 @@ class TestSoftEdgeBehavior:
                 code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
                 return_keys=["result"],
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Soft edges: B >> ~D, C >> ~D
@@ -927,7 +927,7 @@ class TestSoftEdgeBehavior:
                 code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
                 return_keys=["result"],
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Hard edge: A >> D
@@ -982,7 +982,7 @@ class TestSoftEdgeBehavior:
                 name="d",
                 code_fn=lambda b_done, c_done: {"combined": f"{b_done}+{c_done}"},
                 inputs={"b_done": b["result"], "c_done": c["result"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Using [b, c] >> ~d syntax for soft edges from multiple nodes
@@ -1027,7 +1027,7 @@ class TestSoftEdgeBehavior:
                 code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
                 return_keys=["result"],
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> [a, b] >> d >> END
@@ -1176,7 +1176,7 @@ class TestSoftEdgeBehavior:
                 code_fn=lambda: (execution_order.append("d"), {"result": "d"})[1],
                 return_keys=["result"],
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> [a, b]
@@ -1242,14 +1242,14 @@ class TestOutputMappingSyntax:
 
     @pytest.mark.asyncio
     async def test_mixed_old_and_new_syntax(self):
-        """Có thể dùng cả outputs=PARENT và node["key"] >> PARENT["key"]."""
+        """Có thể dùng cả outputs={"*": PARENT} và node["key"] >> PARENT["key"]."""
         with GraphNode(name="mixed_syntax") as graph:
             # Node 1 dùng cú pháp cũ
             node1 = CodeNode(
                 name="node1",
                 code_fn=lambda x: {"value": x * 2},
                 inputs={"x": PARENT["x"]},
-                outputs=PARENT  # Cú pháp cũ
+                outputs={"*": PARENT}  # Cú pháp cũ
             )
             # Node 2 dùng cú pháp mới
             node2 = CodeNode(
@@ -1307,7 +1307,7 @@ class TestNodeToNodeOutputMapping:
                 name="final",
                 code_fn=lambda v: {"output": v * 3},
                 inputs={"v": node2["final"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             START >> node1 >> node2 >> node3 >> END
@@ -1336,7 +1336,7 @@ class TestNodeToNodeOutputMapping:
                 name="consumer",
                 code_fn=lambda val_a, val_b: {"sum": val_a + val_b},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             # Map producer's outputs to consumer's inputs
             producer["a"] >> consumer["val_a"]
@@ -1371,7 +1371,7 @@ class TestNodeToNodeOutputMapping:
                 name="node_c",
                 code_fn=lambda inp: {"result": inp - 5},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Chain mappings using >> syntax
@@ -1439,7 +1439,7 @@ class TestNodeToNodeOutputMapping:
                 name="merge",
                 code_fn=lambda a, b: {"total": a + b},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Map parallel branches to merge inputs via >> syntax

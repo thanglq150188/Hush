@@ -135,7 +135,8 @@ class MemoryState:
         pull_ref = self.schema._pull_refs[idx]
         if pull_ref and not pull_ref.is_output and pull_ref.idx >= 0:
             source_cell = self._cells[pull_ref.idx]
-            if ctx_key in source_cell:
+            # Check both context value and default_value (for static values)
+            if ctx_key in source_cell or source_cell.default_value is not None:
                 result = pull_ref._fn(source_cell[ctx_key])
                 cell[ctx_key] = result  # Cache
                 return result

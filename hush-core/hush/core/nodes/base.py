@@ -208,7 +208,8 @@ class BaseNode(ABC):
 
         Các format được hỗ trợ:
             - params=None → {}
-            - params=PARENT → {} (sẽ xử lý sau khi có outputs parsed)
+            - params={"*": PARENT} → forward tất cả keys từ PARENT
+            - params={"x": 1, "*": PARENT} → x=1, còn lại từ PARENT
             - params={"var": Param(...)} → giữ nguyên, resolve value
             - params={"var": some_node} → {"var": Param(value=Ref(some_node, "var"))}
             - params={"var": some_node["other"]} → {"var": Param(value=Ref(some_node, "other"))}
@@ -218,14 +219,22 @@ class BaseNode(ABC):
         if params is None:
             return {}
 
-        # Xử lý PARENT shorthand - trả về marker để xử lý trong _merge_params
-        if hasattr(params, 'name') and params.name == "__PARENT__":
-            return {"__FORWARD_TO_PARENT__": params}
-
         result = {}
 
         if isinstance(params, dict):
             for key, value in params.items():
+                # Xử lý wildcard "*" key - store for later processing in _merge_params
+                if key == "*":
+                    # Validate that value is a node reference (PARENT or another node)
+                    if hasattr(value, 'name'):
+                        result["__FORWARD_WILDCARD__"] = value
+                    else:
+                        raise ValueError(
+                            f"Wildcard '*' key phải có value là node reference (như PARENT), "
+                            f"nhận được: {type(value)}"
+                        )
+                    continue
+
                 # Xử lý tuple keys: {("a", "b"): node} → mở rộng thành cả hai
                 if isinstance(key, tuple):
                     for k in key:
@@ -253,7 +262,8 @@ class BaseNode(ABC):
 
         - Nếu key đã tồn tại trong schema → chỉ gán value
         - Nếu key mới → tạo Param mới (type auto-inferred)
-        - Nếu user_provided có marker __FORWARD_TO_PARENT__ → forward tất cả keys trong schema đến PARENT
+        - Nếu user_provided có marker __FORWARD_WILDCARD__ → forward các keys
+          chưa được định nghĩa explicitly đến node reference (PARENT)
 
         Args:
             schema: Dict[str, Param] từ parsing (ví dụ: từ function signature)
@@ -272,23 +282,36 @@ class BaseNode(ABC):
         if not user_provided:
             return result
 
-        # Xử lý PARENT shorthand: outputs=PARENT → forward tất cả outputs đến parent
-        if "__FORWARD_TO_PARENT__" in user_provided:
-            parent_node = user_provided["__FORWARD_TO_PARENT__"]
-            # Resolve PARENT thành father
-            resolved_parent = self.father if self.father else parent_node
-            # Tạo Ref cho mỗi key trong schema
-            for key in result:
-                result[key].value = Ref(resolved_parent, key)
-            return result
+        # Make a copy to avoid mutating the original dict
+        user_provided = dict(user_provided)
 
+        # Extract wildcard node if present
+        wildcard_node = user_provided.pop("__FORWARD_WILDCARD__", None)
+
+        # First, process explicitly provided keys
+        explicitly_set = set()
         for key, value in user_provided.items():
             # Xử lý tuple keys
             if isinstance(key, tuple):
                 for k in key:
                     self._merge_single_param(result, k, value)
+                    explicitly_set.add(k)
             else:
                 self._merge_single_param(result, key, value)
+                explicitly_set.add(key)
+
+        # Then, apply wildcard forwarding for remaining keys
+        if wildcard_node is not None:
+            # Resolve PARENT thành father
+            if hasattr(wildcard_node, 'name') and wildcard_node.name == "__PARENT__":
+                resolved_node = self.father if self.father else wildcard_node
+            else:
+                resolved_node = wildcard_node
+
+            # Forward schema keys that weren't explicitly set
+            for key in result:
+                if key not in explicitly_set:
+                    result[key].value = Ref(resolved_node, key)
 
         return result
 

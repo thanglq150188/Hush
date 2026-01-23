@@ -830,7 +830,7 @@ class TestTracerWithIterationNodes:
             name="double_loop",
             inputs={"value": Each([1, 2, 3, 4, 5])}
         ) as loop:
-            node = double(inputs={"value": PARENT["value"]}, outputs=PARENT)
+            node = double(inputs={"value": PARENT["value"]}, outputs={"*": PARENT})
             START >> node >> END
 
         # Run directly without workflow engine

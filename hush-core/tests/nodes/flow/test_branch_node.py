@@ -444,19 +444,19 @@ class TestBranchFluentBuilder:
                 name="excellent",
                 code_fn=lambda: {"result": "A grade!"},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             good = CodeNode(
                 name="good",
                 code_fn=lambda: {"result": "B grade!"},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             fail = CodeNode(
                 name="fail",
                 code_fn=lambda: {"result": "Try again!"},
                 inputs={},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
 
             # Each branch target goes to END independently

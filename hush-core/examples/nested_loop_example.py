@@ -136,7 +136,7 @@ async def run_nested_forloop_example():
         ) as inner:
             node = multiply(
                 inputs={"x": PARENT["x"], "y": PARENT["y"]},
-                outputs=PARENT
+                outputs={"*": PARENT}
             )
             START >> node >> END
 
