@@ -37,56 +37,63 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# LLM providers
-openai = ["openai>=1.0"]
-azure = ["openai>=1.0"]
+# ============================================================
+# LLM PROVIDERS
+# ============================================================
+openai = []  # Already in base dependencies
+azure = []   # Uses openai package (already in base)
 gemini = [
     "google-cloud-aiplatform>=1.38",
-    "openai>=1.0",
+]
+bedrock = [
+    "boto3>=1.28",
 ]
 
-# Lightweight local inference (recommended for most users)
+# ============================================================
+# LOCAL INFERENCE
+# ============================================================
 onnx = [
     "onnxruntime>=1.15",
     "tokenizers>=0.13",
 ]
-
-# Heavy ML frameworks (only needed for HuggingFace models)
 huggingface = [
     "transformers>=4.30",
     "torch>=2.0",
 ]
 
-# Embedding providers - lightweight by default
+# ============================================================
+# EMBEDDING & RERANKING (lightweight by default)
+# ============================================================
 embeddings = [
     "onnxruntime>=1.15",
     "tokenizers>=0.13",
 ]
-
-# Reranking providers - lightweight by default
 rerankers = [
     "onnxruntime>=1.15",
     "tokenizers>=0.13",
 ]
 
-# All providers (lightweight)
+# ============================================================
+# BUNDLES
+# ============================================================
 all-light = [
-    "openai>=1.0",
     "google-cloud-aiplatform>=1.38",
+    "boto3>=1.28",
     "onnxruntime>=1.15",
     "tokenizers>=0.13",
 ]
-
-# All providers including heavy ML frameworks
 all = [
-    "openai>=1.0",
     "google-cloud-aiplatform>=1.38",
+    "boto3>=1.28",
+    "onnxruntime>=1.15",
+    "tokenizers>=0.13",
     "transformers>=4.30",
     "torch>=2.0",
-    "onnxruntime>=1.15",
-    "tokenizers>=0.13",
 ]
 
+# ============================================================
+# DEVELOPMENT
+# ============================================================
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

@@ -1,11 +1,11 @@
 [project]
-name = "hush-experiment"
+name = "hush-tutorial"
 version = "0.1.0"
-description = "Experimental and testing project for Hush ecosystem"
+description = "Tutorials and examples for the Hush workflow engine"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Beeflow Team" }
+    { name = "Hush Team" }
 ]
 dependencies = [
     "hush-core>=0.1.0",
