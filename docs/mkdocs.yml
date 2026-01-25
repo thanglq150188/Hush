@@ -1,0 +1,80 @@
+# MkDocs configuration
+# Run: mkdocs serve (từ thư mục docs/)
+# Build: mkdocs build
+
+site_name: Hush Documentation
+site_description: Async workflow orchestration engine cho GenAI applications
+site_url: https://your-org.github.io/hush
+
+theme:
+  name: material
+  language: vi
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - content.code.copy
+
+nav:
+  - Trang chủ: index.md
+  - Bắt đầu:
+    - Cài đặt: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+    - Workflow đầu tiên: getting-started/first-workflow.md
+  - Khái niệm:
+    - Tổng quan: concepts/overview.md
+    - Graph và Nodes: concepts/graph-and-nodes.md
+    - State Management: concepts/state-management.md
+    - ResourceHub: concepts/resource-hub.md
+    - Tracing: concepts/tracing.md
+  - Hướng dẫn:
+    - Xây dựng Workflows: guides/building-workflows.md
+    - Tích hợp LLM: guides/llm-integration.md
+    - Embeddings & Reranking: guides/embeddings-reranking.md
+    - Xử lý lỗi: guides/error-handling.md
+    - Thực thi song song: guides/parallel-execution.md
+    - Deploy Production: guides/production-deployment.md
+  - Ví dụ:
+    - Pipeline cơ bản: examples/basic-pipeline.md
+    - RAG Workflow: examples/rag-workflow.md
+    - Agent Workflow: examples/agent-workflow.md
+    - Multi-Model: examples/multi-model.md
+  - API Reference:
+    - Core:
+      - Hush Engine: reference/core/hush.md
+      - Nodes: reference/core/nodes.md
+      - State: reference/core/state.md
+    - Providers:
+      - LLMs: reference/providers/llms.md
+      - Embeddings: reference/providers/embeddings.md
+      - Rerankers: reference/providers/rerankers.md
+    - Observability:
+      - LocalTracer: reference/observability/local-tracer.md
+      - Langfuse: reference/observability/langfuse.md
+  - Contributing:
+    - Development Setup: contributing/development.md
+    - Kiến trúc Internal: contributing/architecture.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - tables

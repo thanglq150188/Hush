@@ -3,14 +3,21 @@
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, TYPE_CHECKING
 
 from hush.core.loggings import LOGGER
 from hush.core.utils.yaml_model import YamlModel
 
 from .storage import ConfigStorage, YamlConfigStorage
 from .resource_factory import ResourceFactory, get_config_class
+
+# Type hints for IDE support - these imports only happen during type checking
+if TYPE_CHECKING:
+    from hush.providers.llms.base import BaseLLM
+    from hush.providers.embeddings.base import BaseEmbedding
+    from hush.providers.rerankers.base import BaseReranker
 
 
 # Instance hub global - khởi tạo lazy
@@ -388,7 +395,7 @@ class ResourceHub:
             self._storage.close()
 
     # ========================================================================
-    # Các Accessor theo Type
+    # Các Accessor theo Type (with type hints for IDE support)
     # ========================================================================
 
     def _get_with_prefix(self, key: str, prefix: str) -> Any:
@@ -397,7 +404,7 @@ class ResourceHub:
             key = f"{prefix}:{key}"
         return self.get(key)
 
-    def llm(self, key: str) -> Any:
+    def llm(self, key: str) -> "BaseLLM":
         """Lấy LLM instance theo key.
 
         Tự động xử lý provider prefix (azure:, openai:, gemini:).
@@ -406,7 +413,7 @@ class ResourceHub:
             key: Định danh LLM (ví dụ: 'gpt-4', 'azure:gpt-4', 'llm:gpt-4')
 
         Returns:
-            LLM instance
+            BaseLLM instance with chat(), generate() methods
         """
         # Xử lý provider prefix
         for prefix in ['azure:', 'openai:', 'gemini:']:
@@ -414,12 +421,20 @@ class ResourceHub:
                 return self._get_with_prefix(key, 'llm')
         return self._get_with_prefix(key, 'llm')
 
-    def embedding(self, key: str) -> Any:
-        """Lấy embedding model theo key."""
+    def embedding(self, key: str) -> "BaseEmbedding":
+        """Lấy embedding model theo key.
+
+        Returns:
+            BaseEmbedding instance with embed(), embed_batch() methods
+        """
         return self._get_with_prefix(key, 'embedding')
 
-    def reranker(self, key: str) -> Any:
-        """Lấy reranker instance theo key."""
+    def reranker(self, key: str) -> "BaseReranker":
+        """Lấy reranker instance theo key.
+
+        Returns:
+            BaseReranker instance with rerank() method
+        """
         return self._get_with_prefix(key, 'reranking')
 
     def redis(self, key: str) -> Any:
@@ -445,3 +460,69 @@ class ResourceHub:
     def mcp(self, key: str) -> Any:
         """Lấy MCP server theo key."""
         return self._get_with_prefix(key, 'mcp')
+
+    # ========================================================================
+    # Health Check
+    # ========================================================================
+
+    def health_check(self, keys: Optional[List[str]] = None) -> "HealthCheckResult":
+        """Check health of all or specified resources.
+
+        Args:
+            keys: Optional list of keys to check. If None, checks all.
+
+        Returns:
+            HealthCheckResult with status of each resource
+
+        Example:
+            result = hub.health_check()
+            if not result.healthy:
+                print(f"Unhealthy resources: {result.failed}")
+        """
+        check_keys = keys if keys else self.keys()
+        results: Dict[str, bool] = {}
+        errors: Dict[str, str] = {}
+
+        for key in check_keys:
+            try:
+                # Try to load the resource
+                self.get(key)
+                results[key] = True
+            except Exception as e:
+                results[key] = False
+                errors[key] = str(e)
+                LOGGER.warning("Health check failed for '%s': %s", key, e)
+
+        return HealthCheckResult(
+            results=results,
+            errors=errors,
+        )
+
+
+@dataclass
+class HealthCheckResult:
+    """Result of health check operation."""
+
+    results: Dict[str, bool]
+    errors: Dict[str, str]
+
+    @property
+    def healthy(self) -> bool:
+        """True if all resources are healthy."""
+        return all(self.results.values())
+
+    @property
+    def passed(self) -> List[str]:
+        """List of healthy resource keys."""
+        return [k for k, v in self.results.items() if v]
+
+    @property
+    def failed(self) -> List[str]:
+        """List of unhealthy resource keys."""
+        return [k for k, v in self.results.items() if not v]
+
+    def __repr__(self) -> str:
+        total = len(self.results)
+        passed = len(self.passed)
+        status = "HEALTHY" if self.healthy else "UNHEALTHY"
+        return f"<HealthCheckResult {status} {passed}/{total}>"
