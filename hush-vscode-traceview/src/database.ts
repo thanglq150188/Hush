@@ -1,7 +1,36 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import Database from 'better-sqlite3';
+import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+
+/**
+ * Read HUSH_TRACES_DB from .env file in the hush project
+ */
+function getTracesDbFromEnv(): string | null {
+    // Look for .env file in parent directory (hush project root)
+    const envPath = path.join(__dirname, '..', '..', '..', '.env');
+
+    if (!fs.existsSync(envPath)) {
+        return null;
+    }
+
+    const content = fs.readFileSync(envPath, 'utf8');
+    const lines = content.split('\n');
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('HUSH_TRACES_DB=')) {
+            let value = trimmed.substring('HUSH_TRACES_DB='.length).trim();
+            // Remove quotes if present
+            if ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            return value;
+        }
+    }
+    return null;
+}
 
 export interface TraceRow {
     id: number;
@@ -61,20 +90,40 @@ export interface TraceNode {
     children: TraceNode[];
 }
 
+let SQL: initSqlJs.SqlJsStatic | null = null;
+
+async function getSqlJs(): Promise<initSqlJs.SqlJsStatic> {
+    if (!SQL) {
+        // Locate the WASM file in the extension's output directory
+        const wasmPath = path.join(__dirname, 'sql-wasm.wasm');
+        SQL = await initSqlJs({
+            locateFile: () => wasmPath
+        });
+    }
+    return SQL;
+}
+
 export class TraceDatabase {
     private dbPath: string;
-    private db: Database.Database | null = null;
+    private db: SqlJsDatabase | null = null;
 
     constructor(dbPath?: string) {
         this.dbPath = dbPath || this.getDefaultDbPath();
     }
 
     private getDefaultDbPath(): string {
-        // Check env var first
+        // Check environment variable first
         const envPath = process.env.HUSH_TRACES_DB;
         if (envPath) {
             return envPath;
         }
+
+        // Check .env file from hush project
+        const envFileDbPath = getTracesDbFromEnv();
+        if (envFileDbPath) {
+            return envFileDbPath;
+        }
+
         // Default to ~/.hush/traces.db
         return path.join(os.homedir(), '.hush', 'traces.db');
     }
@@ -95,12 +144,14 @@ export class TraceDatabase {
         return stats.size;
     }
 
-    private open(): Database.Database {
+    private async open(): Promise<SqlJsDatabase> {
         if (!this.db) {
             if (!this.exists()) {
                 throw new Error(`Database not found: ${this.dbPath}`);
             }
-            this.db = new Database(this.dbPath, { readonly: true });
+            const sqlJs = await getSqlJs();
+            const fileBuffer = fs.readFileSync(this.dbPath);
+            this.db = new sqlJs.Database(fileBuffer);
         }
         return this.db;
     }
@@ -112,24 +163,39 @@ export class TraceDatabase {
         }
     }
 
-    public getTraceList(limit: number = 100): TraceSummary[] {
-        const db = this.open();
+    private queryToObjects<T>(db: SqlJsDatabase, sql: string, params: any[] = []): T[] {
+        const stmt = db.prepare(sql);
+        stmt.bind(params);
 
-        const rows = db.prepare(`
+        const results: T[] = [];
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            results.push(row as T);
+        }
+        stmt.free();
+        return results;
+    }
+
+    public async getTraceList(limit: number = 100): Promise<TraceSummary[]> {
+        const db = await this.open();
+
+        // Get root node's duration (parent_name IS NULL) instead of SUM
+        // because parent durations already include child durations
+        const rows = this.queryToObjects<any>(db, `
             SELECT
-                request_id,
-                workflow_name,
-                MIN(start_time) as start_time,
-                SUM(duration_ms) as total_duration_ms,
-                SUM(total_tokens) as total_tokens,
-                SUM(cost_usd) as total_cost,
+                t.request_id,
+                t.workflow_name,
+                MIN(t.start_time) as start_time,
+                MAX(CASE WHEN t.parent_name IS NULL THEN t.duration_ms ELSE 0 END) as total_duration_ms,
+                SUM(CASE WHEN t.contain_generation = 1 THEN t.total_tokens ELSE 0 END) as total_tokens,
+                SUM(CASE WHEN t.contain_generation = 1 THEN t.cost_usd ELSE 0 END) as total_cost,
                 COUNT(*) as node_count
-            FROM traces
-            WHERE status IN ('flushed', 'pending')
-            GROUP BY request_id
-            ORDER BY MIN(created_at) DESC
+            FROM traces t
+            WHERE t.status IN ('flushed', 'pending')
+            GROUP BY t.request_id
+            ORDER BY MIN(t.created_at) DESC
             LIMIT ?
-        `).all(limit) as any[];
+        `, [limit]);
 
         return rows.map(row => ({
             request_id: row.request_id,
@@ -142,31 +208,37 @@ export class TraceDatabase {
         }));
     }
 
-    public getTraceDetail(requestId: string): TraceNode[] {
-        const db = this.open();
+    public async getTraceDetail(requestId: string): Promise<TraceNode[]> {
+        const db = await this.open();
 
-        const rows = db.prepare(`
+        const rows = this.queryToObjects<TraceRow>(db, `
             SELECT *
             FROM traces
             WHERE request_id = ?
             ORDER BY execution_order
-        `).all(requestId) as TraceRow[];
+        `, [requestId]);
 
         // Convert flat list to tree structure
         return this.buildTree(rows);
     }
 
     private buildTree(rows: TraceRow[]): TraceNode[] {
-        const nodeMap = new Map<string, TraceNode>();
+        // node_name + context_id uniquely identifies a node
+        // parent_name is the full path of the parent node
+        //
+        // Key insight:
+        // - Iteration nodes have unique names (include indices like iteration[0][0])
+        // - Non-iteration nodes (like multiply, validate) share names but differ by context_id
+        // - When child has context like "[0].[1]", parent context is prefix "[0]"
+
+        const nodeByKey = new Map<string, TraceNode>();  // node_name:context_id -> node
+        const nodesByName = new Map<string, TraceNode[]>(); // node_name -> all nodes with that name
+        const allNodes: TraceNode[] = [];
         const roots: TraceNode[] = [];
 
-        // First pass: create all nodes
+        // First pass: create all nodes and index them
         for (const row of rows) {
             if (!row.node_name) continue;
-
-            const key = row.context_id
-                ? `${row.node_name}:${row.context_id}`
-                : row.node_name;
 
             const node: TraceNode = {
                 id: row.id,
@@ -189,26 +261,84 @@ export class TraceDatabase {
                 children: []
             };
 
-            nodeMap.set(key, node);
+            allNodes.push(node);
+
+            // Index by node_name:context_id for unique lookup
+            const key = row.context_id
+                ? `${row.node_name}:${row.context_id}`
+                : row.node_name;
+            nodeByKey.set(key, node);
+
+            // Also index by node_name -> list of nodes (for context matching)
+            if (!nodesByName.has(row.node_name)) {
+                nodesByName.set(row.node_name, []);
+            }
+            nodesByName.get(row.node_name)!.push(node);
         }
 
         // Second pass: link parents and children
-        for (const [key, node] of nodeMap) {
+        for (const node of allNodes) {
             if (!node.parent_name) {
                 roots.push(node);
                 continue;
             }
 
-            // Try to find parent with same context
-            const parentKey = node.context_id
-                ? `${node.parent_name}:${node.context_id}`
-                : node.parent_name;
+            let parent: TraceNode | undefined;
 
-            let parent = nodeMap.get(parentKey);
+            // Strategy 1: Try exact match with parent's context
+            // Child context "[0].[1]" -> parent context "[0]"
+            if (node.context_id) {
+                const contextParts = node.context_id.split('.');
+                if (contextParts.length > 1) {
+                    const parentContext = contextParts.slice(0, -1).join('.');
+                    parent = nodeByKey.get(`${node.parent_name}:${parentContext}`);
+                }
+                // Also try same context (for siblings under same iteration)
+                if (!parent) {
+                    parent = nodeByKey.get(`${node.parent_name}:${node.context_id}`);
+                }
+            }
 
-            // If not found, try without context
+            // Strategy 2: Try parent_name without context (for unique iteration node names)
             if (!parent) {
-                parent = nodeMap.get(node.parent_name);
+                parent = nodeByKey.get(node.parent_name);
+            }
+
+            // Strategy 3: If parent_name has multiple matches, pick by context matching
+            if (!parent) {
+                const candidates = nodesByName.get(node.parent_name);
+                if (candidates && candidates.length > 0) {
+                    if (candidates.length === 1) {
+                        parent = candidates[0];
+                    } else if (node.context_id) {
+                        // Find candidate whose context is a prefix of child's context
+                        const childContextParts = node.context_id.split('.');
+                        for (const candidate of candidates) {
+                            if (!candidate.context_id) continue;
+                            const parentContextParts = candidate.context_id.split('.');
+                            // Check if parent context is prefix of child context
+                            if (childContextParts.length > parentContextParts.length) {
+                                const prefix = childContextParts.slice(0, parentContextParts.length).join('.');
+                                if (prefix === candidate.context_id) {
+                                    parent = candidate;
+                                    break;
+                                }
+                            }
+                            // Or same context
+                            if (candidate.context_id === node.context_id) {
+                                parent = candidate;
+                                break;
+                            }
+                        }
+                        // Fallback: first candidate
+                        if (!parent) {
+                            parent = candidates[0];
+                        }
+                    } else {
+                        // No context, pick candidate without context or first
+                        parent = candidates.find(c => !c.context_id) || candidates[0];
+                    }
+                }
             }
 
             if (parent) {
@@ -239,17 +369,26 @@ export class TraceDatabase {
         }
     }
 
-    public clearTraces(): void {
-        // Close readonly connection
+    public async clearTraces(): Promise<void> {
+        // Close current connection
         this.close();
 
         if (!this.exists()) {
             return;
         }
 
-        // Open in write mode to delete
-        const db = new Database(this.dbPath);
-        db.exec('DELETE FROM traces');
+        // Open in write mode
+        const sqlJs = await getSqlJs();
+        const fileBuffer = fs.readFileSync(this.dbPath);
+        const db = new sqlJs.Database(fileBuffer);
+
+        db.run('DELETE FROM traces');
+
+        // Save back to file
+        const data = db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(this.dbPath, buffer);
+
         db.close();
     }
 }

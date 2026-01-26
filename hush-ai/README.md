@@ -1,93 +1,98 @@
 # Hush AI
 
-Async workflow orchestration engine for GenAI applications.
+> Meta-package cho Hush ecosystem.
 
-> **Note**: This is the meta-package. Install with `pip install hush-ai[standard]`
+Cài đặt package này để có đầy đủ tính năng của Hush workflow engine.
 
-## Installation
+## Cài đặt
 
 ```bash
-# Core only - workflow engine with local tracing
-pip install hush-ai[core]
-
 # Standard - workflow engine + LLM providers (OpenAI)
 pip install hush-ai[standard]
 
-# Everything (lightweight)
+# Core only - workflow engine với local tracing
+pip install hush-ai[core]
+
+# Full - tất cả providers + observability
 pip install hush-ai[all]
 ```
 
-## Installation Options
+## Installation Tiers
 
-### Tiers
-
-| Tier | Description |
-|------|-------------|
-| `hush-ai[core]` | Workflow engine + local SQLite tracing + web UI |
-| `hush-ai[standard]` | Core + LLM/embedding/rerank providers (OpenAI) |
-| `hush-ai[all]` | Standard + all providers + observability (light) |
+| Tier | Bao gồm |
+|------|---------|
+| `hush-ai[core]` | Workflow engine + LocalTracer + Web UI |
+| `hush-ai[standard]` | Core + LLM providers (OpenAI) |
+| `hush-ai[all]` | Standard + tất cả providers + observability |
 | `hush-ai[full]` | All + heavy ML frameworks (torch, transformers) |
 
-### LLM Providers
+## Provider Extras
 
 ```bash
+# LLM providers
 pip install hush-ai[openai]      # OpenAI
 pip install hush-ai[azure]       # Azure OpenAI
 pip install hush-ai[gemini]      # Google Gemini
-pip install hush-ai[openai,gemini]  # Multiple providers
-```
 
-### Local Inference
+# Local inference
+pip install hush-ai[onnx]        # ONNX Runtime (nhẹ)
+pip install hush-ai[huggingface] # HuggingFace + PyTorch (nặng)
 
-```bash
-pip install hush-ai[onnx]        # ONNX Runtime (lightweight)
-pip install hush-ai[huggingface] # HuggingFace + PyTorch (heavy)
-```
-
-### Observability
-
-```bash
-pip install hush-ai[standard,langfuse]  # Add Langfuse tracing
-pip install hush-ai[standard,otel]      # Add OpenTelemetry
+# Observability
+pip install hush-ai[standard,langfuse]  # Thêm Langfuse
+pip install hush-ai[standard,otel]      # Thêm OpenTelemetry
 ```
 
 ## Quick Start
 
 ```python
-from hush.core import Hush, Graph
-from hush.core.nodes import FunctionNode
-from hush.providers.llms import OpenAIChat
+import asyncio
+from hush.core import Hush, GraphNode, START, END, PARENT
+from hush.providers import PromptNode, LLMNode
 
-# Define nodes
-llm = OpenAIChat(model="gpt-4o-mini")
+async def main():
+    with GraphNode(name="chat") as graph:
+        prompt = PromptNode(
+            name="prompt",
+            inputs={
+                "prompt": {"system": "Bạn là trợ lý AI.", "user": "{question}"},
+                "question": PARENT["question"]
+            },
+            outputs={"messages": PARENT}
+        )
+        llm = LLMNode(
+            name="llm",
+            resource_key="gpt-4o",
+            inputs={"messages": PARENT["messages"]},
+            outputs={"content": PARENT["answer"]}
+        )
+        START >> prompt >> llm >> END
 
-@FunctionNode
-async def process(state):
-    response = await llm.chat([{"role": "user", "content": state["prompt"]}])
-    return {"response": response.content}
+    engine = Hush(graph)
+    result = await engine.run(inputs={"question": "Python là gì?"})
+    print(result["answer"])
 
-# Build and run workflow
-graph = Graph()
-graph.add_node(process)
-
-engine = Hush(graph)
-result = await engine.run({"prompt": "Hello, world!"})
+asyncio.run(main())
 ```
 
 ## Local Trace Viewer
 
-Traces are automatically saved to `~/.hush/traces.db`. View them with:
+Traces tự động lưu vào `~/.hush/traces.db`. Xem bằng:
 
 ```bash
 python -m hush.core.ui.server
-# Open http://localhost:8765
+# Mở http://localhost:8765
 ```
+
+Hoặc dùng VS Code extension: [hush-vscode-traceview](../hush-vscode-traceview/)
 
 ## Packages
 
-- **hush-core**: Workflow engine, state management, local tracing
-- **hush-providers**: LLM, embedding, reranking providers
-- **hush-observability**: External tracing (Langfuse, OpenTelemetry)
+| Package | Mô tả |
+|---------|-------|
+| [hush-core](../hush-core/) | Workflow engine, state management, local tracing |
+| [hush-providers](../hush-providers/) | LLM, embedding, reranking providers |
+| [hush-observability](../hush-observability/) | Langfuse, OpenTelemetry integration |
 
 ## License
 

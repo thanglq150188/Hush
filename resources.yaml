@@ -62,6 +62,13 @@ embedding:openai:
   model: text-embedding-3-small
   dimensions: 1536
 
+# Local ONNX Embedding
+embedding:bge-m3-onnx:
+  type: embedding
+  api_type: onnx
+  model: ${BGE_M3_EMBEDDING_PATH}
+  dimensions: 1024
+
 # =============================================================================
 # Reranking Configurations
 # =============================================================================
@@ -79,7 +86,7 @@ reranking:bge-m3:
 reranking:bge-m3-onnx:
   type: reranking
   api_type: onnx
-  model: D:\bge-m3-reranker
+  model: ${BGE_M3_RERANKER_PATH}
   dimensions: 1024
 
 # =============================================================================

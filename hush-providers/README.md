@@ -1,32 +1,25 @@
 # Hush Providers
 
-LLM, embedding, and reranking providers for the Hush workflow engine.
+LLM, embedding và reranking providers cho Hush workflow engine.
 
-## Installation
+## Cài đặt
 
 ```bash
 pip install hush-providers
-```
 
-Or with specific provider extras:
+# Với provider cụ thể
+pip install hush-providers[openai]      # OpenAI
+pip install hush-providers[azure]       # Azure OpenAI
+pip install hush-providers[gemini]      # Google Gemini
 
-```bash
-# LLM providers
-pip install hush-providers[openai]         # OpenAI LLM support
-pip install hush-providers[azure]          # Azure OpenAI support
-pip install hush-providers[gemini]         # Google Gemini support
+# Local inference (nhẹ)
+pip install hush-providers[onnx]        # ONNX Runtime
+pip install hush-providers[embeddings]  # Embeddings (ONNX)
+pip install hush-providers[rerankers]   # Rerankers (ONNX)
 
-# Local inference (lightweight - recommended)
-pip install hush-providers[onnx]           # ONNX Runtime + tokenizers
-pip install hush-providers[embeddings]     # Embeddings (ONNX-based)
-pip install hush-providers[rerankers]      # Rerankers (ONNX-based)
-
-# Heavy ML frameworks (only if you need HuggingFace models)
-pip install hush-providers[huggingface]    # Transformers + PyTorch
-
-# All providers
-pip install hush-providers[all-light]      # Everything except heavy ML frameworks
-pip install hush-providers[all]            # Everything including transformers/torch
+# Tất cả
+pip install hush-providers[all-light]   # Không có ML frameworks nặng
+pip install hush-providers[all]         # Bao gồm transformers/torch
 ```
 
 ## Quick Start
@@ -34,143 +27,109 @@ pip install hush-providers[all]            # Everything including transformers/t
 ### LLM Node
 
 ```python
-from hush.core import WorkflowEngine, START, END, INPUT, OUTPUT
-from hush.providers import LLMNode, LLMConfig
+from hush.core import Hush, GraphNode, START, END, PARENT
+from hush.providers import PromptNode, LLMNode
 
-# Configure LLM
-config = LLMConfig.create_config({
-    "api_type": "openai",
-    "api_key": "your-api-key",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4"
-})
+async def main():
+    with GraphNode(name="chat") as graph:
+        prompt = PromptNode(
+            name="prompt",
+            inputs={
+                "prompt": {"system": "Bạn là trợ lý AI.", "user": "{question}"},
+                "question": PARENT["question"]
+            },
+            outputs={"messages": PARENT}
+        )
+        llm = LLMNode(
+            name="llm",
+            resource_key="gpt-4o",
+            inputs={"messages": PARENT["messages"]},
+            outputs={"content": PARENT["answer"]}
+        )
+        START >> prompt >> llm >> END
 
-with WorkflowEngine(name="chat") as workflow:
-    llm = LLMNode(
-        name="chat",
-        config=config,
-        inputs={"messages": INPUT},
-        outputs={"content": OUTPUT}
-    )
-    START >> llm >> END
-
-workflow.compile()
-result = await workflow.run(inputs={
-    "messages": [{"role": "user", "content": "Hello!"}]
-})
+    engine = Hush(graph)
+    result = await engine.run(inputs={"question": "Hello!"})
 ```
 
 ### Embedding Node
 
 ```python
-from hush.providers import EmbeddingNode, EmbeddingConfig
+from hush.providers import EmbeddingNode
 
-config = EmbeddingConfig(
-    api_type="vllm",
-    base_url="http://localhost:8000/v1/embeddings",
-    model="BAAI/bge-m3",
-    dimensions=1024
+embed = EmbeddingNode(
+    name="embed",
+    resource_key="bge-m3",
+    inputs={"texts": PARENT["documents"]},
+    outputs={"embeddings": PARENT}
 )
-
-with WorkflowEngine(name="embed") as workflow:
-    embed = EmbeddingNode(
-        name="embed",
-        config=config,
-        inputs={"texts": INPUT},
-        outputs={"embeddings": OUTPUT}
-    )
-    START >> embed >> END
 ```
 
-### Reranking Node
+### Rerank Node
 
 ```python
-from hush.providers import RerankNode, RerankingConfig
+from hush.providers import RerankNode
 
-config = RerankingConfig(
-    api_type="pipecone",
-    api_key="your-api-key",
-    model="bge-reranker-v2-m3"
+rerank = RerankNode(
+    name="rerank",
+    resource_key="bge-reranker",
+    inputs={"query": PARENT["query"], "documents": PARENT["docs"]},
+    outputs={"ranked_docs": PARENT}
 )
-
-with WorkflowEngine(name="rerank") as workflow:
-    rerank = RerankNode(
-        name="rerank",
-        config=config,
-        inputs={"query": INPUT, "documents": INPUT},
-        outputs={"ranked_docs": OUTPUT}
-    )
-    START >> rerank >> END
 ```
 
 ## Supported Providers
 
-### LLM Providers
+### LLM
 
-- **OpenAI** - OpenAI API and compatible endpoints (vLLM, etc.)
-- **Azure** - Azure OpenAI Service
-- **Gemini** - Google Gemini via Vertex AI
+| Provider | API Type | Mô tả |
+|----------|----------|-------|
+| OpenAI | `openai` | OpenAI API và compatible endpoints (vLLM) |
+| Azure | `azure` | Azure OpenAI Service |
+| Gemini | `gemini` | Google Gemini via Vertex AI |
 
-### Embedding Providers
+### Embedding
 
-- **vLLM** - OpenAI-compatible embedding API
-- **TEI** - Hugging Face Text Embedding Inference
-- **HuggingFace** - Local HuggingFace Transformers models
-- **ONNX** - Local ONNX Runtime models
+| Provider | API Type | Mô tả |
+|----------|----------|-------|
+| vLLM | `vllm` | OpenAI-compatible embedding API |
+| TEI | `tei` | HuggingFace Text Embedding Inference |
+| ONNX | `onnx` | Local ONNX Runtime |
 
-### Reranking Providers
+### Reranking
 
-- **vLLM** - OpenAI-compatible reranking API
-- **TEI** - Hugging Face Text Embedding Inference
-- **HuggingFace** - Local sequence classification models
-- **ONNX** - Local ONNX Runtime models
-- **Pinecone** - Pinecone reranking API
+| Provider | API Type | Mô tả |
+|----------|----------|-------|
+| vLLM | `vllm` | OpenAI-compatible reranking API |
+| Pinecone | `pinecone` | Pinecone reranking API |
+| ONNX | `onnx` | Local ONNX Runtime |
 
-## Features
-
-### LLM Features
-
-- ✅ Streaming and non-streaming responses
-- ✅ Token counting and usage tracking
-- ✅ Multimodal input support (images)
-- ✅ Tool/function calling
-- ✅ Batch processing
-- ✅ Automatic image path resolution
-- ✅ Chinese character filtering
-
-### Embedding Features
-
-- ✅ Async/sync interface
-- ✅ Batch embedding support
-- ✅ Multiple backend support (API and local)
-- ✅ Configurable dimensions
-- ✅ Tokenization handling
-
-### Reranking Features
-
-- ✅ Query-document relevance scoring
-- ✅ Top-K filtering
-- ✅ Threshold-based filtering
-- ✅ Result sorting and ranking
-
-## Configuration
-
-All providers support YAML configuration:
+## Cấu hình với ResourceHub
 
 ```yaml
-# llm_config.yaml
-api_type: openai
-api_key: your-api-key
-base_url: https://api.openai.com/v1
-model: gpt-4
+# resources.yaml
+llm:gpt-4o:
+  _class: OpenAIConfig
+  api_key: ${OPENAI_API_KEY}
+  api_type: openai
+  base_url: https://api.openai.com/v1
+  model: gpt-4o
+
+embedding:bge-m3:
+  _class: EmbeddingConfig
+  api_type: vllm
+  base_url: http://localhost:8000/v1
+  model: BAAI/bge-m3
 ```
 
-Load from YAML:
+## Tính năng
 
-```python
-from hush.providers import LLMConfig
-config = LLMConfig.from_yaml_file("llm_config.yaml")
-```
+- Streaming và non-streaming responses
+- Token counting và usage tracking
+- Multimodal input (images)
+- Tool/function calling
+- Batch processing
+- YAML configuration
 
 ## License
 

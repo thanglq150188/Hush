@@ -52,10 +52,16 @@ export class TracePanel {
         }
     }
 
+    private static getDbPath(): string | undefined {
+        const config = vscode.workspace.getConfiguration('hush');
+        const configPath = config.get<string>('tracesDb');
+        return configPath || undefined;
+    }
+
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
         this._extensionUri = extensionUri;
-        this._db = new TraceDatabase();
+        this._db = new TraceDatabase(TracePanel.getDbPath());
 
         // Set the webview's initial html content
         this._update();
@@ -89,14 +95,14 @@ export class TracePanel {
     private _refresh() {
         // Recreate database connection to pick up new data
         this._db.close();
-        this._db = new TraceDatabase();
+        this._db = new TraceDatabase(TracePanel.getDbPath());
         this._sendTraceList();
         this._sendDbInfo();
     }
 
-    private _clear() {
+    private async _clear() {
         try {
-            this._db.clearTraces();
+            await this._db.clearTraces();
             this._refresh();
             vscode.window.showInformationMessage('Traces cleared');
         } catch (e: any) {
@@ -104,7 +110,7 @@ export class TracePanel {
         }
     }
 
-    private _sendTraceList() {
+    private async _sendTraceList() {
         try {
             if (!this._db.exists()) {
                 this._panel.webview.postMessage({
@@ -114,7 +120,7 @@ export class TracePanel {
                 });
                 return;
             }
-            const traces = this._db.getTraceList();
+            const traces = await this._db.getTraceList();
             this._panel.webview.postMessage({
                 type: 'traceList',
                 traces,
@@ -129,9 +135,9 @@ export class TracePanel {
         }
     }
 
-    private _sendTraceDetail(requestId: string) {
+    private async _sendTraceDetail(requestId: string) {
         try {
-            const nodes = this._db.getTraceDetail(requestId);
+            const nodes = await this._db.getTraceDetail(requestId);
             this._panel.webview.postMessage({
                 type: 'traceDetail',
                 requestId,

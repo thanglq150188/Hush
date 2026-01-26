@@ -11,7 +11,11 @@
     "Visualization",
     "Debuggers"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:hush.openTraces",
+    "onCommand:hush.refreshTraces",
+    "onCommand:hush.clearTraces"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -40,21 +44,20 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "vscode:prepublish": "npm run esbuild-base -- --minify --keep-names && npm run copy-wasm",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --keep-names",
+    "copy-wasm": "cp node_modules/sql.js/dist/sql-wasm.wasm out/",
+    "compile": "npm run esbuild-base -- --sourcemap && npm run copy-wasm",
+    "watch": "npm run esbuild-base -- --sourcemap --watch"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
+    "@types/sql.js": "^1.4.9",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "eslint": "^8.0.0",
+    "esbuild": "^0.27.2",
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "sql.js": "^1.11.0"
   }
 }
