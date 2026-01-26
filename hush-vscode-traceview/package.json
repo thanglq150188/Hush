@@ -1,0 +1,60 @@
+{
+  "name": "hush-vscode-traceview",
+  "displayName": "Hush Trace Viewer",
+  "description": "View Hush workflow execution traces",
+  "version": "0.1.0",
+  "publisher": "hush",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Debuggers"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "hush.openTraces",
+        "title": "Hush: Open Traces"
+      },
+      {
+        "command": "hush.refreshTraces",
+        "title": "Hush: Refresh Traces"
+      },
+      {
+        "command": "hush.clearTraces",
+        "title": "Hush: Clear Traces"
+      }
+    ],
+    "configuration": {
+      "title": "Hush Traces",
+      "properties": {
+        "hush.tracesDb": {
+          "type": "string",
+          "default": "",
+          "description": "Path to traces database. Defaults to HUSH_TRACES_DB env var or ~/.hush/traces.db"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}

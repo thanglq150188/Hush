@@ -334,8 +334,14 @@ def setup_resource_hub():
     """Setup ResourceHub with configurations for the entire test session."""
     from hush.core.registry import ResourceHub, set_global_hub
 
-    # Import plugins to auto-register config classes and factory handlers
-    from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
+    # Import observability plugin to register Langfuse/OTEL configs
+    from hush.observability.plugin import ObservabilityPlugin
+
+    # Optionally import providers plugin if available (for full integration tests)
+    try:
+        from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
+    except ImportError:
+        pass  # hush-providers not installed, skip
 
     # Create hub from config file
     hub = ResourceHub.from_yaml(CONFIGS_PATH)

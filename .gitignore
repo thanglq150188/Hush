@@ -72,6 +72,9 @@ logs/
 .env.*.local
 secrets.yaml
 
+# Local traces database
+.hush/
+
 # Cache
 .cache/
 .ruff_cache/

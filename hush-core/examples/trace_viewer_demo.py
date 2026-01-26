@@ -417,54 +417,23 @@ async def run_demo():
 
 
 def main():
-    """Main entry point - run demo and start UI server."""
+    """Main entry point - run demo to generate traces."""
     import os
-    import signal
-    import webbrowser
     from pathlib import Path
 
     # Remove old traces database for a clean demo
-    db_path = Path.home() / ".hush" / "traces.db"
+    from hush.core.background import DEFAULT_DB_PATH
+    db_path = Path(os.environ.get("HUSH_TRACES_DB", DEFAULT_DB_PATH))
     if db_path.exists():
         db_path.unlink()
         print(f"Removed old database: {db_path}")
         print()
 
-    # Kill any existing server on port 8765
-    from hush.core.ui.server import DEFAULT_PORT
-    try:
-        import subprocess
-        result = subprocess.run(
-            f"lsof -i :{DEFAULT_PORT} -t",
-            shell=True, capture_output=True, text=True
-        )
-        if result.stdout.strip():
-            for pid in result.stdout.strip().split('\n'):
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                    print(f"Killed existing server (PID {pid}) on port {DEFAULT_PORT}")
-                except (ProcessLookupError, ValueError):
-                    pass
-            sleep(1)
-    except Exception:
-        pass
-
     # Run the demo to generate traces
     asyncio.run(run_demo())
 
-    # Start the UI server
     print()
-    print("=" * 60)
-    print("Starting Trace Viewer UI...")
-    print()
-
-    from hush.core.ui.server import run_server
-
-    # Open browser automatically
-    webbrowser.open(f"http://localhost:{DEFAULT_PORT}")
-
-    # Start server (blocking)
-    run_server()
+    print("To view traces, use VS Code command: 'Hush: Open Traces'")
 
 
 if __name__ == "__main__":

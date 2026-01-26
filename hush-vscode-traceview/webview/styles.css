@@ -1,0 +1,370 @@
+:root {
+    --bg-primary: var(--vscode-editor-background);
+    --bg-secondary: var(--vscode-sideBar-background);
+    --text-primary: var(--vscode-editor-foreground);
+    --text-secondary: var(--vscode-descriptionForeground);
+    --border-color: var(--vscode-panel-border);
+    --accent: var(--vscode-textLink-foreground);
+    --hover-bg: var(--vscode-list-hoverBackground);
+    --selected-bg: var(--vscode-list-activeSelectionBackground);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    padding: 16px;
+    height: 100vh;
+    overflow: hidden;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+#header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+#header h1 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+#actions button {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    padding: 6px 12px;
+    margin-left: 8px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+#actions button:hover {
+    background: var(--vscode-button-hoverBackground);
+}
+
+#db-info {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    flex-shrink: 0;
+}
+
+#content {
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Trace List */
+#trace-list {
+    height: 100%;
+    overflow: auto;
+}
+
+.trace-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.trace-table th,
+.trace-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.trace-table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    position: sticky;
+    top: 0;
+}
+
+.trace-table tbody tr:hover {
+    background: var(--hover-bg);
+    cursor: pointer;
+}
+
+.trace-table .workflow {
+    font-weight: 500;
+}
+
+.trace-table .time {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.trace-table .duration {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+}
+
+.trace-table .tokens {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+}
+
+.trace-table .cost {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+    color: var(--accent);
+}
+
+/* Trace Detail */
+#trace-detail {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 12px;
+    height: 100%;
+}
+
+#detail-header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#back-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 4px 8px;
+}
+
+#back-btn:hover {
+    text-decoration: underline;
+}
+
+.detail-workflow {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.detail-time {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+#tree-panel {
+    overflow: auto;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    padding: 8px;
+}
+
+#node-panel {
+    overflow: auto;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    padding: 16px;
+}
+
+/* Tree */
+.tree-root {
+    padding: 4px 0;
+}
+
+.tree-node {
+    position: relative;
+}
+
+.tree-children {
+    padding-left: 16px;
+    border-left: 1px solid var(--border-color);
+    margin-left: 7px;
+}
+
+.tree-item {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    cursor: pointer;
+    border-radius: 3px;
+    margin: 1px 0;
+    user-select: none;
+}
+
+.tree-item:hover {
+    background: var(--hover-bg);
+}
+
+.tree-item.selected {
+    background: var(--selected-bg);
+}
+
+.tree-toggle {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.tree-toggle.has-children {
+    cursor: pointer;
+}
+
+.tree-toggle.has-children:hover {
+    color: var(--text-primary);
+}
+
+.tree-icon {
+    margin-right: 6px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.tree-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+.tree-duration {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-family: var(--vscode-editor-font-family);
+}
+
+.tree-tokens {
+    font-size: 10px;
+    color: var(--accent);
+    font-family: var(--vscode-editor-font-family);
+}
+
+/* Node Detail */
+.node-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    word-break: break-all;
+}
+
+.node-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.metric {
+    background: var(--bg-primary);
+    padding: 10px 12px;
+    border-radius: 4px;
+}
+
+.metric-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.metric-value {
+    font-size: 13px;
+    font-family: var(--vscode-editor-font-family);
+}
+
+.node-section {
+    margin-bottom: 16px;
+}
+
+.node-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.json-view {
+    background: var(--bg-primary);
+    padding: 12px;
+    border-radius: 4px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 11px;
+    overflow: auto;
+    max-height: 250px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+}
+
+.json-key {
+    color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe);
+}
+
+.json-string {
+    color: var(--vscode-symbolIcon-stringForeground, #ce9178);
+}
+
+.json-number {
+    color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+}
+
+.json-boolean {
+    color: var(--vscode-symbolIcon-booleanForeground, #569cd6);
+}
+
+.json-null {
+    color: var(--vscode-symbolIcon-nullForeground, #569cd6);
+}
+
+/* States */
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+}
+
+.error-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--vscode-errorForeground);
+}
+
+.loading-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+}

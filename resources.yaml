@@ -95,10 +95,12 @@ langfuse:default:
   enabled: true
   sample_rate: 1.0
 
-# OpenTelemetry - Jaeger (local)
-otel:jaeger:
+# OpenTelemetry - Langfuse (default)
+otel:default:
   type: otel
-  endpoint: http://localhost:4317
-  protocol: grpc
+  endpoint: ${LANGFUSE_HOST}/api/public/otel/v1/traces
+  protocol: http
   service_name: hush-workflow
-  insecure: true
+  auth_type: basic
+  public_key: ${LANGFUSE_PUBLIC_KEY}
+  secret_key: ${LANGFUSE_SECRET_KEY}
