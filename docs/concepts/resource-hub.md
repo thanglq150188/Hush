@@ -30,13 +30,13 @@ Hardcode credentials và configs vào code tạo ra nhiều vấn đề:
 ```yaml
 # LLM configurations
 llm:gpt-4o:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   model: gpt-4o
   base_url: https://api.openai.com/v1
 
 llm:azure-gpt-4:
-  _class: AzureConfig
+  type: azure
   api_key: ${AZURE_API_KEY}
   endpoint: ${AZURE_ENDPOINT}
   deployment_name: gpt-4
@@ -44,7 +44,7 @@ llm:azure-gpt-4:
 
 # Embedding configuration
 embedding:bge-m3:
-  _class: EmbeddingConfig
+  type: embedding
   api_key: ${EMBEDDING_API_KEY}
   api_type: vllm
   base_url: https://api.deepinfra.com/v1/openai/embeddings
@@ -53,7 +53,7 @@ embedding:bge-m3:
 
 # Observability
 langfuse:default:
-  _class: LangfuseConfig
+  type: LangfuseConfig
   secret_key: ${LANGFUSE_SECRET_KEY}
   public_key: ${LANGFUSE_PUBLIC_KEY}
   host: https://cloud.langfuse.com
@@ -62,7 +62,9 @@ langfuse:default:
 
 ### Các field bắt buộc
 
-- `_class`: Tên class config (bắt buộc) - Hush dùng để biết cách parse và khởi tạo resource
+- `type`: Loại resource (bắt buộc) - Hush dùng để biết cách parse và khởi tạo resource. Có thể là:
+  - Type alias: `openai`, `azure`, `gemini`, `embedding`, `reranking`
+  - Class name: `OpenAIConfig`, `AzureConfig`, `LangfuseConfig`
 
 ### Environment Variable Interpolation
 
@@ -145,26 +147,28 @@ print(result.errors)    # Dict {key: error_message}
 
 ## Đăng ký Resource Types Mới
 
-ResourceHub sử dụng hệ thống plugin để mở rộng. Có 2 cách đăng ký resource types mới:
+ResourceHub sử dụng hệ thống plugin để mở rộng. Mỗi config class cần khai báo `_type` và `_category`, sau đó đăng ký với `REGISTRY`.
 
-### Cách 1: Đăng ký đơn giản (Quick Registration)
-
-Phù hợp cho prototyping hoặc khi chỉ có 1-2 config types:
+### Cách đăng ký
 
 ```python
-from hush.core.registry import register_config_class, register_factory_handler
+from typing import ClassVar
+from hush.core.registry import REGISTRY
 from hush.core.utils.yaml_model import YamlModel
 
 
-# 1. Định nghĩa Config class
+# 1. Định nghĩa Config class với _type và _category
 class MyServiceConfig(YamlModel):
     """Config cho MyService."""
+    _type: ClassVar[str] = "my-service"        # Type alias trong YAML
+    _category: ClassVar[str] = "myservice"     # Category/namespace
+
     api_key: str
     endpoint: str
     timeout: int = 30
 
 
-# 2. Định nghĩa cách tạo instance từ config
+# 2. Định nghĩa factory function
 def create_my_service(config: MyServiceConfig):
     """Factory function tạo MyService instance."""
     return MyServiceClient(
@@ -174,16 +178,15 @@ def create_my_service(config: MyServiceConfig):
     )
 
 
-# 3. Đăng ký với ResourceHub
-register_config_class(MyServiceConfig)
-register_factory_handler(MyServiceConfig, create_my_service)
+# 3. Đăng ký với REGISTRY (chỉ 1 call)
+REGISTRY.register(MyServiceConfig, create_my_service)
 ```
 
 Sau đó có thể sử dụng trong `resources.yaml`:
 
 ```yaml
 myservice:production:
-  _class: MyServiceConfig
+  type: my-service
   api_key: ${MY_SERVICE_API_KEY}
   endpoint: https://api.myservice.com
   timeout: 60
@@ -195,22 +198,15 @@ from hush.core.registry import get_hub
 service = get_hub().get("myservice:production")
 ```
 
-### Cách 2: Plugin Pattern (Recommended)
+### Plugin Pattern (Recommended)
 
-Phù hợp cho packages có nhiều config types, cần quản lý tốt hơn:
+Phù hợp cho packages có nhiều config types:
 
 ```python
 # my_package/registry/plugin.py
 
-from hush.core.registry import (
-    register_config_class,
-    register_config_classes,
-    register_factory_handler,
-)
-from my_package.configs import (
-    MyServiceConfig,
-    MyServiceV2Config,
-)
+from hush.core.registry import REGISTRY
+from my_package.configs import MyServiceConfig, MyServiceV2Config
 from my_package.factory import MyServiceFactory
 
 
@@ -224,19 +220,13 @@ class MyServicePlugin:
 
     @classmethod
     def register(cls):
-        """Đăng ký tất cả config classes và factory handlers."""
+        """Đăng ký tất cả config classes với factory."""
         if cls._registered:
             return
 
-        # Đăng ký config classes cho deserialization
-        register_config_classes(
-            MyServiceConfig,
-            MyServiceV2Config,
-        )
-
-        # Đăng ký factory handlers cho từng config type
-        register_factory_handler(MyServiceConfig, MyServiceFactory.create)
-        register_factory_handler(MyServiceV2Config, MyServiceFactory.create_v2)
+        # Chỉ cần 1 call cho mỗi config class
+        REGISTRY.register(MyServiceConfig, MyServiceFactory.create)
+        REGISTRY.register(MyServiceV2Config, MyServiceFactory.create_v2)
 
         cls._registered = True
 
@@ -255,10 +245,7 @@ MyServicePlugin.register()
 ```python
 # hush-providers/hush/providers/registry/llm_plugin.py
 
-from hush.core.registry import (
-    register_config_classes,
-    register_factory_handler,
-)
+from hush.core.registry import REGISTRY
 from hush.providers.llms.config import LLMConfig, OpenAIConfig, AzureConfig, GeminiConfig
 from hush.providers.llms.factory import LLMFactory
 
@@ -273,19 +260,11 @@ class LLMPlugin:
         if cls._registered:
             return
 
-        # Đăng ký tất cả config classes
-        register_config_classes(
-            LLMConfig,
-            OpenAIConfig,
-            AzureConfig,
-            GeminiConfig,
-        )
-
-        # Đăng ký factory handler - LLMFactory.create handle tất cả config types
-        register_factory_handler(LLMConfig, LLMFactory.create)
-        register_factory_handler(OpenAIConfig, LLMFactory.create)
-        register_factory_handler(AzureConfig, LLMFactory.create)
-        register_factory_handler(GeminiConfig, LLMFactory.create)
+        # Đăng ký tất cả config classes với factory
+        REGISTRY.register(LLMConfig, LLMFactory.create)
+        REGISTRY.register(OpenAIConfig, LLMFactory.create)
+        REGISTRY.register(AzureConfig, LLMFactory.create)
+        REGISTRY.register(GeminiConfig, LLMFactory.create)
 
         cls._registered = True
 
@@ -310,21 +289,19 @@ class ObservabilityPlugin:
             return
 
         try:
-            from hush.core.registry import register_config_class, register_factory_handler
+            from hush.core.registry import REGISTRY
 
             # Register Langfuse
             from hush.observability.backends.langfuse import LangfuseConfig, LangfuseClient
-            register_config_class(LangfuseConfig)
-            register_factory_handler(LangfuseConfig, lambda c: LangfuseClient(c))
+            REGISTRY.register(LangfuseConfig, lambda c: LangfuseClient(c))
 
             # Register OpenTelemetry
             from hush.observability.backends.otel import OTELConfig, OTELClient
-            register_config_class(OTELConfig)
-            register_factory_handler(OTELConfig, lambda c: OTELClient(c))
+            REGISTRY.register(OTELConfig, lambda c: OTELClient(c))
 
             cls._registered = True
 
-        except ImportError as e:
+        except ImportError:
             # Graceful degradation nếu dependencies không có
             pass
 
@@ -333,16 +310,6 @@ class ObservabilityPlugin:
 ObservabilityPlugin.register()
 ```
 
-### So sánh 2 cách
-
-| Tiêu chí | Quick Registration | Plugin Pattern |
-|----------|-------------------|----------------|
-| Độ phức tạp | Thấp | Trung bình |
-| Tổ chức code | Inline | Module riêng |
-| Idempotent | Không (cần tự kiểm tra) | Có (`_registered` flag) |
-| Auto-register | Không | Có (on import) |
-| Phù hợp cho | Prototyping, 1-2 configs | Packages, nhiều configs |
-
 ### Cấu trúc file cho Plugin
 
 ```
@@ -350,11 +317,11 @@ my_package/
 ├── __init__.py
 ├── configs/
 │   ├── __init__.py
-│   └── my_config.py      # Config classes
+│   └── my_config.py      # Config classes với _type, _category
 ├── factory.py            # Factory functions
 └── registry/
     ├── __init__.py       # Export plugins
-    └── my_plugin.py      # Plugin class
+    └── my_plugin.py      # Plugin class với REGISTRY.register()
 ```
 
 ## Sử dụng trong Workflow

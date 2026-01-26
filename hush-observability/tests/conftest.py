@@ -1,6 +1,7 @@
 """Pytest configuration and shared fixtures for hush-observability tests."""
 
 import os
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,20 +13,92 @@ from dotenv import load_dotenv
 # Load .env file from package root
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+# Also try loading from monorepo root
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
+
 # Get config path from environment
 CONFIGS_PATH = Path(os.environ.get("HUSH_CONFIG", ""))
 
+# =============================================================================
+# Configuration Validation
+# =============================================================================
+
+SETUP_TUTORIAL = """
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                 HUSH OBSERVABILITY TEST CONFIGURATION REQUIRED               ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  To run hush-observability tests, you need to configure credentials.         ║
+║                                                                              ║
+║  STEP 1: Create .env file                                                    ║
+║  ─────────────────────────────────────────────────────────────────────────── ║
+║  Copy .env.template to .env in the project root:                             ║
+║                                                                              ║
+║    cp .env.template .env                                                     ║
+║                                                                              ║
+║  STEP 2: Set HUSH_CONFIG path                                                ║
+║  ─────────────────────────────────────────────────────────────────────────── ║
+║  Add to your .env file:                                                      ║
+║                                                                              ║
+║    HUSH_CONFIG=/path/to/your/resources.yaml                                  ║
+║                                                                              ║
+║  STEP 3: Add observability credentials to .env                               ║
+║  ─────────────────────────────────────────────────────────────────────────── ║
+║  For Langfuse tests:                                                         ║
+║    LANGFUSE_PUBLIC_KEY=pk-lf-your-key                                        ║
+║    LANGFUSE_SECRET_KEY=sk-lf-your-key                                        ║
+║    LANGFUSE_HOST=https://cloud.langfuse.com                                  ║
+║    Get keys at: https://cloud.langfuse.com                                   ║
+║                                                                              ║
+║  STEP 4: Configure resources.yaml                                            ║
+║  ─────────────────────────────────────────────────────────────────────────── ║
+║  Add observability configs to resources.yaml:                                ║
+║                                                                              ║
+║    langfuse:default:                                                         ║
+║      type: langfuse                                                          ║
+║      public_key: ${LANGFUSE_PUBLIC_KEY}                                      ║
+║      secret_key: ${LANGFUSE_SECRET_KEY}                                      ║
+║      host: ${LANGFUSE_HOST}                                                  ║
+║                                                                              ║
+║    otel:jaeger:                                                              ║
+║      type: otel                                                              ║
+║      endpoint: http://localhost:4317                                         ║
+║      protocol: grpc                                                          ║
+║      service_name: hush-workflow                                             ║
+║      insecure: true                                                          ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+
 
 def pytest_configure(config):
-    """Configure pytest environment.
-
-    Sets terminal width for Rich console to avoid log truncation in pytest.
-    """
+    """Configure pytest environment."""
     # Set terminal width for Rich console output
     os.environ["COLUMNS"] = "200"
 
+    # Check if HUSH_CONFIG is set
+    if not os.environ.get("HUSH_CONFIG"):
+        print(SETUP_TUTORIAL, file=sys.stderr)
+        pytest.exit(
+            "HUSH_CONFIG environment variable not set. "
+            "Please follow the setup tutorial above.",
+            returncode=1
+        )
+
+    # Check if config file exists
+    if not CONFIGS_PATH.exists():
+        print(SETUP_TUTORIAL, file=sys.stderr)
+        pytest.exit(
+            f"Config file not found: {CONFIGS_PATH}\n"
+            "Please create resources.yaml or update HUSH_CONFIG path.",
+            returncode=1
+        )
+
     # Register custom markers
-    config.addinivalue_line("markers", "integration: mark test as integration test (requires credentials)")
+    config.addinivalue_line(
+        "markers",
+        "integration: mark test as integration test (requires credentials)"
+    )
 
 
 # ============================================================================
@@ -219,21 +292,21 @@ def mock_state():
 def langfuse_tracer():
     """Create LangfuseTracer with test resource key."""
     from hush.observability import LangfuseTracer
-    return LangfuseTracer(resource_key="langfuse:test")
+    return LangfuseTracer(resource_key="langfuse:default")
 
 
 @pytest.fixture
 def langfuse_tracer_with_tags():
     """Create LangfuseTracer with static tags."""
     from hush.observability import LangfuseTracer
-    return LangfuseTracer(resource_key="langfuse:test", tags=["test", "unit"])
+    return LangfuseTracer(resource_key="langfuse:default", tags=["test", "unit"])
 
 
 @pytest.fixture
 def otel_tracer():
     """Create OTELTracer with test resource key."""
     from hush.observability import OTELTracer
-    return OTELTracer(resource_key="otel:test")
+    return OTELTracer(resource_key="otel:jaeger")
 
 
 @pytest.fixture
@@ -265,15 +338,9 @@ def setup_resource_hub():
     from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
 
     # Create hub from config file
-    if CONFIGS_PATH.exists():
-        hub = ResourceHub.from_yaml(CONFIGS_PATH)
-        set_global_hub(hub)
-        ResourceHub.set_instance(hub)
-    else:
-        # Create empty hub if no config file
-        hub = ResourceHub()
-        set_global_hub(hub)
-        ResourceHub.set_instance(hub)
+    hub = ResourceHub.from_yaml(CONFIGS_PATH)
+    set_global_hub(hub)
+    ResourceHub.set_instance(hub)
 
     yield hub
 

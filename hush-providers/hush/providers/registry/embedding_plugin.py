@@ -3,10 +3,7 @@
 Auto-registers embedding config classes and factory handlers with hush-core.
 """
 
-from hush.core.registry import (
-    register_config_class,
-    register_factory_handler,
-)
+from hush.core.registry import REGISTRY
 from hush.providers.embeddings.config import EmbeddingConfig
 from hush.providers.embeddings.factory import EmbeddingFactory
 
@@ -38,11 +35,8 @@ class EmbeddingPlugin:
         if cls._registered:
             return
 
-        # Register config class for deserialization
-        register_config_class(EmbeddingConfig)
-
-        # Register factory handler for creating instances
-        register_factory_handler(EmbeddingConfig, EmbeddingFactory.create)
+        # Register config class with factory
+        REGISTRY.register(EmbeddingConfig, EmbeddingFactory.create)
 
         cls._registered = True
 

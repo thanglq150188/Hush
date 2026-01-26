@@ -9,13 +9,13 @@ Hướng dẫn này sẽ giúp bạn cấu hình và sử dụng các LLM provid
 ```yaml
 # resources.yaml
 llm:gpt-4:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o
 
 llm:gpt-4-mini:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
@@ -25,7 +25,7 @@ llm:gpt-4-mini:
 
 ```yaml
 llm:azure-gpt4:
-  _class: AzureConfig
+  type: azure
   api_key: ${AZURE_OPENAI_API_KEY}
   azure_endpoint: https://your-resource.openai.azure.com
   api_version: "2024-02-15-preview"
@@ -36,7 +36,7 @@ llm:azure-gpt4:
 
 ```yaml
 llm:gemini:
-  _class: GeminiConfig
+  type: gemini
   project_id: your-gcp-project
   private_key_id: ${GEMINI_PRIVATE_KEY_ID}
   private_key: ${GEMINI_PRIVATE_KEY}
@@ -51,7 +51,7 @@ llm:gemini:
 
 ```yaml
 llm:local-llama:
-  _class: OpenAIConfig
+  type: openai
   api_key: "not-needed"
   base_url: http://localhost:8000/v1
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -376,7 +376,7 @@ llm = LLMNode(
 
 ```yaml
 llm:gpt-4:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o
@@ -448,12 +448,12 @@ chain = LLMChainNode(...)
 ```yaml
 # resources.yaml - quản lý tập trung
 llm:production:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   model: gpt-4o
 
 llm:development:
-  _class: OpenAIConfig
+  type: openai
   api_key: ${OPENAI_API_KEY}
   model: gpt-4o-mini
 ```

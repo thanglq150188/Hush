@@ -1,16 +1,7 @@
-# Kiến trúc Internal
+# Architecture Documentation
 
-<!--
-MỤC ĐÍCH: Giải thích internal architecture cho contributors
-NỘI DUNG SẼ VIẾT:
-- Package structure:
-  - hush-core: engine, nodes, state, registry, tracers
-  - hush-providers: LLM, embedding, reranking implementations
-  - hush-observability: external tracing adapters
-- Key classes và responsibilities
-- Execution flow: Hush.run() internals
-- ResourceFactory pattern
-- Adding new node types
-- Adding new providers
-- Testing strategy
--->
+Tài liệu kiến trúc đã được chuyển sang folder riêng để dễ quản lý.
+
+Xem tại:
+- [Architecture Overview](../architecture/overview.md) - Tổng quan kiến trúc Hush
+- [Registry Architecture](../architecture/registry.md) - Chi tiết về ResourceHub và ConfigRegistry

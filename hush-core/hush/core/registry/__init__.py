@@ -1,39 +1,43 @@
-"""Registry resource mở rộng cho các package hush.
+"""Unified registry for hush packages.
 
-Module này cung cấp hệ thống quản lý resource tập trung có thể được
-mở rộng bởi các package hush-* khác.
+This module provides a centralized resource management system that can be
+extended by other hush-* packages.
 
-Sử dụng cơ bản:
-    from hush.core.registry import RESOURCE_HUB
+Basic usage:
+    from hush.core.registry import get_hub
 
-    llm = RESOURCE_HUB.llm("gpt-4")
-    redis = RESOURCE_HUB.redis("default")
+    hub = get_hub()
+    llm = hub.llm("gpt-4")
+    redis = hub.redis("default")
 
-Mở rộng từ các package khác:
-    from hush.core.registry import register_config_class, register_factory_handler
+Extension from other packages:
+    from hush.core.registry import REGISTRY
     from my_package.configs import MyConfig
     from my_package.factory import MyFactory
 
-    # Đăng ký config class để deserialize
-    register_config_class(MyConfig)
+    # Register config class with factory in one call
+    REGISTRY.register(MyConfig, MyFactory.create)
 
-    # Đăng ký factory handler để khởi tạo instance
-    register_factory_handler(MyConfig, MyFactory.create)
+Config class requirements:
+    class MyConfig(YamlModel):
+        _type: ClassVar[str] = "my-type"      # Type identifier in YAML
+        _category: ClassVar[str] = "custom"    # Category namespace
+        ...
 """
 
+from .config_registry import (
+    ConfigRegistry,
+    ConfigEntry,
+    REGISTRY,
+)
 from .resource_hub import (
     ResourceHub,
+    CacheEntry,
+)
+from .shortcuts import (
     get_hub,
     set_global_hub,
-)
-from .resource_factory import (
-    ResourceFactory,
-    register_config_class,
-    register_config_classes,
-    register_factory_handler,
-    get_config_class,
-    CLASS_NAME_MAP,
-    FACTORY_HANDLERS,
+    HealthCheckResult,
 )
 from .storage import (
     ConfigStorage,
@@ -41,24 +45,18 @@ from .storage import (
     JsonConfigStorage,
 )
 
-# RESOURCE_HUB global - khởi tạo lazy khi truy cập lần đầu
-RESOURCE_HUB = get_hub()
-
 __all__ = [
-    # Hub chính
+    # Registry
+    "ConfigRegistry",
+    "ConfigEntry",
+    "REGISTRY",
+    # Hub
     "ResourceHub",
-    "RESOURCE_HUB",
+    "CacheEntry",
     "get_hub",
     "set_global_hub",
-    # Factory và đăng ký
-    "ResourceFactory",
-    "register_config_class",
-    "register_config_classes",
-    "register_factory_handler",
-    "get_config_class",
-    "CLASS_NAME_MAP",
-    "FACTORY_HANDLERS",
-    # Các backend storage
+    "HealthCheckResult",
+    # Storage backends
     "ConfigStorage",
     "YamlConfigStorage",
     "JsonConfigStorage",

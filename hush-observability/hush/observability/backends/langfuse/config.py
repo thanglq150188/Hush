@@ -1,6 +1,6 @@
 """Langfuse configuration for ResourceHub."""
 
-from typing import Optional
+from typing import ClassVar, Optional
 
 from hush.core.utils.yaml_model import YamlModel
 
@@ -22,7 +22,7 @@ class LangfuseConfig(YamlModel):
         ```yaml
         # resources.yaml
         langfuse:vpbank:
-          _class: LangfuseConfig
+          type: langfuse
           public_key: pk-...
           secret_key: sk-...
           host: https://cloud.langfuse.com
@@ -34,6 +34,9 @@ class LangfuseConfig(YamlModel):
         client = get_hub().langfuse("vpbank")
         ```
     """
+
+    _type: ClassVar[str] = "langfuse"
+    _category: ClassVar[str] = "langfuse"
 
     public_key: str
     secret_key: str

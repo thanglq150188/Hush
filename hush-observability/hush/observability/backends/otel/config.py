@@ -1,6 +1,6 @@
 """OpenTelemetry configuration for ResourceHub."""
 
-from typing import Dict, List, Literal, Optional
+from typing import ClassVar, Dict, List, Literal, Optional
 
 from hush.core.utils.yaml_model import YamlModel
 
@@ -29,7 +29,7 @@ class OTELConfig(YamlModel):
         ```yaml
         # resources.yaml - Jaeger
         otel:jaeger:
-          _class: OTELConfig
+          type: otel
           endpoint: http://localhost:4317
           protocol: grpc
           service_name: my-workflow
@@ -37,7 +37,7 @@ class OTELConfig(YamlModel):
 
         # resources.yaml - Grafana Tempo
         otel:tempo:
-          _class: OTELConfig
+          type: otel
           endpoint: https://tempo.example.com:4317
           protocol: grpc
           service_name: my-workflow
@@ -46,7 +46,7 @@ class OTELConfig(YamlModel):
 
         # resources.yaml - HTTP/Protobuf
         otel:collector:
-          _class: OTELConfig
+          type: otel
           endpoint: http://localhost:4318/v1/traces
           protocol: http
           service_name: my-workflow
@@ -58,6 +58,9 @@ class OTELConfig(YamlModel):
         client = get_hub().otel("jaeger")
         ```
     """
+
+    _type: ClassVar[str] = "otel"
+    _category: ClassVar[str] = "otel"
 
     endpoint: str
     protocol: Literal["grpc", "http"] = "grpc"

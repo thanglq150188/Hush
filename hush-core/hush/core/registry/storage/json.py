@@ -13,19 +13,21 @@ class JsonConfigStorage(ConfigStorage):
 
     Tất cả config được lưu trong một file JSON duy nhất.
 
-    Cấu trúc file ví dụ:
+    Cấu trúc file ví dụ (format mới với 'type'):
         {
             "llm:gpt-4": {
-                "_class": "OpenAIConfig",
+                "type": "openai",
                 "model": "gpt-4",
                 "api_key": "sk-xxx"
             },
-            "redis:default": {
-                "_class": "RedisConfig",
-                "host": "localhost",
-                "port": 6379
+            "embedding:bge-m3": {
+                "type": "embedding",
+                "api_type": "vllm",
+                "base_url": "http://localhost:8000/v1"
             }
         }
+
+    Format cũ với '_class' vẫn được hỗ trợ (backward compatible).
     """
 
     def __init__(self, file_path: Path | str):
@@ -59,8 +61,9 @@ class JsonConfigStorage(ConfigStorage):
             if not config_data or not isinstance(config_data, dict):
                 return None
 
-            if '_class' not in config_data:
-                LOGGER.warning("Thiếu field '_class' cho key: %s", key)
+            # Hỗ trợ cả 'type' (new) và '_class' (old/backward compatible)
+            if 'type' not in config_data and '_class' not in config_data:
+                LOGGER.warning("Thiếu field 'type' hoặc '_class' cho key: %s", key)
                 return None
 
             return config_data
@@ -83,8 +86,9 @@ class JsonConfigStorage(ConfigStorage):
             if not isinstance(config_data, dict):
                 continue
 
-            if '_class' not in config_data:
-                LOGGER.warning("Thiếu field '_class' cho key: %s", key)
+            # Hỗ trợ cả 'type' (new) và '_class' (old/backward compatible)
+            if 'type' not in config_data and '_class' not in config_data:
+                LOGGER.warning("Thiếu field 'type' hoặc '_class' cho key: %s", key)
                 continue
 
             configs[key] = config_data

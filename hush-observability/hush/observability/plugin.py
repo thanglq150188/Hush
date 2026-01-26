@@ -7,7 +7,7 @@ Example:
     ```yaml
     # resources.yaml
     langfuse:vpbank:
-      _class: LangfuseConfig
+      type: langfuse
       public_key: pk-...
       secret_key: sk-...
       host: https://cloud.langfuse.com
@@ -37,28 +37,21 @@ class ObservabilityPlugin:
             return
 
         try:
-            from hush.core.registry import (
-                register_config_class,
-                register_factory_handler,
-            )
+            from hush.core.registry import REGISTRY
 
             # Register Langfuse
             from hush.observability.backends.langfuse import (
                 LangfuseConfig,
                 LangfuseClient,
             )
-
-            register_config_class(LangfuseConfig)
-            register_factory_handler(LangfuseConfig, lambda c: LangfuseClient(c))
+            REGISTRY.register(LangfuseConfig, lambda c: LangfuseClient(c))
 
             # Register OpenTelemetry
             from hush.observability.backends.otel import (
                 OTELConfig,
                 OTELClient,
             )
-
-            register_config_class(OTELConfig)
-            register_factory_handler(OTELConfig, lambda c: OTELClient(c))
+            REGISTRY.register(OTELConfig, lambda c: OTELClient(c))
 
             cls._registered = True
             LOGGER.debug("ObservabilityPlugin registered successfully")

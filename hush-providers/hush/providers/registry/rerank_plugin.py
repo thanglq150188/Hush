@@ -3,10 +3,7 @@
 Auto-registers reranking config classes and factory handlers with hush-core.
 """
 
-from hush.core.registry import (
-    register_config_class,
-    register_factory_handler,
-)
+from hush.core.registry import REGISTRY
 from hush.providers.rerankers.config import RerankingConfig
 from hush.providers.rerankers.factory import RerankingFactory
 
@@ -38,11 +35,8 @@ class RerankPlugin:
         if cls._registered:
             return
 
-        # Register config class for deserialization
-        register_config_class(RerankingConfig)
-
-        # Register factory handler for creating instances
-        register_factory_handler(RerankingConfig, RerankingFactory.create)
+        # Register config class with factory
+        REGISTRY.register(RerankingConfig, RerankingFactory.create)
 
         cls._registered = True
 

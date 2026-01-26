@@ -1,8 +1,7 @@
-"""Registry resource tập trung với lazy loading và storage có thể thay thế."""
+"""ResourceHub - centralized registry with lazy loading and pluggable storage."""
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TYPE_CHECKING
@@ -10,164 +9,80 @@ from typing import Any, ClassVar, Dict, List, Optional, TYPE_CHECKING
 from hush.core.loggings import LOGGER
 from hush.core.utils.yaml_model import YamlModel
 
+from .config_registry import REGISTRY
 from .storage import ConfigStorage, YamlConfigStorage
-from .resource_factory import ResourceFactory, get_config_class
+from .shortcuts.health import HealthCheckResult
 
-# Type hints for IDE support - these imports only happen during type checking
+# Type hints for IDE support
 if TYPE_CHECKING:
     from hush.providers.llms.base import BaseLLM
     from hush.providers.embeddings.base import BaseEmbedding
     from hush.providers.rerankers.base import BaseReranker
 
 
-# Instance hub global - khởi tạo lazy
-_GLOBAL_HUB: Optional['ResourceHub'] = None
-
-
-def _get_global_hub() -> Optional['ResourceHub']:
-    """Lấy hoặc tạo instance ResourceHub global.
-
-    Thử load config từ:
-    1. Biến môi trường HUSH_CONFIG
-    2. ./resources.yaml (thư mục hiện tại)
-    3. ~/.hush/resources.yaml (thư mục home)
-
-    Returns:
-        Instance ResourceHub global, hoặc None nếu khởi tạo thất bại
-    """
-    global _GLOBAL_HUB
-
-    if _GLOBAL_HUB is None:
-        try:
-            config_path = None
-
-            # 1. Kiểm tra biến môi trường
-            env_config = os.getenv('HUSH_CONFIG')
-            if env_config and Path(env_config).exists():
-                config_path = Path(env_config)
-
-            # 2. Kiểm tra thư mục hiện tại
-            elif Path('resources.yaml').exists():
-                config_path = Path('resources.yaml')
-
-            # 3. Kiểm tra thư mục home
-            elif (Path.home() / '.hush' / 'resources.yaml').exists():
-                config_path = Path.home() / '.hush' / 'resources.yaml'
-
-            # Tạo hub
-            if config_path:
-                _GLOBAL_HUB = ResourceHub.from_yaml(config_path)
-            else:
-                # Không tìm thấy file config, tạo với đường dẫn mặc định
-                _GLOBAL_HUB = ResourceHub.from_yaml(
-                    Path.home() / '.hush' / 'resources.yaml'
-                )
-
-        except Exception as e:
-            LOGGER.error("Không thể khởi tạo global hub: %s", e)
-            return None
-
-    return _GLOBAL_HUB
-
-
-def get_hub() -> 'ResourceHub':
-    """Lấy instance ResourceHub global.
-
-    Đây là cách chính để truy cập global hub.
-
-    Returns:
-        Instance ResourceHub global
-
-    Raises:
-        RuntimeError: Nếu khởi tạo hub thất bại
-
-    Example:
-        from hush.core.registry import get_hub
-
-        hub = get_hub()
-        llm = hub.llm("gpt-4")
-    """
-    hub = _get_global_hub()
-    if hub is None:
-        raise RuntimeError("Không thể khởi tạo ResourceHub global")
-    return hub
-
-
-def set_global_hub(hub: 'ResourceHub'):
-    """Đặt instance ResourceHub global tùy chỉnh.
-
-    Sử dụng để ghi đè global hub mặc định.
-
-    Args:
-        hub: Instance ResourceHub dùng làm global
-
-    Example:
-        from hush.core.registry import ResourceHub, set_global_hub
-
-        custom_hub = ResourceHub.from_yaml("my_config.yaml")
-        set_global_hub(custom_hub)
-    """
-    global _GLOBAL_HUB
-    _GLOBAL_HUB = hub
+@dataclass
+class CacheEntry:
+    """Cache entry with config and instance (lazy loaded)."""
+    config: YamlModel
+    instance: Any = None
 
 
 class ResourceHub:
-    """Registry tập trung để quản lý các resource của ứng dụng.
+    """Centralized registry for managing application resources.
 
-    Tính năng:
-    - Lazy loading: resource được khởi tạo khi truy cập lần đầu
-    - Storage có thể thay thế: YAML, JSON, hoặc backend tùy chỉnh
-    - Mở rộng được: các package bên ngoài đăng ký config và factory của họ
+    Features:
+    - Lazy loading: resources are initialized on first access
+    - Pluggable storage: YAML, JSON, or custom backend
+    - Extensible: external packages register their configs and factories
 
     Example:
-        # Sử dụng cơ bản
+        # Basic usage
         hub = ResourceHub.from_yaml("configs/resources.yaml")
         llm = hub.llm("gpt-4")
         redis = hub.redis("default")
 
-        # Hoặc sử dụng global hub
-        from hush.core.registry import RESOURCE_HUB
-        llm = RESOURCE_HUB.llm("gpt-4")
+        # Or use global hub
+        from hush.core.registry import get_hub
+        llm = get_hub().llm("gpt-4")
     """
 
     _instance: ClassVar[Optional['ResourceHub']] = None
 
     def __init__(self, storage: ConfigStorage):
-        """Khởi tạo hub với storage backend.
+        """Initialize hub with storage backend.
 
         Args:
-            storage: Storage backend để lưu trữ config
+            storage: Storage backend for configs
         """
         self._storage = storage
-        self._instances: Dict[str, Any] = {}
-        self._configs: Dict[str, YamlModel] = {}
+        self._cache: Dict[str, CacheEntry] = {}
 
     # ========================================================================
-    # Các Factory Method
+    # Factory Methods
     # ========================================================================
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> 'ResourceHub':
-        """Tạo hub với storage file YAML.
+        """Create hub with YAML file storage.
 
         Args:
-            path: Đường dẫn đến file config YAML
+            path: Path to YAML config file
 
         Returns:
-            Instance ResourceHub
+            ResourceHub instance
         """
         storage = YamlConfigStorage(Path(path))
         return cls(storage)
 
     @classmethod
     def from_json(cls, path: str | Path) -> 'ResourceHub':
-        """Tạo hub với storage file JSON.
+        """Create hub with JSON file storage.
 
         Args:
-            path: Đường dẫn đến file config JSON
+            path: Path to JSON config file
 
         Returns:
-            Instance ResourceHub
+            ResourceHub instance
         """
         from .storage import JsonConfigStorage
         storage = JsonConfigStorage(Path(path))
@@ -175,27 +90,27 @@ class ResourceHub:
 
     @classmethod
     def instance(cls) -> 'ResourceHub':
-        """Lấy singleton instance.
+        """Get singleton instance.
 
         Returns:
-            Singleton ResourceHub global
+            Global ResourceHub singleton
 
         Raises:
-            RuntimeError: Nếu singleton chưa được khởi tạo
+            RuntimeError: If singleton not initialized
         """
         if cls._instance is None:
             raise RuntimeError(
-                "Singleton ResourceHub chưa được khởi tạo. "
-                "Gọi ResourceHub.set_instance() trước."
+                "ResourceHub singleton not initialized. "
+                "Call ResourceHub.set_instance() first."
             )
         return cls._instance
 
     @classmethod
     def set_instance(cls, hub: 'ResourceHub'):
-        """Đặt singleton instance global.
+        """Set global singleton instance.
 
         Args:
-            hub: Instance ResourceHub dùng làm singleton
+            hub: ResourceHub instance to use as singleton
         """
         cls._instance = hub
 
@@ -204,128 +119,144 @@ class ResourceHub:
     # ========================================================================
 
     def _load_config(self, key: str) -> Optional[YamlModel]:
-        """Load một config từ storage (lazy, theo yêu cầu)."""
-        if key in self._configs:
-            return self._configs[key]
+        """Load a config from storage (lazy, on demand)."""
+        if key in self._cache:
+            return self._cache[key].config
 
         config_data = self._storage.load_one(key)
         if not config_data:
             return None
 
-        config_class_name = config_data.get('_class')
-        if not config_class_name:
-            LOGGER.warning("Thiếu field '_class' cho key: %s", key)
+        # Extract category from key prefix: "llm:gpt-4" -> "llm"
+        category = key.split(":")[0] if ":" in key else None
+
+        # Prefer `type` (new), fallback `_class` (old/backward compatible)
+        config_type = config_data.get('type') or config_data.get('_class')
+        if not config_type:
+            LOGGER.warning("Missing 'type' or '_class' field for key: %s", key)
             return None
 
-        config_class = get_config_class(config_class_name)
+        # Lookup config class with category namespace
+        config_class = REGISTRY.get_class(config_type, category=category)
         if not config_class:
-            LOGGER.warning("Config class không xác định: %s", config_class_name)
+            LOGGER.warning("Unknown config type: %s (category=%s)", config_type, category)
             return None
 
         try:
-            # Parse config (loại bỏ field _class)
-            data = {k: v for k, v in config_data.items() if k != '_class'}
+            # Parse config (exclude type and _class fields)
+            data = {k: v for k, v in config_data.items() if k not in ('type', '_class')}
             config = config_class.model_validate(data)
-            self._configs[key] = config
+            self._cache[key] = CacheEntry(config=config)
             return config
         except Exception as e:
-            LOGGER.error("Không thể parse config '%s': %s", key, e)
+            LOGGER.error("Cannot parse config '%s': %s", key, e)
             return None
 
     def _hash_of(self, config: YamlModel) -> str:
-        """Tạo MD5 hash của config để định danh duy nhất."""
+        """Create MD5 hash of config for unique identification."""
         return hashlib.md5(config.model_dump_json().encode()).hexdigest()[:8]
 
     def _key_of(self, config: YamlModel) -> str:
-        """Tạo registry key từ config type và model/hash."""
-        type_name = type(config).__name__.replace('Config', '').lower()
+        """Create registry key from config category and model/name/hash."""
+        config_type = type(config)
 
-        # Resource dựa trên model sử dụng tên model
+        # Use _category if available, otherwise derive from class name
+        if hasattr(config_type, '_category'):
+            category = getattr(config_type, '_category')
+        else:
+            category = config_type.__name__.replace('Config', '').lower()
+
+        # Resource based on model uses model name
         if hasattr(config, 'model') and config.model:
-            return f"{type_name}:{config.model}"
+            return f"{category}:{config.model}"
 
-        # Resource dựa trên name
+        # Resource based on name
         if hasattr(config, 'name') and config.name:
-            return f"{type_name}:{config.name}"
+            return f"{category}:{config.name}"
 
-        # Fallback về hash
-        return f"{type_name}:{self._hash_of(config)}"
+        # Fallback to hash
+        return f"{category}:{self._hash_of(config)}"
 
     # ========================================================================
-    # API Public
+    # Public API
     # ========================================================================
 
     def keys(self) -> List[str]:
-        """Trả về tất cả registry key đã đăng ký (load tất cả config từ storage)."""
+        """Return all registered keys (loads all configs from storage)."""
         all_configs = self._storage.load_all()
 
         for key, config_data in all_configs.items():
-            if key not in self._configs:
-                config_class_name = config_data.get('_class')
-                if config_class_name:
-                    config_class = get_config_class(config_class_name)
+            if key not in self._cache:
+                # Extract category from key prefix
+                category = key.split(":")[0] if ":" in key else None
+
+                # Prefer `type` (new), fallback `_class` (old)
+                config_type = config_data.get('type') or config_data.get('_class')
+                if config_type:
+                    config_class = REGISTRY.get_class(config_type, category=category)
                     if config_class:
                         try:
-                            data = {k: v for k, v in config_data.items() if k != '_class'}
-                            self._configs[key] = config_class.model_validate(data)
+                            data = {k: v for k, v in config_data.items() if k not in ('type', '_class')}
+                            config = config_class.model_validate(data)
+                            self._cache[key] = CacheEntry(config=config)
                         except Exception as e:
-                            LOGGER.error("Không thể parse config '%s': %s", key, e)
+                            LOGGER.error("Cannot parse config '%s': %s", key, e)
 
-        return list(self._configs.keys())
+        return list(self._cache.keys())
 
     def has(self, key: str) -> bool:
-        """Kiểm tra resource có tồn tại trong registry không."""
-        if key in self._configs:
+        """Check if resource exists in registry."""
+        if key in self._cache:
             return True
-        # Thử load từ storage
+        # Try loading from storage
         return self._load_config(key) is not None
 
     def get(self, key: str) -> Any:
-        """Lấy resource instance theo key (lazy load khi truy cập lần đầu).
+        """Get resource instance by key (lazy load on first access).
 
         Args:
-            key: Registry key của resource
+            key: Registry key of resource
 
         Returns:
-            Resource instance đã được khởi tạo
+            Initialized resource instance
 
         Raises:
-            KeyError: Nếu không tìm thấy key
+            KeyError: If key not found
         """
-        # Trả về instance đã cache nếu có
-        if key in self._instances:
-            return self._instances[key]
+        # Return cached instance if available
+        if key in self._cache and self._cache[key].instance is not None:
+            return self._cache[key].instance
 
-        # Load config từ storage
+        # Load config from storage
         config = self._load_config(key)
         if not config:
-            raise KeyError(f"Không tìm thấy resource '{key}' trong registry")
+            raise KeyError(f"Resource '{key}' not found in registry")
 
-        # Lazy khởi tạo resource
-        instance = ResourceFactory.create(config)
+        # Lazy initialize resource
+        instance = REGISTRY.create(config)
         if instance is None:
-            raise RuntimeError(f"Không thể tạo resource cho '{key}'")
+            raise RuntimeError(f"Cannot create resource for '{key}'")
 
-        self._instances[key] = instance
-        LOGGER.debug("Đã lazy load resource: %s", key)
+        self._cache[key].instance = instance
+        LOGGER.debug("Lazy loaded resource: %s", key)
 
-        return self._instances[key]
+        return self._cache[key].instance
 
     def get_config(self, key: str) -> YamlModel:
-        """Lấy object config của resource.
+        """Get config object of resource.
 
         Args:
             key: Registry key
 
         Returns:
-            Config của resource
+            Resource config
 
         Raises:
-            KeyError: Nếu không tìm thấy key
+            KeyError: If key not found
         """
         config = self._load_config(key)
         if not config:
-            raise KeyError(f"Không tìm thấy config '{key}' trong registry")
+            raise KeyError(f"Config '{key}' not found in registry")
         return config
 
     def register(
@@ -333,96 +264,97 @@ class ResourceHub:
         config: YamlModel,
         registry_key: Optional[str] = None
     ) -> str:
-        """Đăng ký config resource mới.
+        """Register new resource config.
 
         Args:
-            config: Object config của resource
-            registry_key: Key tùy chỉnh (tự động tạo nếu không cung cấp)
+            config: Resource config object
+            registry_key: Custom key (auto-generated if not provided)
 
         Returns:
-            Registry key được sử dụng
+            Registry key used
         """
         if not registry_key:
             registry_key = self._key_of(config)
 
-        # Lưu config và tạo instance
-        self._configs[registry_key] = config
-        self._instances[registry_key] = ResourceFactory.create(config)
+        # Create instance immediately
+        instance = REGISTRY.create(config)
+        self._cache[registry_key] = CacheEntry(config=config, instance=instance)
 
-        # Persist vào storage
+        # Persist to storage
         config_dict = json.loads(config.model_dump_json(exclude_none=True))
-        config_dict['_class'] = type(config).__name__
+        # Use 'type' field if config has _type attribute, otherwise use _class
+        if hasattr(type(config), '_type'):
+            config_dict['type'] = getattr(type(config), '_type')
+        else:
+            config_dict['_class'] = type(config).__name__
         self._storage.save(registry_key, config_dict)
 
-        LOGGER.debug("Đã đăng ký: %s", registry_key)
+        LOGGER.debug("Registered: %s", registry_key)
         return registry_key
 
     def remove(self, key: str) -> bool:
-        """Xóa resource khỏi registry.
+        """Remove resource from registry.
 
         Args:
-            key: Registry key cần xóa
+            key: Registry key to remove
 
         Returns:
-            True nếu đã xóa, False nếu không tìm thấy
+            True if removed, False if not found
         """
-        if key not in self._configs and key not in self._instances:
-            # Thử load trước
+        if key not in self._cache:
+            # Try loading first
             if not self._load_config(key):
                 return False
 
-        if key in self._instances:
-            del self._instances[key]
-        if key in self._configs:
-            del self._configs[key]
+        if key in self._cache:
+            del self._cache[key]
 
         self._storage.remove(key)
-        LOGGER.debug("Đã xóa: %s", key)
+        LOGGER.debug("Removed: %s", key)
         return True
 
     def clear(self):
-        """Xóa tất cả resource khỏi registry và storage."""
-        keys = list(self._configs.keys())
-        self._instances.clear()
-        self._configs.clear()
+        """Clear all resources from registry and storage."""
+        keys = list(self._cache.keys())
+        self._cache.clear()
         for key in keys:
             self._storage.remove(key)
-        LOGGER.debug("Đã xóa tất cả resource")
+        LOGGER.debug("Cleared all resources")
 
     def close(self):
-        """Đóng kết nối storage và dọn dẹp."""
+        """Close storage connection and cleanup."""
         if self._storage:
             self._storage.close()
 
     # ========================================================================
-    # Các Accessor theo Type (with type hints for IDE support)
+    # Type-specific Accessors (with type hints for IDE support)
     # ========================================================================
 
     def _get_with_prefix(self, key: str, prefix: str) -> Any:
-        """Helper để lấy resource với xử lý prefix tự động."""
+        """Helper to get resource with automatic prefix handling."""
         if not key.startswith(f"{prefix}:"):
             key = f"{prefix}:{key}"
         return self.get(key)
 
     def llm(self, key: str) -> "BaseLLM":
-        """Lấy LLM instance theo key.
+        """Get LLM instance by key.
 
-        Tự động xử lý provider prefix (azure:, openai:, gemini:).
+        Automatically handles provider prefix (azure:, openai:, gemini:).
 
         Args:
-            key: Định danh LLM (ví dụ: 'gpt-4', 'azure:gpt-4', 'llm:gpt-4')
+            key: LLM identifier (e.g., 'gpt-4', 'azure:gpt-4', 'llm:gpt-4')
 
         Returns:
             BaseLLM instance with chat(), generate() methods
         """
-        # Xử lý provider prefix
+        # Handle provider prefix
         for prefix in ['azure:', 'openai:', 'gemini:']:
             if key.startswith(prefix):
                 return self._get_with_prefix(key, 'llm')
         return self._get_with_prefix(key, 'llm')
 
     def embedding(self, key: str) -> "BaseEmbedding":
-        """Lấy embedding model theo key.
+        """Get embedding model by key.
 
         Returns:
             BaseEmbedding instance with embed(), embed_batch() methods
@@ -430,7 +362,7 @@ class ResourceHub:
         return self._get_with_prefix(key, 'embedding')
 
     def reranker(self, key: str) -> "BaseReranker":
-        """Lấy reranker instance theo key.
+        """Get reranker instance by key.
 
         Returns:
             BaseReranker instance with rerank() method
@@ -438,34 +370,34 @@ class ResourceHub:
         return self._get_with_prefix(key, 'reranking')
 
     def redis(self, key: str) -> Any:
-        """Lấy Redis client theo key."""
+        """Get Redis client by key."""
         return self._get_with_prefix(key, 'redis')
 
     def mongo(self, key: str) -> Any:
-        """Lấy async MongoDB client theo key."""
+        """Get async MongoDB client by key."""
         return self._get_with_prefix(key, 'mongo')
 
     def milvus(self, key: str) -> Any:
-        """Lấy Milvus client theo key."""
+        """Get Milvus client by key."""
         return self._get_with_prefix(key, 'milvus')
 
     def s3(self, key: str) -> Any:
-        """Lấy S3 client theo key."""
+        """Get S3 client by key."""
         return self._get_with_prefix(key, 's3')
 
     def langfuse(self, key: str) -> Any:
-        """Lấy Langfuse client theo key."""
+        """Get Langfuse client by key."""
         return self._get_with_prefix(key, 'langfuse')
 
     def mcp(self, key: str) -> Any:
-        """Lấy MCP server theo key."""
+        """Get MCP server by key."""
         return self._get_with_prefix(key, 'mcp')
 
     # ========================================================================
     # Health Check
     # ========================================================================
 
-    def health_check(self, keys: Optional[List[str]] = None) -> "HealthCheckResult":
+    def health_check(self, keys: Optional[List[str]] = None) -> HealthCheckResult:
         """Check health of all or specified resources.
 
         Args:
@@ -497,32 +429,3 @@ class ResourceHub:
             results=results,
             errors=errors,
         )
-
-
-@dataclass
-class HealthCheckResult:
-    """Result of health check operation."""
-
-    results: Dict[str, bool]
-    errors: Dict[str, str]
-
-    @property
-    def healthy(self) -> bool:
-        """True if all resources are healthy."""
-        return all(self.results.values())
-
-    @property
-    def passed(self) -> List[str]:
-        """List of healthy resource keys."""
-        return [k for k, v in self.results.items() if v]
-
-    @property
-    def failed(self) -> List[str]:
-        """List of unhealthy resource keys."""
-        return [k for k, v in self.results.items() if not v]
-
-    def __repr__(self) -> str:
-        total = len(self.results)
-        passed = len(self.passed)
-        status = "HEALTHY" if self.healthy else "UNHEALTHY"
-        return f"<HealthCheckResult {status} {passed}/{total}>"

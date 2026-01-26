@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import ClassVar, Optional
 from hush.core.utils import YamlModel
 
 
@@ -48,6 +48,9 @@ class RerankingConfig(YamlModel):
         The api_key must be set to a valid key. If it's not set or set to the default value,
         an error will be raised with instructions on how to properly set it in the configuration file.
     """
+    _type: ClassVar[str] = "reranking"
+    _category: ClassVar[str] = "reranking"
+
     api_type: RerankingType = RerankingType.VLLM
     api_key: Optional[str] = None
     api_version: Optional[str] = None

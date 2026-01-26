@@ -79,17 +79,20 @@ class TestPluginAutoRegistration:
         assert RerankPlugin.is_registered()
 
     def test_config_classes_registered(self):
-        """Test that config classes are registered in CLASS_NAME_MAP."""
-        from hush.core.registry import CLASS_NAME_MAP
+        """Test that config classes are registered in REGISTRY."""
+        from hush.core.registry import REGISTRY
 
         # Import plugins to trigger registration
         from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
 
-        assert "OpenAIConfig" in CLASS_NAME_MAP
-        assert "AzureConfig" in CLASS_NAME_MAP
-        assert "GeminiConfig" in CLASS_NAME_MAP
-        assert "EmbeddingConfig" in CLASS_NAME_MAP
-        assert "RerankingConfig" in CLASS_NAME_MAP
+        # Check LLM configs are registered
+        assert REGISTRY.get_class("openai", category="llm") is not None
+        assert REGISTRY.get_class("azure", category="llm") is not None
+        assert REGISTRY.get_class("gemini", category="llm") is not None
+
+        # Check embedding and reranking configs are registered
+        assert REGISTRY.get_class("embedding", category="embedding") is not None
+        assert REGISTRY.get_class("reranking", category="reranking") is not None
 
 
 class TestResourceHubIntegration:

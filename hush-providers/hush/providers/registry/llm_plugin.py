@@ -3,11 +3,7 @@
 Auto-registers LLM config classes and factory handlers with hush-core.
 """
 
-from hush.core.registry import (
-    register_config_class,
-    register_config_classes,
-    register_factory_handler,
-)
+from hush.core.registry import REGISTRY
 from hush.providers.llms.config import LLMConfig, OpenAIConfig, AzureConfig, GeminiConfig
 from hush.providers.llms.factory import LLMFactory
 
@@ -39,19 +35,11 @@ class LLMPlugin:
         if cls._registered:
             return
 
-        # Register all config classes for deserialization
-        register_config_classes(
-            LLMConfig,
-            OpenAIConfig,
-            AzureConfig,
-            GeminiConfig,
-        )
-
-        # Register factory handler for creating instances
-        register_factory_handler(LLMConfig, LLMFactory.create)
-        register_factory_handler(OpenAIConfig, LLMFactory.create)
-        register_factory_handler(AzureConfig, LLMFactory.create)
-        register_factory_handler(GeminiConfig, LLMFactory.create)
+        # Register all config classes with their factory
+        REGISTRY.register(LLMConfig, LLMFactory.create)
+        REGISTRY.register(OpenAIConfig, LLMFactory.create)
+        REGISTRY.register(AzureConfig, LLMFactory.create)
+        REGISTRY.register(GeminiConfig, LLMFactory.create)
 
         cls._registered = True
 

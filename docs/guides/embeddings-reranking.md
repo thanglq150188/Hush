@@ -22,7 +22,7 @@ Hush hỗ trợ nhiều embedding providers:
 ```yaml
 # resources.yaml
 embedding:openai:
-  _class: EmbeddingConfig
+  type: embedding
   api_type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
@@ -34,7 +34,7 @@ embedding:openai:
 
 ```yaml
 embedding:local:
-  _class: EmbeddingConfig
+  type: embedding
   api_type: vllm  # hoặc "tei"
   base_url: http://localhost:8080/v1
   model: BAAI/bge-m3
@@ -46,7 +46,7 @@ embedding:local:
 
 ```yaml
 embedding:hf:
-  _class: EmbeddingConfig
+  type: embedding
   api_type: hf
   model: BAAI/bge-small-en-v1.5
   dimensions: 384
@@ -56,7 +56,7 @@ embedding:hf:
 
 ```yaml
 embedding:onnx:
-  _class: EmbeddingConfig
+  type: embedding
   api_type: onnx
   model: path/to/model.onnx
   dimensions: 384
@@ -132,7 +132,7 @@ embed = EmbeddingNode(
 ```yaml
 # resources.yaml
 rerank:pinecone:
-  _class: RerankingConfig
+  type: reranking
   api_type: pinecone
   api_key: ${PINECONE_API_KEY}
   model: bge-reranker-v2-m3
@@ -143,7 +143,7 @@ rerank:pinecone:
 
 ```yaml
 rerank:cohere:
-  _class: RerankingConfig
+  type: reranking
   api_type: cohere
   api_key: ${COHERE_API_KEY}
   model: rerank-english-v3.0
@@ -153,7 +153,7 @@ rerank:cohere:
 
 ```yaml
 rerank:local:
-  _class: RerankingConfig
+  type: reranking
   api_type: vllm  # hoặc "tei"
   base_url: http://localhost:8081
   model: BAAI/bge-reranker-v2-m3
@@ -163,7 +163,7 @@ rerank:local:
 
 ```yaml
 rerank:hf:
-  _class: RerankingConfig
+  type: reranking
   api_type: hf
   model: BAAI/bge-reranker-base
 ```
@@ -402,7 +402,7 @@ with GraphNode(name="hybrid-search") as graph:
 
 ```yaml
 embedding:optimized:
-  _class: EmbeddingConfig
+  type: embedding
   api_type: openai
   model: text-embedding-3-small
   embed_batch_size: 100  # Batch 100 texts per request

@@ -1,17 +1,15 @@
-"""Tests for the ResourceHub and resource registry system."""
+"""Tests for the ResourceHub and ConfigRegistry system."""
 
 import pytest
-from typing import Any
+from typing import Any, ClassVar
 
 from hush.core.utils.yaml_model import YamlModel
 from hush.core.registry import (
     ResourceHub,
-    ResourceFactory,
-    register_config_class,
-    register_factory_handler,
-    get_config_class,
-    CLASS_NAME_MAP,
-    FACTORY_HANDLERS,
+    ConfigRegistry,
+    REGISTRY,
+    CacheEntry,
+    HealthCheckResult,
 )
 
 
@@ -21,6 +19,9 @@ from hush.core.registry import (
 
 class MockServiceConfig(YamlModel):
     """Mock config for testing."""
+    _type: ClassVar[str] = "mock-service"
+    _category: ClassVar[str] = "service"
+
     name: str = "default"
     host: str = "localhost"
     port: int = 8080
@@ -50,28 +51,29 @@ def mock_service_factory(config: MockServiceConfig) -> MockService:
 @pytest.fixture(autouse=True)
 def cleanup_registries():
     """Clean up registries before and after each test."""
-    # Save original state
-    original_class_map = CLASS_NAME_MAP.copy()
-    original_handlers = FACTORY_HANDLERS.copy()
+    # Reset registry singleton
+    ConfigRegistry.reset()
 
     yield
 
-    # Restore original state
-    CLASS_NAME_MAP.clear()
-    CLASS_NAME_MAP.update(original_class_map)
-    FACTORY_HANDLERS.clear()
-    FACTORY_HANDLERS.update(original_handlers)
+    # Reset after test
+    ConfigRegistry.reset()
 
 
 @pytest.fixture
-def hub(tmp_path):
+def registry():
+    """Get fresh registry instance."""
+    return REGISTRY
+
+
+@pytest.fixture
+def hub(tmp_path, registry):
     """Create a ResourceHub with YAML storage for testing."""
     config_file = tmp_path / "resources.yaml"
     hub = ResourceHub.from_yaml(config_file)
 
     # Register mock config and factory
-    register_config_class(MockServiceConfig)
-    register_factory_handler(MockServiceConfig, mock_service_factory)
+    registry.register(MockServiceConfig, mock_service_factory)
 
     return hub
 
@@ -87,64 +89,104 @@ def mock_config():
 
 
 # ============================================================================
-# Tests: Config Class Registration
+# Tests: ConfigRegistry
 # ============================================================================
 
-class TestConfigClassRegistration:
-    """Test config class registration."""
+class TestConfigRegistry:
+    """Test ConfigRegistry functionality."""
 
-    def test_register_single_class(self):
-        """Test registering a single config class."""
-        register_config_class(MockServiceConfig)
-        assert "MockServiceConfig" in CLASS_NAME_MAP
-        assert CLASS_NAME_MAP["MockServiceConfig"] == MockServiceConfig
+    def test_register_config(self, registry):
+        """Test registering a config class with factory."""
+        registry.register(MockServiceConfig, mock_service_factory)
 
-    def test_get_config_class(self):
-        """Test retrieving registered config class."""
-        register_config_class(MockServiceConfig)
-        result = get_config_class("MockServiceConfig")
-        assert result == MockServiceConfig
+        # Should be findable by type + category
+        cls = registry.get_class("mock-service", category="service")
+        assert cls == MockServiceConfig
 
-    def test_get_nonexistent_class(self):
+        # Should also be findable by class name
+        cls = registry.get_class("MockServiceConfig")
+        assert cls == MockServiceConfig
+
+    def test_get_nonexistent_class(self, registry):
         """Test getting non-existent class returns None."""
-        result = get_config_class("NonExistentConfig")
+        result = registry.get_class("NonExistentConfig")
         assert result is None
 
-
-# ============================================================================
-# Tests: Factory Handler Registration
-# ============================================================================
-
-class TestFactoryHandlerRegistration:
-    """Test factory handler registration."""
-
-    def test_register_factory_handler(self):
-        """Test registering a factory handler."""
-        register_config_class(MockServiceConfig)
-        register_factory_handler(MockServiceConfig, mock_service_factory)
-        assert MockServiceConfig in FACTORY_HANDLERS
-
-    def test_factory_creates_instance(self):
-        """Test factory creates correct instance."""
-        register_config_class(MockServiceConfig)
-        register_factory_handler(MockServiceConfig, mock_service_factory)
+    def test_create_instance(self, registry):
+        """Test creating instance from config."""
+        registry.register(MockServiceConfig, mock_service_factory)
 
         config = MockServiceConfig(name="test", host="localhost", port=8080)
-        instance = ResourceFactory.create(config)
+        instance = registry.create(config)
 
         assert isinstance(instance, MockService)
         assert instance.name == "test"
         assert instance.host == "localhost"
         assert instance.port == 8080
 
-    def test_factory_no_handler_raises(self):
-        """Test factory raises error when no handler registered."""
+    def test_create_no_factory_raises(self, registry):
+        """Test create raises error when no factory registered."""
         class UnregisteredConfig(YamlModel):
             value: str = "test"
 
         config = UnregisteredConfig()
-        with pytest.raises(ValueError, match="Không có factory handler"):
-            ResourceFactory.create(config)
+        with pytest.raises(ValueError, match="No factory registered"):
+            registry.create(config)
+
+    def test_duplicate_type_same_category_raises(self, registry):
+        """Test that registering duplicate type in same category raises error."""
+        class ConfigA(YamlModel):
+            _type: ClassVar[str] = "duplicate"
+            _category: ClassVar[str] = "test"
+
+        class ConfigB(YamlModel):
+            _type: ClassVar[str] = "duplicate"
+            _category: ClassVar[str] = "test"
+
+        registry.register(ConfigA, lambda c: c)
+
+        with pytest.raises(ValueError, match="Duplicate type"):
+            registry.register(ConfigB, lambda c: c)
+
+    def test_same_type_different_categories(self, registry):
+        """Test that same type name can exist in different categories."""
+        class ConfigA(YamlModel):
+            _type: ClassVar[str] = "openai"
+            _category: ClassVar[str] = "llm"
+            value: str = "a"
+
+        class ConfigB(YamlModel):
+            _type: ClassVar[str] = "openai"
+            _category: ClassVar[str] = "embedding"
+            value: str = "b"
+
+        registry.register(ConfigA, lambda c: c)
+        registry.register(ConfigB, lambda c: c)
+
+        # Should resolve to different classes based on category
+        assert registry.get_class("openai", category="llm") == ConfigA
+        assert registry.get_class("openai", category="embedding") == ConfigB
+
+    def test_categories_list(self, registry):
+        """Test listing all categories."""
+        registry.register(MockServiceConfig, mock_service_factory)
+
+        categories = registry.categories()
+        assert "service" in categories
+
+    def test_types_in_category(self, registry):
+        """Test listing types in a category."""
+        registry.register(MockServiceConfig, mock_service_factory)
+
+        types = registry.types_in_category("service")
+        assert "mock-service" in types
+
+    def test_clear(self, registry):
+        """Test clearing all registrations."""
+        registry.register(MockServiceConfig, mock_service_factory)
+        registry.clear()
+
+        assert registry.get_class("MockServiceConfig") is None
 
 
 # ============================================================================
@@ -225,7 +267,7 @@ class TestResourceRemoval:
         removed = hub.remove("nonexistent:key")
         assert removed is False
 
-    def test_clear_all(self, hub):
+    def test_clear_all(self, hub, registry):
         """Test clearing all resources."""
         hub.register(MockServiceConfig(name="service1"))
         hub.register(MockServiceConfig(name="service2"))
@@ -275,12 +317,12 @@ class TestErrorHandling:
 
     def test_get_nonexistent_raises(self, hub):
         """Test get raises KeyError for non-existent key."""
-        with pytest.raises(KeyError, match="Không tìm thấy resource"):
+        with pytest.raises(KeyError, match="not found"):
             hub.get("nonexistent:key")
 
     def test_get_config_nonexistent_raises(self, hub):
         """Test get_config raises KeyError for non-existent key."""
-        with pytest.raises(KeyError, match="Không tìm thấy config"):
+        with pytest.raises(KeyError, match="not found"):
             hub.get_config("nonexistent:key")
 
 
@@ -310,7 +352,7 @@ class TestSingletonPattern:
         """Test instance raises error if not initialized."""
         ResourceHub._instance = None
 
-        with pytest.raises(RuntimeError, match="chưa được khởi tạo"):
+        with pytest.raises(RuntimeError, match="not initialized"):
             ResourceHub.instance()
 
 
@@ -321,13 +363,12 @@ class TestSingletonPattern:
 class TestFilePersistence:
     """Test file-based persistence."""
 
-    def test_yaml_persistence(self, tmp_path):
+    def test_yaml_persistence(self, tmp_path, registry):
         """Test YAML file persistence."""
         config_file = tmp_path / "persist.yaml"
 
         # Register config class and handler
-        register_config_class(MockServiceConfig)
-        register_factory_handler(MockServiceConfig, mock_service_factory)
+        registry.register(MockServiceConfig, mock_service_factory)
 
         # Create hub and register resource
         hub1 = ResourceHub.from_yaml(config_file)
@@ -346,13 +387,12 @@ class TestFilePersistence:
         assert service.port == 9000
         hub2.close()
 
-    def test_json_persistence(self, tmp_path):
+    def test_json_persistence(self, tmp_path, registry):
         """Test JSON file persistence."""
         config_file = tmp_path / "persist.json"
 
         # Register config class and handler
-        register_config_class(MockServiceConfig)
-        register_factory_handler(MockServiceConfig, mock_service_factory)
+        registry.register(MockServiceConfig, mock_service_factory)
 
         # Create hub and register resource
         hub1 = ResourceHub.from_json(config_file)
@@ -368,3 +408,202 @@ class TestFilePersistence:
         service = hub2.get(key)
         assert service.name == "json-service"
         hub2.close()
+
+
+# ============================================================================
+# Tests: Type-based Registration
+# ============================================================================
+
+class MockLLMConfig(YamlModel):
+    """Mock LLM config for testing type-based registration."""
+    _type: ClassVar[str] = "mock-llm"
+    _category: ClassVar[str] = "llm"
+
+    name: str = "default"
+    model: str = "gpt-4"
+
+
+class MockEmbeddingConfig(YamlModel):
+    """Mock embedding config for testing."""
+    _type: ClassVar[str] = "mock-embedding"
+    _category: ClassVar[str] = "embedding"
+
+    name: str = "default"
+    dimensions: int = 1024
+
+
+class MockLLMService:
+    """Mock LLM service."""
+    def __init__(self, config: MockLLMConfig):
+        self.config = config
+        self.model = config.model
+
+
+class MockEmbeddingService:
+    """Mock embedding service."""
+    def __init__(self, config: MockEmbeddingConfig):
+        self.config = config
+        self.dimensions = config.dimensions
+
+
+def mock_llm_factory(config: MockLLMConfig) -> MockLLMService:
+    return MockLLMService(config)
+
+
+def mock_embedding_factory(config: MockEmbeddingConfig) -> MockEmbeddingService:
+    return MockEmbeddingService(config)
+
+
+class TestTypeBasedRegistration:
+    """Test type-based config registration with category namespace."""
+
+    def test_register_with_category(self, registry):
+        """Test registering config class with category."""
+        registry.register(MockLLMConfig, mock_llm_factory)
+
+        assert "llm" in registry.categories()
+        assert "mock-llm" in registry.types_in_category("llm")
+        assert registry.get_class("mock-llm", category="llm") == MockLLMConfig
+
+    def test_get_config_class_by_type_and_category(self, registry):
+        """Test looking up config class by type alias and category."""
+        registry.register(MockLLMConfig, mock_llm_factory)
+
+        # Lookup by type + category
+        result = registry.get_class("mock-llm", category="llm")
+        assert result == MockLLMConfig
+
+        # Lookup by class name should also work
+        result = registry.get_class("MockLLMConfig")
+        assert result == MockLLMConfig
+
+    def test_load_config_with_type_field(self, tmp_path, registry):
+        """Test loading config from YAML using new 'type' field."""
+        # Register mock config
+        registry.register(MockLLMConfig, mock_llm_factory)
+
+        # Create YAML file with new format
+        config_file = tmp_path / "resources.yaml"
+        config_file.write_text("""
+llm:test-model:
+  type: mock-llm
+  name: test
+  model: gpt-4-turbo
+""")
+
+        hub = ResourceHub.from_yaml(config_file)
+
+        # Should load successfully using type field
+        assert hub.has("llm:test-model")
+        service = hub.get("llm:test-model")
+        assert isinstance(service, MockLLMService)
+        assert service.model == "gpt-4-turbo"
+        hub.close()
+
+    def test_load_config_backward_compatible_class(self, tmp_path, registry):
+        """Test loading config using old '_class' field (backward compatible)."""
+        # Register mock config
+        registry.register(MockLLMConfig, mock_llm_factory)
+
+        # Create YAML file with old format
+        config_file = tmp_path / "resources.yaml"
+        config_file.write_text("""
+llm:legacy-model:
+  _class: MockLLMConfig
+  name: legacy
+  model: gpt-3.5-turbo
+""")
+
+        hub = ResourceHub.from_yaml(config_file)
+
+        # Should still work with _class field
+        assert hub.has("llm:legacy-model")
+        service = hub.get("llm:legacy-model")
+        assert isinstance(service, MockLLMService)
+        assert service.model == "gpt-3.5-turbo"
+        hub.close()
+
+    def test_category_extracted_from_key_prefix(self, tmp_path, registry):
+        """Test that category is correctly extracted from key prefix."""
+        # Register configs
+        registry.register(MockLLMConfig, mock_llm_factory)
+        registry.register(MockEmbeddingConfig, mock_embedding_factory)
+
+        config_file = tmp_path / "resources.yaml"
+        config_file.write_text("""
+llm:my-llm:
+  type: mock-llm
+  name: llm-test
+  model: gpt-4
+
+embedding:my-embedding:
+  type: mock-embedding
+  name: embed-test
+  dimensions: 768
+""")
+
+        hub = ResourceHub.from_yaml(config_file)
+
+        # LLM should use MockLLMConfig
+        llm_service = hub.get("llm:my-llm")
+        assert isinstance(llm_service, MockLLMService)
+        assert llm_service.model == "gpt-4"
+
+        # Embedding should use MockEmbeddingConfig
+        embed_service = hub.get("embedding:my-embedding")
+        assert isinstance(embed_service, MockEmbeddingService)
+        assert embed_service.dimensions == 768
+
+        hub.close()
+
+
+# ============================================================================
+# Tests: Health Check
+# ============================================================================
+
+class TestHealthCheck:
+    """Test health check functionality."""
+
+    def test_health_check_all_healthy(self, hub, mock_config):
+        """Test health check when all resources are healthy."""
+        hub.register(mock_config, registry_key="service:test1")
+        hub.register(MockServiceConfig(name="test2"), registry_key="service:test2")
+
+        result = hub.health_check()
+
+        assert isinstance(result, HealthCheckResult)
+        assert result.healthy is True
+        assert len(result.passed) == 2
+        assert len(result.failed) == 0
+
+    def test_health_check_result_repr(self, hub, mock_config):
+        """Test HealthCheckResult string representation."""
+        hub.register(mock_config, registry_key="service:test")
+
+        result = hub.health_check()
+
+        assert "HEALTHY" in repr(result)
+        assert "1/1" in repr(result)
+
+
+# ============================================================================
+# Tests: CacheEntry
+# ============================================================================
+
+class TestCacheEntry:
+    """Test CacheEntry dataclass."""
+
+    def test_cache_entry_creation(self, mock_config):
+        """Test creating CacheEntry."""
+        entry = CacheEntry(config=mock_config)
+
+        assert entry.config == mock_config
+        assert entry.instance is None
+
+    def test_cache_entry_with_instance(self, mock_config):
+        """Test CacheEntry with instance."""
+        service = MockService(mock_config)
+        entry = CacheEntry(config=mock_config, instance=service)
+
+        assert entry.config == mock_config
+        assert entry.instance == service
