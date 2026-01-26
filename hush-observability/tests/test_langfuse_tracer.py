@@ -4,6 +4,7 @@ This test verifies that the LangfuseTracer can successfully connect
 to Langfuse cloud and create traces.
 """
 
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -12,11 +13,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-# Langfuse cloud credentials (for integration tests)
+# Langfuse cloud credentials (for integration tests) - loaded from environment
 LANGFUSE_CONFIG = {
-    "public_key": "pk-lf-ecd32a21-4c71-4276-b753-dfb8481aa062",
-    "secret_key": "sk-lf-a53719f5-856d-418c-86bf-98c7a09f7105",
-    "host": "https://cloud.langfuse.com",
+    "public_key": os.environ.get("LANGFUSE_PUBLIC_KEY", ""),
+    "secret_key": os.environ.get("LANGFUSE_SECRET_KEY", ""),
+    "host": os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
 }
 
 

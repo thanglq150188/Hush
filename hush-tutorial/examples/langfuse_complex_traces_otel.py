@@ -33,10 +33,11 @@ from hush.observability import OTELTracer
 from hush.observability.backends.otel import OTELConfig
 
 
-# Langfuse credentials (same as langfuse:vpbank)
-LANGFUSE_PUBLIC_KEY = "pk-lf-2edb3eb7-c4a5-4264-b41b-01e91dc91801"
-LANGFUSE_SECRET_KEY = "sk-lf-06032612-18ac-48d8-9a13-6aeaa9f42076"
-LANGFUSE_HOST = "https://langfuse.aws.coreai.vpbank.dev"
+# Langfuse credentials - loaded from environment
+import os
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
 
 def create_langfuse_otel_config(service_name: str = "hush-workflow") -> OTELConfig:

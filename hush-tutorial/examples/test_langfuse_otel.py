@@ -1,17 +1,23 @@
 """Test pushing OTEL traces directly to Langfuse OTEL endpoint."""
 
 import base64
+import os
 import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-# Langfuse credentials
-PUBLIC_KEY = "pk-lf-2edb3eb7-c4a5-4264-b41b-01e91dc91801"
-SECRET_KEY = "sk-lf-06032612-18ac-48d8-9a13-6aeaa9f42076"
-HOST = "https://langfuse.aws.coreai.vpbank.dev"
+# Langfuse credentials - loaded from environment
+PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
 # Base64 encode credentials
 auth = base64.b64encode(f"{PUBLIC_KEY}:{SECRET_KEY}".encode()).decode()
