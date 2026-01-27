@@ -58,14 +58,15 @@ class TraceStore:
         request_id: str,
         workflow_name: str,
         node_name: str,
-        parent_name: Optional[str],
-        context_id: Optional[str],
-        execution_order: int,
-        start_time: Optional[str],
-        end_time: Optional[str],
-        duration_ms: Optional[float],
-        input_data: Optional[Dict[str, Any]],
-        output_data: Optional[Dict[str, Any]],
+        node_type: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        context_id: Optional[str] = None,
+        execution_order: int = 0,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        input_data: Optional[Dict[str, Any]] = None,
+        output_data: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
         model: Optional[str] = None,
@@ -85,6 +86,7 @@ class TraceStore:
             request_id: Unique request identifier
             workflow_name: Name of the workflow
             node_name: Full name of the node
+            node_type: Type of node (e.g., llm, branch, for, while, code)
             parent_name: Parent node name (None for root)
             context_id: Context ID for iteration nodes
             execution_order: Order of execution (0-indexed)
@@ -108,6 +110,7 @@ class TraceStore:
             request_id=request_id,
             workflow_name=workflow_name,
             node_name=node_name,
+            node_type=node_type,
             parent_name=parent_name,
             context_id=context_id,
             execution_order=execution_order,

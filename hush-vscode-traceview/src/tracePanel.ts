@@ -191,12 +191,13 @@ export class TracePanel {
         // Check if file exists, if not use inline HTML
         if (fs.existsSync(htmlPath)) {
             let html = fs.readFileSync(htmlPath, 'utf8');
-            // Replace resource paths
+            // Replace resource paths with cache-busting query string
+            const cacheBust = Date.now();
             const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'styles.css'));
             const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'main.js'));
             const cspSource = webview.cspSource;
-            html = html.replace(/\{\{cssUri\}\}/g, cssUri.toString());
-            html = html.replace(/\{\{jsUri\}\}/g, jsUri.toString());
+            html = html.replace(/\{\{cssUri\}\}/g, `${cssUri.toString()}?v=${cacheBust}`);
+            html = html.replace(/\{\{jsUri\}\}/g, `${jsUri.toString()}?v=${cacheBust}`);
             html = html.replace(/\{\{cspSource\}\}/g, cspSource);
             return html;
         }
@@ -508,6 +509,78 @@ body {
     padding: 40px;
     color: var(--vscode-errorForeground);
 }
+
+.tags-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.tag {
+    display: inline-block;
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tag.small {
+    padding: 2px 6px;
+    font-size: 10px;
+}
+
+.tag-more {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-left: 4px;
+}
+
+.tag-filter-container {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.filter-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-right: 4px;
+}
+
+.tag-filter {
+    display: inline-block;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--border-color);
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.tag-filter.selected {
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    border-color: var(--vscode-badge-background);
+}
+
+.tag-filter.clear {
+    background: transparent;
+    border-color: var(--vscode-errorForeground);
+    color: var(--vscode-errorForeground);
+}
+
+.tags-cell {
+    max-width: 200px;
+}
 `;
     }
 
@@ -519,6 +592,8 @@ let currentTraces = [];
 let currentNodes = [];
 let selectedNode = null;
 let currentView = 'list';
+let selectedTags = new Set();
+let allTags = [];
 
 // Request initial data
 vscode.postMessage({ type: 'getTraceList' });
@@ -564,7 +639,6 @@ function renderDbInfo(info) {
 
 function renderTraceList(traces, error) {
     currentView = 'list';
-    const content = document.getElementById('content');
     const listEl = document.getElementById('trace-list');
     const detailEl = document.getElementById('trace-detail');
 
@@ -581,11 +655,40 @@ function renderTraceList(traces, error) {
         return;
     }
 
-    let html = \`
+    // Collect all unique tags
+    allTags = collectAllTags(traces);
+
+    // Filter traces by selected tags
+    let filteredTraces = traces;
+    if (selectedTags.size > 0) {
+        filteredTraces = traces.filter(trace => {
+            if (!trace.tags || trace.tags.length === 0) return false;
+            return Array.from(selectedTags).every(tag => trace.tags.includes(tag));
+        });
+    }
+
+    // Render tag filter
+    let filterHtml = '';
+    if (allTags.length > 0) {
+        const tagButtons = allTags.map(tag => {
+            const isSelected = selectedTags.has(tag);
+            return \`<button class="tag-filter \${isSelected ? 'selected' : ''}" onclick="toggleTagFilter('\${tag}')">\${tag}</button>\`;
+        }).join('');
+        filterHtml = \`
+            <div class="tag-filter-container">
+                <span class="filter-label">Filter by tags:</span>
+                \${tagButtons}
+                \${selectedTags.size > 0 ? '<button class="tag-filter clear" onclick="clearTagFilter()">Clear</button>' : ''}
+            </div>
+        \`;
+    }
+
+    let html = filterHtml + \`
         <table class="trace-table">
             <thead>
                 <tr>
                     <th>Workflow</th>
+                    <th>Tags</th>
                     <th>Time</th>
                     <th>Duration</th>
                     <th>Tokens</th>
@@ -595,15 +698,17 @@ function renderTraceList(traces, error) {
             <tbody>
     \`;
 
-    for (const trace of traces) {
+    for (const trace of filteredTraces) {
         const time = trace.start_time ? new Date(trace.start_time).toLocaleString() : '-';
         const duration = trace.total_duration_ms ? (trace.total_duration_ms / 1000).toFixed(2) + 's' : '-';
         const tokens = trace.total_tokens || '-';
         const cost = trace.total_cost ? '$' + trace.total_cost.toFixed(4) : '-';
+        const tagsHtml = (trace.tags || []).filter(t => t != null).slice(0, 3).map(t => \`<span class="tag small">\${t}</span>\`).join('') + (trace.tags && trace.tags.length > 3 ? \`<span class="tag-more">+\${trace.tags.length - 3}</span>\` : '');
 
         html += \`
             <tr onclick="showTrace('\${trace.request_id}')">
                 <td>\${trace.workflow_name}</td>
+                <td class="tags-cell">\${tagsHtml}</td>
                 <td>\${time}</td>
                 <td class="duration">\${duration}</td>
                 <td class="tokens">\${tokens}</td>
@@ -613,7 +718,36 @@ function renderTraceList(traces, error) {
     }
 
     html += '</tbody></table>';
+    if (filteredTraces.length === 0 && selectedTags.size > 0) {
+        html += '<div class="empty-state">No traces match the selected tags.</div>';
+    }
     listEl.innerHTML = html;
+}
+
+function collectAllTags(traces) {
+    const tagSet = new Set();
+    for (const trace of traces) {
+        if (trace.tags && Array.isArray(trace.tags)) {
+            for (const tag of trace.tags) {
+                if (tag != null) tagSet.add(tag);
+            }
+        }
+    }
+    return Array.from(tagSet).sort();
+}
+
+function toggleTagFilter(tag) {
+    if (selectedTags.has(tag)) {
+        selectedTags.delete(tag);
+    } else {
+        selectedTags.add(tag);
+    }
+    renderTraceList(currentTraces, null);
+}
+
+function clearTagFilter() {
+    selectedTags.clear();
+    renderTraceList(currentTraces, null);
 }
 
 function showTrace(requestId) {
@@ -691,8 +825,9 @@ function getNodeIcon(node) {
 
 function getShortName(name) {
     if (!name) return 'unknown';
-    const parts = name.split('.');
-    return parts[parts.length - 1];
+    const lastDot = name.lastIndexOf('.');
+    if (lastDot === -1) return name;
+    return name.substring(lastDot + 1);
 }
 
 function selectNodeById(id) {
@@ -736,8 +871,15 @@ function renderNodeDetail(node) {
     const tokens = node.total_tokens ? \`\${node.prompt_tokens || 0} → \${node.completion_tokens || 0}\` : '-';
     const cost = node.cost_usd ? '$' + node.cost_usd.toFixed(4) : '-';
 
+    let tagsHtml = '';
+    if (node.tags && node.tags.length > 0) {
+        const tags = node.tags.filter(t => t != null).map(t => \`<span class="tag">\${t}</span>\`).join('');
+        tagsHtml = \`<div class="tags-container">\${tags}</div>\`;
+    }
+
     let html = \`
         <div class="node-title">\${node.node_name}</div>
+        \${tagsHtml}
         <div class="node-metrics">
             <div class="metric">
                 <div class="metric-label">Duration</div>

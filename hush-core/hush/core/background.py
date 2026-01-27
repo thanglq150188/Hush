@@ -74,6 +74,7 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
 
             -- Node identity
             node_name TEXT,
+            node_type TEXT,
             parent_name TEXT,
             context_id TEXT,
             execution_order INTEGER,
@@ -119,11 +120,13 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_cost ON traces(cost_usd) WHERE cost_usd IS NOT NULL;
     """)
 
-    # Migration: Add tags column if it doesn't exist (for databases created before tags support)
+    # Migration: Add columns if they don't exist (for databases created before these features)
     cursor = conn.execute("PRAGMA table_info(traces)")
     columns = {row[1] for row in cursor.fetchall()}
     if "tags" not in columns:
         conn.execute("ALTER TABLE traces ADD COLUMN tags TEXT")
+    if "node_type" not in columns:
+        conn.execute("ALTER TABLE traces ADD COLUMN node_type TEXT")
 
     conn.commit()
     return conn
@@ -146,16 +149,17 @@ def _write_trace(conn: sqlite3.Connection, data: Dict[str, Any]) -> None:
 
     conn.execute("""
         INSERT INTO traces (
-            request_id, workflow_name, node_name, parent_name, context_id,
+            request_id, workflow_name, node_name, node_type, parent_name, context_id,
             execution_order, start_time, end_time, duration_ms,
             model, prompt_tokens, completion_tokens, total_tokens, cost_usd,
             input, output, user_id, session_id,
             contain_generation, metadata, status, retry_count, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'writing', 0, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'writing', 0, ?)
     """, (
         data["request_id"],
         data["workflow_name"],
         data["node_name"],
+        data.get("node_type"),
         data.get("parent_name"),
         data.get("context_id"),
         data.get("execution_order", 0),
@@ -271,15 +275,16 @@ def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
         # Insert iteration group trace
         conn.execute("""
             INSERT INTO traces (
-                request_id, workflow_name, node_name, parent_name, context_id,
+                request_id, workflow_name, node_name, node_type, parent_name, context_id,
                 execution_order, start_time, end_time, duration_ms,
                 user_id, session_id, contain_generation, metadata,
                 status, created_at
-            ) VALUES (?, ?, ?, ?, ?, -1, ?, ?, ?, ?, ?, 0, ?, 'writing', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, -1, ?, ?, ?, ?, ?, 0, ?, 'writing', ?)
         """, (
             request_id,
             group['workflow_name'],
             iteration_name,
+            'iteration',  # node_type for iteration groups
             parent_name,
             parent_context,
             group['start_time'],
@@ -718,6 +723,7 @@ class BackgroundProcess:
         request_id: str,
         workflow_name: str,
         node_name: str,
+        node_type: Optional[str] = None,
         parent_name: Optional[str] = None,
         context_id: Optional[str] = None,
         execution_order: int = 0,
@@ -745,6 +751,7 @@ class BackgroundProcess:
             "request_id": request_id,
             "workflow_name": workflow_name,
             "node_name": node_name,
+            "node_type": node_type,
             "parent_name": parent_name,
             "context_id": context_id,
             "execution_order": execution_order,

@@ -3,10 +3,20 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VsixFile = Join-Path $ScriptDir "hush-vscode-traceview-0.1.0.vsix"
 
+# Build the extension
+Write-Host "Building extension..."
+Push-Location $ScriptDir
+npm run package
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Build failed!" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
+Pop-Location
+
 # Check if vsix exists
 if (-not (Test-Path $VsixFile)) {
-    Write-Host "Error: $VsixFile not found!" -ForegroundColor Red
-    Write-Host "Run 'npm run package' first to build the extension."
+    Write-Host "Error: $VsixFile not found after build!" -ForegroundColor Red
     exit 1
 }
 

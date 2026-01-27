@@ -37,6 +37,7 @@ export interface TraceRow {
     request_id: string;
     workflow_name: string;
     node_name: string | null;
+    node_type: string | null;
     parent_name: string | null;
     context_id: string | null;
     execution_order: number | null;
@@ -64,14 +65,20 @@ export interface TraceSummary {
     workflow_name: string;
     start_time: string;
     total_duration_ms: number;
+    prompt_tokens: number;
+    completion_tokens: number;
     total_tokens: number;
     total_cost: number;
     node_count: number;
+    tags: string[];
+    input_preview: string;
+    output_preview: string;
 }
 
 export interface TraceNode {
     id: number;
     node_name: string;
+    node_type: string | null;
     parent_name: string | null;
     context_id: string | null;
     execution_order: number;
@@ -87,6 +94,7 @@ export interface TraceNode {
     output: any;
     contain_generation: boolean;
     metadata: any;
+    tags: string[] | null;
     children: TraceNode[];
 }
 
@@ -187,9 +195,14 @@ export class TraceDatabase {
                 t.workflow_name,
                 MIN(t.start_time) as start_time,
                 MAX(CASE WHEN t.parent_name IS NULL THEN t.duration_ms ELSE 0 END) as total_duration_ms,
+                SUM(CASE WHEN t.contain_generation = 1 THEN t.prompt_tokens ELSE 0 END) as prompt_tokens,
+                SUM(CASE WHEN t.contain_generation = 1 THEN t.completion_tokens ELSE 0 END) as completion_tokens,
                 SUM(CASE WHEN t.contain_generation = 1 THEN t.total_tokens ELSE 0 END) as total_tokens,
                 SUM(CASE WHEN t.contain_generation = 1 THEN t.cost_usd ELSE 0 END) as total_cost,
-                COUNT(*) as node_count
+                COUNT(*) as node_count,
+                MAX(t.tags) as tags,
+                MAX(CASE WHEN t.parent_name IS NULL THEN t.input ELSE NULL END) as root_input,
+                MAX(CASE WHEN t.parent_name IS NULL THEN t.output ELSE NULL END) as root_output
             FROM traces t
             WHERE t.status IN ('flushed', 'pending')
             GROUP BY t.request_id
@@ -202,10 +215,38 @@ export class TraceDatabase {
             workflow_name: row.workflow_name,
             start_time: row.start_time || '',
             total_duration_ms: row.total_duration_ms || 0,
+            prompt_tokens: row.prompt_tokens || 0,
+            completion_tokens: row.completion_tokens || 0,
             total_tokens: row.total_tokens || 0,
             total_cost: row.total_cost || 0,
-            node_count: row.node_count
+            node_count: row.node_count,
+            tags: this.safeParseJson(row.tags) || [],
+            input_preview: this.extractPreview(row.root_input),
+            output_preview: this.extractPreview(row.root_output)
         }));
+    }
+
+    private extractPreview(jsonStr: string | null): string {
+        if (!jsonStr) return '';
+        try {
+            const obj = JSON.parse(jsonStr);
+            // Try to get a meaningful preview from common field names
+            if (typeof obj === 'string') return obj;
+            if (obj.text) return obj.text;
+            if (obj.message) return obj.message;
+            if (obj.content) return obj.content;
+            if (obj.query) return obj.query;
+            if (obj.prompt) return obj.prompt;
+            if (obj.input) return obj.input;
+            if (obj.result) return obj.result;
+            if (obj.output) return obj.output;
+            if (obj.response) return obj.response;
+            if (obj.answer) return obj.answer;
+            // Fallback to JSON string
+            return JSON.stringify(obj);
+        } catch {
+            return jsonStr;
+        }
     }
 
     public async getTraceDetail(requestId: string): Promise<TraceNode[]> {
@@ -243,6 +284,7 @@ export class TraceDatabase {
             const node: TraceNode = {
                 id: row.id,
                 node_name: row.node_name,
+                node_type: row.node_type,
                 parent_name: row.parent_name,
                 context_id: row.context_id,
                 execution_order: row.execution_order || 0,
@@ -258,6 +300,7 @@ export class TraceDatabase {
                 output: this.safeParseJson(row.output),
                 contain_generation: row.contain_generation === 1,
                 metadata: this.safeParseJson(row.metadata),
+                tags: this.safeParseJson(row.tags),
                 children: []
             };
 

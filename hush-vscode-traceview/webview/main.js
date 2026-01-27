@@ -7,6 +7,13 @@ let currentNodes = [];
 let selectedNode = null;
 let currentView = 'list';
 let expandedNodes = new Set();
+let selectedTags = new Set();
+let allTags = [];
+let searchQuery = '';
+let currentTab = 'preview';
+let leftPanelView = 'tree'; // 'tree' or 'timeline'
+let splitPosition = 350; // pixels for left panel width
+let isResizing = false;
 
 // Request initial data
 vscode.postMessage({ type: 'getTraceList' });
@@ -68,13 +75,67 @@ function renderTraceList(traces, error) {
         return;
     }
 
-    let html = `
+    // Collect all unique tags
+    allTags = collectAllTags(traces);
+
+    // Filter traces by selected tags
+    let filteredTraces = traces;
+    if (selectedTags.size > 0) {
+        filteredTraces = traces.filter(trace => {
+            if (!trace.tags || trace.tags.length === 0) return false;
+            return Array.from(selectedTags).every(tag => trace.tags.includes(tag));
+        });
+    }
+
+    // Filter by search query
+    if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        filteredTraces = filteredTraces.filter(trace => {
+            const workflowMatch = trace.workflow_name && trace.workflow_name.toLowerCase().includes(query);
+            const tagMatch = trace.tags && trace.tags.some(t => t && t.toLowerCase().includes(query));
+            const inputMatch = trace.input_preview && trace.input_preview.toLowerCase().includes(query);
+            const outputMatch = trace.output_preview && trace.output_preview.toLowerCase().includes(query);
+            return workflowMatch || tagMatch || inputMatch || outputMatch;
+        });
+    }
+
+    // Render search bar
+    let searchHtml = `
+        <div class="search-container">
+            <input type="text"
+                   class="search-input"
+                   placeholder="Search traces by name, tags, input, output..."
+                   value="${escapeHtml(searchQuery)}"
+                   oninput="handleSearch(this.value)" />
+            ${searchQuery ? `<button class="search-clear" onclick="clearSearch()">×</button>` : ''}
+        </div>
+    `;
+
+    // Render tag filter
+    let filterHtml = '';
+    if (allTags.length > 0) {
+        const tagButtons = allTags.map(tag => {
+            const isSelected = selectedTags.has(tag);
+            return `<button class="tag-filter ${isSelected ? 'selected' : ''}" onclick="toggleTagFilter('${escapeHtml(tag)}')">${escapeHtml(tag)}</button>`;
+        }).join('');
+        filterHtml = `
+            <div class="tag-filter-container">
+                <span class="filter-label">Filter by tags:</span>
+                ${tagButtons}
+                ${selectedTags.size > 0 ? `<button class="tag-filter clear" onclick="clearTagFilter()">Clear</button>` : ''}
+            </div>
+        `;
+    }
+
+    let html = searchHtml + filterHtml + `
         <table class="trace-table">
             <thead>
                 <tr>
                     <th>Workflow</th>
-                    <th>Time</th>
-                    <th>Duration</th>
+                    <th>Input</th>
+                    <th>Output</th>
+                    <th>Tags</th>
+                    <th>Latency</th>
                     <th>Tokens</th>
                     <th>Cost</th>
                 </tr>
@@ -82,25 +143,105 @@ function renderTraceList(traces, error) {
             <tbody>
     `;
 
-    for (const trace of traces) {
-        const time = trace.start_time ? formatTime(trace.start_time) : '-';
+    for (const trace of filteredTraces) {
         const duration = trace.total_duration_ms ? formatDuration(trace.total_duration_ms) : '-';
-        const tokens = trace.total_tokens || '-';
+        const promptTokens = trace.prompt_tokens || 0;
+        const completionTokens = trace.completion_tokens || 0;
+        const totalTokens = trace.total_tokens || 0;
+        const tokensDisplay = totalTokens ? `<span class="tokens-breakdown">${promptTokens} → ${completionTokens}</span> <span class="tokens-total">(Σ ${totalTokens})</span>` : '-';
         const cost = trace.total_cost ? '$' + trace.total_cost.toFixed(4) : '-';
+        const tagsHtml = (trace.tags || [])
+            .filter(t => t != null)
+            .slice(0, 2)
+            .map((t, i) => `<span class="tag small ${getTagColorClass(t)}">${escapeHtml(t)}</span>`)
+            .join('') + (trace.tags && trace.tags.length > 2 ? `<span class="tag-more">+${trace.tags.length - 2}</span>` : '');
+
+        // Input/Output preview
+        const inputPreview = trace.input_preview ? truncateText(trace.input_preview, 40) : '-';
+        const outputPreview = trace.output_preview ? truncateText(trace.output_preview, 40) : '-';
 
         html += `
             <tr onclick="showTrace('${escapeHtml(trace.request_id)}')">
-                <td class="workflow">${escapeHtml(trace.workflow_name)}</td>
-                <td class="time">${time}</td>
+                <td class="workflow">
+                    <div class="workflow-name">${escapeHtml(trace.workflow_name)}</div>
+                    <div class="workflow-time">${trace.start_time ? formatTimeShort(trace.start_time) : ''}</div>
+                </td>
+                <td class="io-preview">${escapeHtml(inputPreview)}</td>
+                <td class="io-preview">${escapeHtml(outputPreview)}</td>
+                <td class="tags-cell">${tagsHtml}</td>
                 <td class="duration">${duration}</td>
-                <td class="tokens">${tokens}</td>
+                <td class="tokens">${tokensDisplay}</td>
                 <td class="cost">${cost}</td>
             </tr>
         `;
     }
 
     html += '</tbody></table>';
+
+    if (filteredTraces.length === 0 && (selectedTags.size > 0 || searchQuery)) {
+        html += '<div class="empty-state">No traces match your filters.</div>';
+    }
+
     listEl.innerHTML = html;
+}
+
+function handleSearch(query) {
+    searchQuery = query;
+    renderTraceList(currentTraces, null);
+}
+
+function clearSearch() {
+    searchQuery = '';
+    renderTraceList(currentTraces, null);
+}
+
+function truncateText(text, maxLen) {
+    if (!text) return '';
+    const str = String(text);
+    if (str.length <= maxLen) return str;
+    return str.substring(0, maxLen) + '...';
+}
+
+function formatTimeShort(isoString) {
+    try {
+        const date = new Date(isoString);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+        return '';
+    }
+}
+
+function getTagColorClass(tag) {
+    if (!tag) return '';
+    const colors = ['blue', 'green', 'purple', 'yellow', 'cyan'];
+    const hash = tag.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return colors[hash % colors.length];
+}
+
+function collectAllTags(traces) {
+    const tagSet = new Set();
+    for (const trace of traces) {
+        if (trace.tags && Array.isArray(trace.tags)) {
+            for (const tag of trace.tags) {
+                if (tag != null) tagSet.add(tag);
+            }
+        }
+    }
+    return Array.from(tagSet).sort();
+}
+
+function toggleTagFilter(tag) {
+    if (selectedTags.has(tag)) {
+        selectedTags.delete(tag);
+    } else {
+        selectedTags.add(tag);
+    }
+    renderTraceList(currentTraces, null);
+}
+
+function clearTagFilter() {
+    selectedTags.clear();
+    renderTraceList(currentTraces, null);
 }
 
 function showTrace(requestId) {
@@ -109,7 +250,9 @@ function showTrace(requestId) {
 
 function renderTraceDetail(requestId, nodes, error) {
     currentView = 'detail';
+    currentNodes = nodes || [];
     expandedNodes = new Set();
+    currentTab = 'preview';
 
     const listEl = document.getElementById('trace-list');
     const detailEl = document.getElementById('trace-detail');
@@ -118,6 +261,7 @@ function renderTraceDetail(requestId, nodes, error) {
 
     listEl.style.display = 'none';
     detailEl.style.display = 'grid';
+    detailEl.style.gridTemplateColumns = `${splitPosition}px 4px 1fr`;
 
     if (error) {
         detailEl.innerHTML = `<div class="error-state">Error: ${escapeHtml(error)}</div>`;
@@ -127,21 +271,45 @@ function renderTraceDetail(requestId, nodes, error) {
     const trace = currentTraces.find(t => t.request_id === requestId);
     const workflowName = trace ? trace.workflow_name : 'Unknown';
     const time = trace && trace.start_time ? formatTime(trace.start_time) : '';
+    const duration = trace && trace.total_duration_ms ? formatDuration(trace.total_duration_ms) : '-';
+    const cost = trace && trace.total_cost ? '$' + trace.total_cost.toFixed(4) : '-';
 
     // Expand all nodes by default
-    expandAllNodes(nodes);
+    expandAllNodes(currentNodes);
+
+    // Calculate total duration for timeline
+    const totalDuration = trace ? trace.total_duration_ms : 0;
+
+    // Generate tree/timeline content
+    const treeContent = leftPanelView === 'tree'
+        ? `<div class="tree-root">${renderTree(currentNodes)}</div>`
+        : renderTimeline(currentNodes, totalDuration);
 
     let html = `
         <div id="detail-header">
             <button id="back-btn" onclick="backToList()">← Back</button>
-            <span class="detail-workflow">${escapeHtml(workflowName)}</span>
-            <span class="detail-time">${time}</span>
-        </div>
-        <div id="tree-panel">
-            <div class="tree-root">
-                ${renderTree(nodes)}
+            <div class="detail-info">
+                <span class="detail-workflow">${escapeHtml(workflowName)}</span>
+                <span class="detail-meta">${time} · ${duration} · ${cost}</span>
             </div>
         </div>
+        <div id="tree-panel">
+            <div class="tree-header">
+                <span class="tree-title">Trace</span>
+                <div class="view-toggle">
+                    <button class="view-btn ${leftPanelView === 'tree' ? 'active' : ''}" onclick="switchLeftView('tree')" title="Tree View">
+                        <span class="view-icon">⊞</span>
+                    </button>
+                    <button class="view-btn ${leftPanelView === 'timeline' ? 'active' : ''}" onclick="switchLeftView('timeline')" title="Timeline View">
+                        <span class="view-icon">▬</span>
+                    </button>
+                </div>
+            </div>
+            <div class="tree-content">
+                ${treeContent}
+            </div>
+        </div>
+        <div id="split-bar" onmousedown="startResize(event)"></div>
         <div id="node-panel">
             <div class="empty-state">Select a node to view details</div>
         </div>
@@ -155,7 +323,258 @@ function renderTraceDetail(requestId, nodes, error) {
     }
 }
 
+function switchLeftView(view) {
+    leftPanelView = view;
+    // Re-render the tree/timeline content
+    const treePanel = document.getElementById('tree-panel');
+    if (!treePanel) return;
+
+    const trace = currentTraces.find(t => t.request_id === currentNodes[0]?.request_id);
+    const totalDuration = trace ? trace.total_duration_ms : (currentNodes[0]?.duration_ms || 1000);
+
+    const header = treePanel.querySelector('.tree-header');
+    const headerHtml = header ? header.outerHTML : '';
+
+    treePanel.innerHTML = `
+        <div class="tree-header">
+            <span class="tree-title">Trace</span>
+            <div class="view-toggle">
+                <button class="view-btn ${leftPanelView === 'tree' ? 'active' : ''}" onclick="switchLeftView('tree')" title="Tree View">
+                    <span class="view-icon">⊞</span>
+                </button>
+                <button class="view-btn ${leftPanelView === 'timeline' ? 'active' : ''}" onclick="switchLeftView('timeline')" title="Timeline View">
+                    <span class="view-icon">▬</span>
+                </button>
+            </div>
+        </div>
+        <div class="tree-content">
+            ${leftPanelView === 'tree' ? `<div class="tree-root">${renderTree(currentNodes)}</div>` : renderTimeline(currentNodes, totalDuration)}
+        </div>
+    `;
+
+    // Re-apply selection
+    if (selectedNode) {
+        const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-track[data-id="${selectedNode.id}"]`);
+        if (el) {
+            el.classList.add('selected');
+        }
+    }
+}
+
+// Calculate pixels per ms based on total duration
+// Returns scale factor: how many pixels per millisecond
+function getTimelineScale(durationMs) {
+    const SECOND = 1000;
+    const MINUTE = 60 * SECOND;
+    const HOUR = 60 * MINUTE;
+    const DAY = 24 * HOUR;
+
+    // Dynamic scale: px per ms (compact view)
+    // Target: 1s ≈ 50px, scales down for longer traces
+    if (durationMs <= 500) return 0.15;                   // <= 500ms: 0.15px/ms (500ms = 75px)
+    if (durationMs <= SECOND) return 0.08;                // <= 1s: 0.08px/ms (1s = 80px)
+    if (durationMs <= 5 * SECOND) return 0.05;            // <= 5s: 0.05px/ms (5s = 250px)
+    if (durationMs <= 30 * SECOND) return 0.02;           // <= 30s: 0.02px/ms (30s = 600px)
+    if (durationMs <= MINUTE) return 0.012;               // <= 1min: 0.012px/ms (1min = 720px)
+    if (durationMs <= 5 * MINUTE) return 0.004;           // <= 5min: 0.004px/ms (5min = 1200px)
+    if (durationMs <= 15 * MINUTE) return 0.0018;         // <= 15min: 0.0018px/ms (15min = 1620px)
+    if (durationMs <= HOUR) return 0.0006;                // <= 1h: 0.0006px/ms (1h = 2160px)
+    if (durationMs <= 6 * HOUR) return 0.00012;           // <= 6h: 0.00012px/ms (6h = 2592px)
+    if (durationMs <= DAY) return 0.000035;               // <= 1day: 0.000035px/ms (1day = 3024px)
+    return 0.000015;                                      // > 1day: 0.000015px/ms
+}
+
+function calculateTrackWidth(durationMs) {
+    const scale = getTimelineScale(durationMs);
+    const width = durationMs * scale;
+    // Min 80px, Max 3500px
+    return Math.min(Math.max(width, 80), 3500);
+}
+
+function renderTimeline(nodes, totalDuration) {
+    if (!nodes || !Array.isArray(nodes) || nodes.length === 0) {
+        return '<div class="empty-tree">No nodes to display</div>';
+    }
+
+    // Find the earliest start time and latest end time from all nodes
+    const allNodes = flattenNodes(nodes);
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+
+    for (const node of allNodes) {
+        if (node.start_time) {
+            const start = new Date(node.start_time).getTime();
+            if (!isNaN(start)) {
+                minTime = Math.min(minTime, start);
+            }
+        }
+        if (node.end_time) {
+            const end = new Date(node.end_time).getTime();
+            if (!isNaN(end)) {
+                maxTime = Math.max(maxTime, end);
+            }
+        }
+    }
+
+    // Fallback if no valid times
+    if (minTime === Infinity || maxTime === -Infinity) {
+        minTime = 0;
+        maxTime = totalDuration || 1000;
+    }
+
+    const timeRange = maxTime - minTime;
+    const effectiveRange = timeRange > 0 ? timeRange : 1000;
+
+    // Calculate fixed width based on duration
+    const trackWidth = calculateTrackWidth(effectiveRange);
+
+    // Generate time ruler
+    const rulerHtml = renderTimeRuler(effectiveRange, trackWidth);
+
+    let html = '<div class="timeline-wrapper">';
+    html += rulerHtml;
+    html += '<div class="timeline-container">';
+    html += renderTimelineNodes(nodes, minTime, effectiveRange, trackWidth, 0);
+    html += '</div></div>';
+    return html;
+}
+
+function flattenNodes(nodes) {
+    let result = [];
+    for (const node of nodes) {
+        result.push(node);
+        if (node.children && node.children.length > 0) {
+            result = result.concat(flattenNodes(node.children));
+        }
+    }
+    return result;
+}
+
+function renderTimeRuler(totalMs, trackWidth) {
+    // Determine appropriate tick intervals
+    let tickInterval;
+
+    if (totalMs <= 100) {
+        tickInterval = 20;
+    } else if (totalMs <= 500) {
+        tickInterval = 100;
+    } else if (totalMs <= 1000) {
+        tickInterval = 200;
+    } else if (totalMs <= 5000) {
+        tickInterval = 1000;
+    } else if (totalMs <= 30000) {
+        tickInterval = 5000;
+    } else {
+        tickInterval = 10000;
+    }
+
+    const tickCount = Math.ceil(totalMs / tickInterval) + 1;
+
+    let html = `<div class="timeline-ruler" style="width: ${trackWidth}px">`;
+    for (let i = 0; i < tickCount; i++) {
+        const ms = i * tickInterval;
+        const leftPx = (ms / totalMs) * trackWidth;
+        if (leftPx > trackWidth) break;
+
+        const label = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+        html += `<div class="ruler-tick" style="left: ${leftPx}px"><span class="ruler-label">${label}</span></div>`;
+    }
+    html += '</div>';
+    return html;
+}
+
+function renderTimelineNodes(nodes, minTime, totalRange, trackWidth, depth) {
+    let html = '';
+    for (const node of nodes) {
+        const nodeType = getNodeType(node);
+
+        // Calculate position and width in pixels based on actual times
+        let leftPx = 0;
+        let widthPx = 6; // minimum width
+
+        if (node.start_time) {
+            const startMs = new Date(node.start_time).getTime();
+            if (!isNaN(startMs)) {
+                leftPx = ((startMs - minTime) / totalRange) * trackWidth;
+            }
+        }
+
+        if (node.duration_ms && totalRange > 0) {
+            widthPx = Math.max((node.duration_ms / totalRange) * trackWidth, 6);
+        } else if (node.start_time && node.end_time) {
+            const startMs = new Date(node.start_time).getTime();
+            const endMs = new Date(node.end_time).getTime();
+            if (!isNaN(startMs) && !isNaN(endMs)) {
+                widthPx = Math.max(((endMs - startMs) / totalRange) * trackWidth, 6);
+            }
+        }
+
+        // Ensure bar doesn't overflow
+        if (leftPx + widthPx > trackWidth) {
+            widthPx = trackWidth - leftPx;
+        }
+
+        // Only show duration text if bar is wide enough (approx 45px for text + margin)
+        const durationText = (node.duration_ms && widthPx >= 50) ? formatDuration(node.duration_ms) : '';
+
+        html += `
+            <div class="timeline-row">
+                <div class="timeline-label" style="padding-left: ${depth * 12}px">
+                    <span class="timeline-icon ${nodeType}">${getNodeIcon(node)}</span>
+                    <span class="timeline-name">${escapeHtml(getShortName(node.node_name))}</span>
+                </div>
+                <div class="timeline-track" style="width: ${trackWidth}px" data-id="${node.id}" onclick="selectNodeById(${node.id})">
+                    <div class="timeline-bar ${nodeType}" style="left: ${leftPx}px; width: ${widthPx}px">
+                        <span class="bar-duration">${durationText}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        if (node.children && node.children.length > 0) {
+            html += renderTimelineNodes(node.children, minTime, totalRange, trackWidth, depth + 1);
+        }
+    }
+    return html;
+}
+
+// Resize functionality
+function startResize(e) {
+    isResizing = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    document.addEventListener('mousemove', doResize);
+    document.addEventListener('mouseup', stopResize);
+}
+
+function doResize(e) {
+    if (!isResizing) return;
+
+    const detailEl = document.getElementById('trace-detail');
+    if (!detailEl) return;
+
+    const rect = detailEl.getBoundingClientRect();
+    let newWidth = e.clientX - rect.left;
+
+    // Constrain width
+    newWidth = Math.max(200, Math.min(newWidth, rect.width - 300));
+
+    splitPosition = newWidth;
+    detailEl.style.gridTemplateColumns = `${splitPosition}px 4px 1fr`;
+}
+
+function stopResize() {
+    isResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+
+    document.removeEventListener('mousemove', doResize);
+    document.removeEventListener('mouseup', stopResize);
+}
+
 function expandAllNodes(nodes) {
+    if (!nodes || !Array.isArray(nodes)) return;
     for (const node of nodes) {
         if (node.children && node.children.length > 0) {
             expandedNodes.add(node.id);
@@ -165,6 +584,9 @@ function expandAllNodes(nodes) {
 }
 
 function renderTree(nodes) {
+    if (!nodes || !Array.isArray(nodes) || nodes.length === 0) {
+        return '<div class="empty-tree">No nodes to display</div>';
+    }
     let html = '';
     for (const node of nodes) {
         html += renderTreeNode(node);
@@ -172,20 +594,20 @@ function renderTree(nodes) {
     return html;
 }
 
-function renderTreeNode(node) {
+function renderTreeNode(node, isLast = false) {
     const hasChildren = node.children && node.children.length > 0;
     const isExpanded = expandedNodes.has(node.id);
-    const icon = getNodeIcon(node);
+    const nodeType = getNodeType(node);
     const duration = node.duration_ms ? formatDuration(node.duration_ms) : '';
-    const tokens = node.total_tokens ? `${node.total_tokens}` : '';
+    const tokens = node.total_tokens ? `${node.total_tokens} tok` : '';
 
     let html = `
-        <div class="tree-node">
-            <div class="tree-item" data-id="${node.id}" onclick="selectNodeById(${node.id})">
+        <div class="tree-node ${isLast ? 'last' : ''}">
+            <div class="tree-item ${nodeType}" data-id="${node.id}" onclick="selectNodeById(${node.id})">
                 <span class="tree-toggle ${hasChildren ? 'has-children' : ''}" onclick="event.stopPropagation(); toggleNode(${node.id})">
-                    ${hasChildren ? (isExpanded ? '▼' : '▶') : ''}
+                    ${hasChildren ? (isExpanded ? '▾' : '▸') : ''}
                 </span>
-                <span class="tree-icon">${icon}</span>
+                <span class="tree-icon ${nodeType}">${getNodeIcon(node)}</span>
                 <span class="tree-name">${escapeHtml(getShortName(node.node_name))}</span>
                 <span class="tree-info">
                     ${duration ? `<span class="tree-duration">${duration}</span>` : ''}
@@ -196,14 +618,28 @@ function renderTreeNode(node) {
 
     if (hasChildren) {
         html += `<div class="tree-children" style="display: ${isExpanded ? 'block' : 'none'}">`;
-        for (const child of node.children) {
-            html += renderTreeNode(child);
+        const childCount = node.children.length;
+        for (let i = 0; i < childCount; i++) {
+            html += renderTreeNode(node.children[i], i === childCount - 1);
         }
         html += '</div>';
     }
 
     html += '</div>';
     return html;
+}
+
+function getNodeType(node) {
+    // Use actual node_type from database if available
+    if (node.node_type) {
+        return node.node_type;
+    }
+    // Fallback to inference for legacy data
+    if (node.contain_generation) return 'llm';
+    if (node.node_name && node.node_name.includes('iteration[')) return 'iteration';
+    if (node.node_name && (node.node_name.includes('_loop') || node.node_name.includes('map_'))) return 'for';
+    if (node.children && node.children.length > 0) return 'graph';
+    return 'default';
 }
 
 function toggleNode(id) {
@@ -213,10 +649,10 @@ function toggleNode(id) {
         expandedNodes.add(id);
     }
 
-    // Re-render the tree
-    const treePanel = document.getElementById('tree-panel');
-    if (treePanel) {
-        treePanel.innerHTML = `<div class="tree-root">${renderTree(currentNodes)}</div>`;
+    // Re-render just the tree content
+    const treeContent = document.querySelector('.tree-content');
+    if (treeContent) {
+        treeContent.innerHTML = `<div class="tree-root">${renderTree(currentNodes)}</div>`;
 
         // Re-apply selection
         if (selectedNode) {
@@ -229,21 +665,52 @@ function toggleNode(id) {
 }
 
 function getNodeIcon(node) {
-    if (node.contain_generation) return '⭐';
-    if (node.node_name && node.node_name.includes('iteration[')) return '📂';
-    if (node.node_name && (node.node_name.includes('_loop') || node.node_name.includes('map_'))) return '🔄';
-    if (node.children && node.children.length > 0) return '📦';
-    return '○';
+    const nodeType = node.node_type || getNodeType(node);
+
+    // Icons/symbols for each node type
+    const icons = {
+        // AI/ML nodes
+        'llm': '◆',           // Diamond for LLM
+        'embedding': '◈',     // Diamond with dot
+        'rerank': '◇',        // Empty diamond
+
+        // Flow control nodes
+        'branch': '◊',        // Branch symbol
+        'for': '↻',           // Loop arrow
+        'while': '↺',         // Repeat arrow
+        'stream': '≋',        // Stream waves
+
+        // Transform nodes
+        'code': 'ƒ',          // Function symbol
+        'lambda': 'λ',        // Lambda
+        'parser': '⟨⟩',       // Angle brackets
+        'prompt': '✎',        // Pencil
+        'doc-processor': '📄', // Document
+
+        // Database/storage nodes
+        'milvus': '⬡',        // Hexagon (vector db)
+        'mongo': '⬢',         // Filled hexagon
+        's3': '☁',           // Cloud
+
+        // Special nodes
+        'graph': '▣',         // Graph/container
+        'data': '⬤',          // Data circle
+        'default': '○',       // Default circle
+        'dummy': '◌',         // Dashed circle
+        'tool-executor': '⚙', // Gear
+        'mcp': '⚡',          // Lightning (MCP)
+        'iteration': '⟳',     // Iteration cycle
+    };
+
+    return icons[nodeType] || '•';
 }
 
 function getShortName(name) {
     if (!name) return 'unknown';
-    // Get last part after dot, but keep iteration suffix
-    const match = name.match(/([^.]+)(\.\w+\[\d+\])?$/);
-    if (match) {
-        return match[1] + (match[2] || '');
-    }
-    return name;
+    // Get everything after the last dot
+    const lastDot = name.lastIndexOf('.');
+    if (lastDot === -1) return name;
+    return name.substring(lastDot + 1);
 }
 
 function selectNodeById(id) {
@@ -267,13 +734,17 @@ function findNodeById(nodes, id) {
 function selectNode(node) {
     selectedNode = node;
 
-    // Update selection UI
-    document.querySelectorAll('.tree-item').forEach(el => {
+    // Update selection UI for both tree and timeline views
+    document.querySelectorAll('.tree-item, .timeline-track').forEach(el => {
         el.classList.remove('selected');
     });
-    const el = document.querySelector(`.tree-item[data-id="${node.id}"]`);
-    if (el) {
-        el.classList.add('selected');
+    const treeEl = document.querySelector(`.tree-item[data-id="${node.id}"]`);
+    const timelineEl = document.querySelector(`.timeline-track[data-id="${node.id}"]`);
+    if (treeEl) {
+        treeEl.classList.add('selected');
+    }
+    if (timelineEl) {
+        timelineEl.classList.add('selected');
     }
 
     renderNodeDetail(node);
@@ -283,18 +754,37 @@ function renderNodeDetail(node) {
     const panel = document.getElementById('node-panel');
     if (!panel) return;
 
+    const nodeType = getNodeType(node);
     const duration = node.duration_ms ? formatDuration(node.duration_ms) : '-';
     const model = node.model || '-';
     const promptTokens = node.prompt_tokens || 0;
     const completionTokens = node.completion_tokens || 0;
-    const tokens = node.total_tokens ? `${promptTokens} → ${completionTokens}` : '-';
+    const totalTokens = node.total_tokens || 0;
+    const tokensDisplay = totalTokens ? `${promptTokens} → ${completionTokens} (Σ ${totalTokens})` : '-';
     const cost = node.cost_usd ? '$' + node.cost_usd.toFixed(4) : '-';
 
+    let tagsHtml = '';
+    if (node.tags && node.tags.length > 0) {
+        const tags = node.tags
+            .filter(t => t != null)
+            .map(t => `<span class="tag ${getTagColorClass(t)}">${escapeHtml(t)}</span>`)
+            .join('');
+        tagsHtml = `<div class="tags-container">${tags}</div>`;
+    }
+
     let html = `
-        <div class="node-title">${escapeHtml(node.node_name)}</div>
+        <div class="node-header">
+            <div class="node-title-row">
+                <span class="node-type-icon ${nodeType}">${getNodeIcon(node)}</span>
+                <span class="node-title">${escapeHtml(getShortName(node.node_name))}</span>
+                <span class="node-type-badge">${nodeType}</span>
+            </div>
+            <div class="node-fullname">${escapeHtml(node.node_name)}</div>
+        </div>
+        ${tagsHtml}
         <div class="node-metrics">
             <div class="metric">
-                <div class="metric-label">Duration</div>
+                <div class="metric-label">Latency</div>
                 <div class="metric-value">${duration}</div>
             </div>
             <div class="metric">
@@ -303,43 +793,132 @@ function renderNodeDetail(node) {
             </div>
             <div class="metric">
                 <div class="metric-label">Tokens</div>
-                <div class="metric-value">${tokens}</div>
+                <div class="metric-value tokens">${tokensDisplay}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">Cost</div>
                 <div class="metric-value">${cost}</div>
             </div>
         </div>
+        <div class="tabs">
+            <button class="tab ${currentTab === 'preview' ? 'active' : ''}" onclick="switchTab('preview')">Preview</button>
+            <button class="tab ${currentTab === 'log' ? 'active' : ''}" onclick="switchTab('log')">Log View</button>
+        </div>
+        <div class="tab-content">
     `;
 
-    if (node.input) {
-        html += `
-            <div class="node-section">
-                <div class="node-section-title">Input</div>
-                <div class="json-view">${formatJson(node.input)}</div>
-            </div>
-        `;
+    if (currentTab === 'preview') {
+        // Preview tab - key-value tables
+        if (node.input) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Input</div>
+                    ${renderKeyValueTable(node.input)}
+                </div>
+            `;
+        }
+
+        if (node.output) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Output</div>
+                    ${renderKeyValueTable(node.output)}
+                </div>
+            `;
+        }
+
+        if (node.metadata) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Metadata</div>
+                    ${renderKeyValueTable(node.metadata)}
+                </div>
+            `;
+        }
+    } else {
+        // Log view - raw JSON
+        if (node.input) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Input</div>
+                    <div class="json-view">${formatJson(node.input)}</div>
+                </div>
+            `;
+        }
+
+        if (node.output) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Output</div>
+                    <div class="json-view">${formatJson(node.output)}</div>
+                </div>
+            `;
+        }
+
+        if (node.metadata) {
+            html += `
+                <div class="node-section">
+                    <div class="node-section-title">Metadata</div>
+                    <div class="json-view">${formatJson(node.metadata)}</div>
+                </div>
+            `;
+        }
     }
 
-    if (node.output) {
-        html += `
-            <div class="node-section">
-                <div class="node-section-title">Output</div>
-                <div class="json-view">${formatJson(node.output)}</div>
-            </div>
-        `;
-    }
-
-    if (node.metadata) {
-        html += `
-            <div class="node-section">
-                <div class="node-section-title">Metadata</div>
-                <div class="json-view">${formatJson(node.metadata)}</div>
-            </div>
-        `;
-    }
-
+    html += '</div>';
     panel.innerHTML = html;
+}
+
+function switchTab(tab) {
+    currentTab = tab;
+    if (selectedNode) {
+        renderNodeDetail(selectedNode);
+    }
+}
+
+function renderKeyValueTable(obj) {
+    if (!obj) return '';
+
+    // Handle string values
+    if (typeof obj === 'string') {
+        return `<div class="kv-table"><div class="kv-row"><div class="kv-value full">${escapeHtml(obj)}</div></div></div>`;
+    }
+
+    // Handle arrays
+    if (Array.isArray(obj)) {
+        if (obj.length === 0) return '<div class="kv-table"><div class="kv-row"><div class="kv-value">[]</div></div></div>';
+        let html = '<div class="kv-table">';
+        for (let i = 0; i < obj.length; i++) {
+            const val = obj[i];
+            if (typeof val === 'object' && val !== null) {
+                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value nested">${renderKeyValueTable(val)}</div></div>`;
+            } else {
+                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value">${escapeHtml(String(val))}</div></div>`;
+            }
+        }
+        html += '</div>';
+        return html;
+    }
+
+    // Handle objects
+    if (typeof obj === 'object' && obj !== null) {
+        const keys = Object.keys(obj);
+        if (keys.length === 0) return '<div class="kv-table"><div class="kv-row"><div class="kv-value">{}</div></div></div>';
+        let html = '<div class="kv-table">';
+        for (const key of keys) {
+            const val = obj[key];
+            if (typeof val === 'object' && val !== null) {
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value nested">${renderKeyValueTable(val)}</div></div>`;
+            } else {
+                const displayVal = val === null ? 'null' : val === undefined ? 'undefined' : String(val);
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value">${escapeHtml(displayVal)}</div></div>`;
+            }
+        }
+        html += '</div>';
+        return html;
+    }
+
+    return `<div class="kv-table"><div class="kv-row"><div class="kv-value">${escapeHtml(String(obj))}</div></div></div>`;
 }
 
 function backToList() {

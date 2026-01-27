@@ -4,10 +4,18 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VSIX_FILE="$SCRIPT_DIR/hush-vscode-traceview-0.1.0.vsix"
 
+# Build the extension
+echo "Building extension..."
+cd "$SCRIPT_DIR"
+npm run package
+if [ $? -ne 0 ]; then
+    echo "Build failed!"
+    exit 1
+fi
+
 # Check if vsix exists
 if [ ! -f "$VSIX_FILE" ]; then
-    echo "Error: $VSIX_FILE not found!"
-    echo "Run 'npm run package' first to build the extension."
+    echo "Error: $VSIX_FILE not found after build!"
     exit 1
 fi
 

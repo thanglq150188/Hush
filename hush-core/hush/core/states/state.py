@@ -204,6 +204,7 @@ class MemoryState:
         name: str,
         input_vars: List[str],
         output_vars: List[str],
+        node_type: Optional[str] = None,
         parent_name: Optional[str] = None,
         start_time: Any = None,
         end_time: Any = None,
