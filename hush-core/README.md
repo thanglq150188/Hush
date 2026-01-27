@@ -1,6 +1,6 @@
 # Hush Core
 
-Workflow engine cốt lõi cho Hush - async orchestration với built-in tracing.
+> Workflow engine cốt lõi cho Hush - async orchestration với built-in tracing.
 
 ## Cài đặt
 
@@ -36,20 +36,18 @@ async def main():
 asyncio.run(main())
 ```
 
-## Thành phần chính
-
-### Nodes
+## Node Types
 
 | Node | Mô tả |
 |------|-------|
 | `GraphNode` | Container chứa subgraph |
 | `CodeNode` | Chạy Python function |
 | `BranchNode` | Conditional routing |
-| `ForLoopNode` | Iterate qua collection |
-| `MapNode` | Parallel map qua collection |
+| `ForLoopNode` | Sequential iteration |
+| `MapNode` | Parallel iteration |
 | `WhileLoopNode` | Loop với điều kiện |
 
-### Flow Control
+## Flow Control
 
 ```python
 # Sequential
@@ -59,19 +57,16 @@ START >> node1 >> node2 >> END
 START >> node1 >> [node2a, node2b] >> node3 >> END
 
 # Branch (conditional)
-START >> branch_node >> {
-    "case_a": node_a,
-    "case_b": node_b
-} >> END
+START >> branch_node >> {"case_a": node_a, "case_b": node_b} >> END
 ```
 
-### State Management
+## State Management
 
 ```python
-# Đọc từ parent scope
+# Đọc từ parent
 inputs={"data": PARENT["input_data"]}
 
-# Ghi ra parent scope
+# Ghi ra parent
 outputs={"result": PARENT}
 
 # Đọc từ node khác
@@ -80,29 +75,28 @@ inputs={"value": other_node["output_key"]}
 
 ## Local Tracing
 
-hush-core có built-in LocalTracer lưu traces vào SQLite:
-
 ```python
-from hush.core import Hush, GraphNode
 from hush.core.tracers import LocalTracer
 
-tracer = LocalTracer()  # Mặc định: ~/.hush/traces.db
-
-with GraphNode(name="demo") as graph:
-    # ... định nghĩa nodes
-    pass
-
+tracer = LocalTracer()  # ~/.hush/traces.db
 engine = Hush(graph, tracer=tracer)
 await engine.run()
 
-# Xem traces
-# python -m hush.core.ui.server
+# Xem traces: python -m hush.core.ui.server
 ```
 
-## Packages liên quan
+## Documentation
 
-- [hush-providers](../hush-providers/) - LLM, embedding, reranking nodes
-- [hush-observability](../hush-observability/) - Langfuse, OpenTelemetry integration
+- [User Docs](../docs/) - Tutorials và guides
+- [Architecture](../architecture/) - Internal documentation
+  - [Engine](../architecture/engine/) - Execution internals
+  - [State](../architecture/state/) - State management
+  - [Nodes](../architecture/nodes/) - Node system
+
+## Related Packages
+
+- [hush-providers](../hush-providers/) - LLM, embedding, reranking
+- [hush-observability](../hush-observability/) - Langfuse, OpenTelemetry
 - [hush-vscode-traceview](../hush-vscode-traceview/) - VS Code extension
 
 ## License

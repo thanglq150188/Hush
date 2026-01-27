@@ -1,6 +1,6 @@
 # Hush Observability
 
-Observability framework cho Hush workflows - hỗ trợ nhiều backend providers.
+> Observability framework cho Hush workflows - hỗ trợ nhiều backend providers.
 
 ## Cài đặt
 
@@ -49,7 +49,7 @@ await engine.run()  # Traces tự động gửi đến Langfuse
 | Opik | `OpikConfig` | Comet Opik |
 | LangSmith | `LangSmithConfig` | LangChain tracing |
 
-## Cấu hình YAML
+## YAML Configuration
 
 ```yaml
 # resources.yaml
@@ -64,15 +64,14 @@ tracer:phoenix:
   endpoint: http://localhost:6006
 ```
 
-## Tính năng
+## Features
 
 - **Unified interface**: Một API cho tất cả backends
 - **Hierarchical tracing**: Traces với parent-child relationships
 - **Token tracking**: Tự động track token usage và cost
 - **Async-first**: Buffering và batching cho performance
-- **ResourceHub integration**: Quản lý như resource bình thường
 
-## Kiến trúc
+## Architecture
 
 ```
 ┌─────────────────────────────────────┐
@@ -81,7 +80,6 @@ tracer:phoenix:
                │
 ┌──────────────▼──────────────────────┐
 │      BaseTracer Interface           │
-│  (add_span, add_generation, flush)  │
 └──────────────┬──────────────────────┘
                │
        ┌───────┴────────┬─────────────┐
@@ -91,31 +89,14 @@ tracer:phoenix:
 └─────────────┘  └─────────────┘  └──────┘
 ```
 
-## Advanced Usage
+## Documentation
 
-### Hierarchical Tracing
-
-```python
-tracer.add_span(request_id="req-1", name="root", parent=None)
-tracer.add_generation(request_id="req-1", name="llm", parent="root")
-tracer.add_span(request_id="req-1", name="postprocess", parent="llm")
-
-await tracer.flush("req-1")  # Flush theo đúng hierarchy
-```
-
-### Custom Metadata
-
-```python
-tracer.add_span(
-    request_id="req-1",
-    name="process",
-    input={"data": "..."},
-    user_id="user-123",
-    session_id="session-abc",
-    tags=["production", "v2"],
-    metadata={"environment": "prod"}
-)
-```
+- [User Docs](../docs/) - Tutorials và guides
+- [Architecture](../architecture/tracing/) - Internal documentation
+  - [Tracer Interface](../architecture/tracing/tracer-interface.md)
+  - [Local Tracer](../architecture/tracing/local-tracer.md)
+  - [Data Model](../architecture/tracing/trace-data-model.md)
+  - [Async Buffer](../architecture/tracing/async-buffer.md)
 
 ## License
 

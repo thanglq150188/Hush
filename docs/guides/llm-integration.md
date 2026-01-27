@@ -1,22 +1,23 @@
 # Tích hợp LLM
 
-Hướng dẫn này sẽ giúp bạn cấu hình và sử dụng các LLM providers trong Hush workflows.
+Hướng dẫn cấu hình và sử dụng các LLM providers trong Hush workflows.
 
 ## Cấu hình LLM trong resources.yaml
 
 ### OpenAI
 
 ```yaml
-# resources.yaml
-llm:gpt-4:
-  type: openai
+llm:gpt-4o:
+  _class: OpenAIConfig
   api_key: ${OPENAI_API_KEY}
+  api_type: openai
   base_url: https://api.openai.com/v1
   model: gpt-4o
 
-llm:gpt-4-mini:
-  type: openai
+llm:gpt-4o-mini:
+  _class: OpenAIConfig
   api_key: ${OPENAI_API_KEY}
+  api_type: openai
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
 ```
@@ -25,43 +26,40 @@ llm:gpt-4-mini:
 
 ```yaml
 llm:azure-gpt4:
-  type: azure
+  _class: OpenAIConfig
   api_key: ${AZURE_OPENAI_API_KEY}
+  api_type: azure
   azure_endpoint: https://your-resource.openai.azure.com
   api_version: "2024-02-15-preview"
   model: gpt-4-deployment-name
 ```
 
-### Google Gemini (Vertex AI)
+### Google Gemini
 
 ```yaml
 llm:gemini:
-  type: gemini
+  _class: GeminiConfig
   project_id: your-gcp-project
-  private_key_id: ${GEMINI_PRIVATE_KEY_ID}
   private_key: ${GEMINI_PRIVATE_KEY}
   client_email: your-service-account@project.iam.gserviceaccount.com
-  client_id: "123456789"
-  client_x509_cert_url: https://www.googleapis.com/robot/v1/metadata/x509/...
   location: us-central1
   model: gemini-2.0-flash-001
 ```
 
-### vLLM / OpenAI-compatible endpoints
+### vLLM / OpenAI-compatible
 
 ```yaml
 llm:local-llama:
-  type: openai
+  _class: OpenAIConfig
   api_key: "not-needed"
+  api_type: openai
   base_url: http://localhost:8000/v1
   model: meta-llama/Llama-3.1-8B-Instruct
 ```
 
 ## PromptNode - Xây dựng Messages
 
-`PromptNode` giúp xây dựng messages array từ templates.
-
-### Cách 1: String prompt (đơn giản nhất)
+### String prompt
 
 ```python
 from hush.providers import PromptNode
@@ -76,7 +74,7 @@ prompt = PromptNode(
 # Output: [{"role": "user", "content": "Tóm tắt văn bản sau: ..."}]
 ```
 
-### Cách 2: Dict với system/user
+### Dict với system/user
 
 ```python
 prompt = PromptNode(
@@ -90,13 +88,9 @@ prompt = PromptNode(
         "query": PARENT["query"]
     }
 )
-# Output: [
-#   {"role": "system", "content": "Bạn là assistant chuyên tóm tắt văn bản."},
-#   {"role": "user", "content": "..."}
-# ]
 ```
 
-### Cách 3: Full messages array (multimodal)
+### Full messages array (multimodal)
 
 ```python
 prompt = PromptNode(
@@ -122,16 +116,13 @@ prompt = PromptNode(
     name="chat_with_history",
     inputs={
         "prompt": {"system": "Bạn là assistant hữu ích.", "user": "{query}"},
-        "conversation_history": PARENT["history"],  # List of previous messages
+        "conversation_history": PARENT["history"],
         "query": PARENT["query"]
     }
 )
-# History được insert trước user message cuối
 ```
 
 ## LLMNode - Gọi LLM
-
-`LLMNode` sử dụng ResourceHub để gọi LLM đã cấu hình.
 
 ### Basic usage
 
@@ -150,11 +141,10 @@ with GraphNode(name="chat-workflow") as graph:
 
     llm = LLMNode(
         name="llm",
-        resource_key="gpt-4",
-        inputs={"messages": prompt["messages"]}
+        resource_key="gpt-4o",
+        inputs={"messages": prompt["messages"]},
+        outputs={"content": PARENT["response"]}
     )
-
-    llm["content"] >> PARENT["response"]
 
     START >> prompt >> llm >> END
 ```
@@ -169,79 +159,69 @@ with GraphNode(name="chat-workflow") as graph:
 | `tokens_used` | dict | `{prompt_tokens, completion_tokens, total_tokens}` |
 | `tool_calls` | list | Tool calls nếu có |
 | `finish_reason` | str | "stop", "tool_calls", etc. |
-| `thinking_content` | str | Reasoning content (cho reasoning models) |
 
-### Streaming
-
-LLMNode mặc định stream responses. Chunks được push qua `STREAM_SERVICE`.
+### Generation Parameters
 
 ```python
 llm = LLMNode(
     name="llm",
-    resource_key="gpt-4",
+    resource_key="gpt-4o",
+    inputs={
+        "messages": prompt["messages"],
+        "temperature": 0.7,
+        "max_tokens": 1000,
+        "top_p": 0.9,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.5,
+        "stop": ["\n\n", "END"],
+        "seed": 42
+    }
+)
+```
+
+## Streaming
+
+LLMNode mặc định stream responses.
+
+```python
+llm = LLMNode(
+    name="llm",
+    resource_key="gpt-4o",
     stream=True,  # Default
     inputs={"messages": prompt["messages"]}
 )
 
 # Subscribe to stream
-from hush.core import STREAM_SERVICE
+from hush.core.streams import STREAM_SERVICE
 
 async for chunk in STREAM_SERVICE.subscribe(request_id, channel_name):
     print(chunk.choices[0].delta.content, end="")
 ```
 
-### Non-streaming
+## Load Balancing và Fallback
+
+### Load Balancing
 
 ```python
 llm = LLMNode(
     name="llm",
-    resource_key="gpt-4",
-    stream=False,  # Disable streaming
+    resource_key=["gpt-4o", "gpt-4o-mini"],
+    ratios=[0.3, 0.7],  # 30% gpt-4o, 70% gpt-4o-mini
     inputs={"messages": prompt["messages"]}
 )
 ```
 
-## Load Balancing
-
-Phân tải requests giữa nhiều models.
+### Fallback
 
 ```python
 llm = LLMNode(
     name="llm",
-    resource_key=["gpt-4", "gpt-4-mini"],  # Multiple models
-    ratios=[0.3, 0.7],  # 30% gpt-4, 70% gpt-4-mini
+    resource_key="gpt-4o",
+    fallback=["azure-gpt4", "gemini"],
     inputs={"messages": prompt["messages"]}
 )
+# Nếu gpt-4o fails → try azure-gpt4 → try gemini
 ```
-
-## Fallback
-
-Tự động retry với model khác khi primary fails.
-
-```python
-llm = LLMNode(
-    name="llm",
-    resource_key="gpt-4",
-    fallback=["azure-gpt4", "gemini"],  # Fallback chain
-    inputs={"messages": prompt["messages"]}
-)
-# Nếu gpt-4 fails → try azure-gpt4 → try gemini
-```
-
-## Batch Mode
-
-Sử dụng OpenAI Batch API để tiết kiệm 50% chi phí.
-
-```python
-llm = LLMNode(
-    name="batch_llm",
-    resource_key="gpt-4",
-    batch_mode=True,  # Enable batch mode
-    inputs={"messages": prompt["messages"]}
-)
-```
-
-**Lưu ý**: Batch mode xử lý async, kết quả có thể mất đến 24h.
 
 ## Tool Use / Function Calling
 
@@ -269,68 +249,26 @@ tools = [
 ]
 ```
 
-### Sử dụng trong LLMNode
+### Sử dụng trong workflow
 
 ```python
-with GraphNode(name="tool-calling") as graph:
-    prompt = PromptNode(
-        name="prompt",
-        inputs={
-            "prompt": {"system": "Bạn có thể tra cứu thời tiết.", "user": "{query}"},
-            "query": PARENT["query"]
-        }
-    )
-
-    llm = LLMNode(
-        name="llm",
-        resource_key="gpt-4",
-        inputs={
-            "messages": prompt["messages"],
-            "tools": tools,
-            "tool_choice": "auto"  # or "required" or {"type": "function", "function": {"name": "get_weather"}}
-        }
-    )
-
-    # Check if tool was called
-    process = CodeNode(
-        name="process",
-        code_fn=lambda tool_calls, content: {
-            "has_tool_call": len(tool_calls) > 0,
-            "tool_calls": tool_calls,
-            "response": content
-        },
-        inputs={
-            "tool_calls": llm["tool_calls"],
-            "content": llm["content"]
-        },
-        outputs={"*": PARENT}
-    )
-
-    START >> prompt >> llm >> process >> END
-```
-
-### Xử lý tool results
-
-```python
-# Sau khi execute tools, gửi results về LLM
-prompt_with_tools = PromptNode(
-    name="prompt_with_tools",
+llm = LLMNode(
+    name="llm",
+    resource_key="gpt-4o",
     inputs={
-        "prompt": {"system": "Bạn có thể tra cứu thời tiết.", "user": "{query}"},
-        "tool_results": PARENT["tool_results"],  # List of tool result messages
-        "query": PARENT["query"]
+        "messages": prompt["messages"],
+        "tools": tools,
+        "tool_choice": "auto"
     }
 )
 ```
 
 ## Structured Output
 
-Force LLM trả về JSON theo schema.
-
 ```python
 llm = LLMNode(
     name="llm",
-    resource_key="gpt-4",
+    resource_key="gpt-4o",
     inputs={
         "messages": prompt["messages"],
         "response_format": {
@@ -351,137 +289,60 @@ llm = LLMNode(
 )
 ```
 
-## Generation Parameters
+## LLMChainNode - All-in-one
 
 ```python
-llm = LLMNode(
-    name="llm",
-    resource_key="gpt-4",
-    inputs={
-        "messages": prompt["messages"],
-        "temperature": 0.7,      # Randomness (0.0 = deterministic)
-        "max_tokens": 1000,      # Max response length
-        "top_p": 0.9,            # Nucleus sampling
-        "frequency_penalty": 0.5, # Reduce repetition
-        "presence_penalty": 0.5,  # Encourage new topics
-        "stop": ["\n\n", "END"], # Stop sequences
-        "seed": 42               # Reproducibility
-    }
+from hush.providers import LLMChainNode
+
+chain = LLMChainNode(
+    name="chain",
+    resource_key="gpt-4o",
+    prompt={
+        "system": "Bạn là assistant hữu ích.",
+        "user": "{query}"
+    },
+    inputs={"query": PARENT["query"]},
+    outputs={"content": PARENT["response"]}
 )
 ```
 
 ## Cost Tracking
 
-### Cấu hình cost per token
+### Cấu hình
 
 ```yaml
-llm:gpt-4:
-  type: openai
+llm:gpt-4o:
+  _class: OpenAIConfig
   api_key: ${OPENAI_API_KEY}
-  base_url: https://api.openai.com/v1
   model: gpt-4o
-  cost_per_input_token: 0.000005   # $5 per 1M input tokens
-  cost_per_output_token: 0.000015  # $15 per 1M output tokens
+  cost_per_input_token: 0.000005
+  cost_per_output_token: 0.000015
 ```
 
-### Access cost trong kết quả
+### Truy cập cost
 
 ```python
-result = await engine.run(inputs={"query": "Hello"})
+result = await engine.run(inputs={"query": "Hello"}, tracer=tracer)
 state = result["$state"]
 
-# Access cost từ trace metadata
 for node_name, metadata in state.trace_metadata.items():
     if "cost" in metadata:
-        print(f"{node_name}: ${metadata['cost']['total']:.6f}")
-```
-
-### Với Tracer
-
-```python
-from hush.observability import LangfuseTracer
-
-tracer = LangfuseTracer(resource_key="langfuse:default")
-result = await engine.run(inputs={...}, tracer=tracer)
-
-# Cost được gửi tự động đến Langfuse dashboard
-```
-
-## LLMChainNode - All-in-one
-
-`LLMChainNode` kết hợp PromptNode + LLMNode trong một node.
-
-```python
-from hush.providers import LLMChainNode
-
-with GraphNode(name="simple-chain") as graph:
-    chain = LLMChainNode(
-        name="chain",
-        resource_key="gpt-4",
-        prompt={
-            "system": "Bạn là assistant hữu ích.",
-            "user": "{query}"
-        },
-        inputs={"query": PARENT["query"]},
-        outputs={"content": PARENT["response"]}
-    )
-
-    START >> chain >> END
+        print(f"{node_name}: ${metadata['cost']:.6f}")
 ```
 
 ## Best Practices
 
-### 1. Separate prompt và LLM nodes
+1. **Separate prompt và LLM nodes** - dễ debug và reuse
+2. **Sử dụng ResourceHub** cho production
+3. **Cấu hình fallback** cho reliability
+4. **Monitor costs** với tracing
+5. **Set temperature theo use case**:
+   - `0.0`: Factual Q&A, code generation
+   - `0.3-0.5`: General conversation
+   - `0.7-1.0`: Creative writing
 
-```python
-# Good - dễ debug và reuse
-prompt = PromptNode(...)
-llm = LLMNode(...)
-START >> prompt >> llm >> END
+## Xem thêm
 
-# OK for simple cases
-chain = LLMChainNode(...)
-```
-
-### 2. Sử dụng ResourceHub cho production
-
-```yaml
-# resources.yaml - quản lý tập trung
-llm:production:
-  type: openai
-  api_key: ${OPENAI_API_KEY}
-  model: gpt-4o
-
-llm:development:
-  type: openai
-  api_key: ${OPENAI_API_KEY}
-  model: gpt-4o-mini
-```
-
-### 3. Cấu hình fallback cho reliability
-
-```python
-llm = LLMNode(
-    resource_key="gpt-4",
-    fallback=["azure-gpt4", "gemini"]  # Backup models
-)
-```
-
-### 4. Monitor costs với tracing
-
-```python
-tracer = LangfuseTracer(resource_key="langfuse:default")
-result = await engine.run(inputs={...}, tracer=tracer)
-```
-
-### 5. Set temperature theo use case
-
-- `temperature=0.0`: Factual Q&A, code generation
-- `temperature=0.3-0.5`: General conversation
-- `temperature=0.7-1.0`: Creative writing
-
-## Tiếp theo
-
-- [Embeddings & Reranking](embeddings-reranking.md) - Vector embeddings và reranking
-- [Xử lý lỗi](error-handling.md) - Error handling và retry strategies
-- [RAG Workflow](../examples/rag-workflow.md) - Ví dụ RAG với LLM
+- [Tutorial: Sử dụng LLM](../tutorials/02-llm-basics.md)
+- [Embeddings & Reranking](embeddings-reranking.md)
+- [Xử lý lỗi](error-handling.md)

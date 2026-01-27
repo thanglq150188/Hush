@@ -2,19 +2,25 @@
 
 > Async workflow orchestration engine cho GenAI applications.
 
-Hush là một **workflow engine** nhẹ, được thiết kế để xây dựng các pipeline AI/LLM phức tạp một cách đơn giản và hiệu quả.
+## Features
+
+- **DAG-based workflows** - Định nghĩa workflows với nodes và edges
+- **Async-first** - Native async execution với parallel processing
+- **Built-in tracing** - Observability với SQLite và external backends
+- **Provider agnostic** - OpenAI, Azure, Gemini, vLLM, ONNX
+- **Type-safe state** - O(1) state access với compile-time validation
 
 ## Cài đặt
 
 ```bash
-# Standard - workflow engine + LLM providers (OpenAI)
-pip install hush-ai[standard]
+# Core engine
+pip install hush-core
 
-# Core only - workflow engine với local tracing
-pip install hush-ai[core]
+# Với LLM providers
+pip install hush-providers
 
-# Full - tất cả providers + observability
-pip install hush-ai[all]
+# Với observability (Langfuse, etc.)
+pip install hush-observability
 ```
 
 ## Quick Start
@@ -24,18 +30,18 @@ import asyncio
 from hush.core import Hush, GraphNode, CodeNode, START, END, PARENT
 
 async def main():
-    with GraphNode(name="hello-world") as graph:
-        greet = CodeNode(
+    with GraphNode(name="hello") as graph:
+        step1 = CodeNode(
             name="greet",
-            code_fn=lambda name: {"greeting": f"Xin chào, {name}!"},
+            code_fn=lambda name: {"message": f"Hello, {name}!"},
             inputs={"name": PARENT["name"]},
-            outputs={"greeting": PARENT}
+            outputs={"message": PARENT}
         )
-        START >> greet >> END
+        START >> step1 >> END
 
     engine = Hush(graph)
-    result = await engine.run(inputs={"name": "Hush"})
-    print(result["greeting"])  # Xin chào, Hush!
+    result = await engine.run(inputs={"name": "World"})
+    print(result["message"])  # Hello, World!
 
 asyncio.run(main())
 ```
@@ -58,7 +64,7 @@ async def main():
         )
         llm = LLMNode(
             name="llm",
-            resource_key="gpt-4o",  # Cấu hình trong resources.yaml
+            resource_key="gpt-4o",
             inputs={"messages": PARENT["messages"]},
             outputs={"content": PARENT["answer"]}
         )
@@ -71,37 +77,22 @@ async def main():
 asyncio.run(main())
 ```
 
-## Kiến trúc
+## Documentation
 
-Hush được tổ chức thành 3 package độc lập:
+| Tài liệu | Mô tả |
+|----------|-------|
+| [docs/](docs/) | User documentation - tutorials, guides, examples |
+| [architecture/](architecture/) | Internal documentation - cho developers và AI |
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    hush-observability                   │
-│         (LocalTracer, Langfuse, OpenTelemetry)          │
-├─────────────────────────────────────────────────────────┤
-│                     hush-providers                      │
-│    (LLMNode, PromptNode, EmbeddingNode, RerankNode)     │
-├─────────────────────────────────────────────────────────┤
-│                       hush-core                         │
-│  (GraphNode, CodeNode, BranchNode, State, ResourceHub)  │
-└─────────────────────────────────────────────────────────┘
-```
+## Packages
 
-| Package | Mô tả |
-|---------|-------|
-| [hush-core](hush-core/) | Workflow engine cốt lõi, state management, local tracing |
+| Package | Description |
+|---------|-------------|
+| [hush-core](hush-core/) | Core workflow engine |
 | [hush-providers](hush-providers/) | LLM, embedding, reranking providers |
-| [hush-observability](hush-observability/) | Tích hợp Langfuse, OpenTelemetry |
-| [hush-vscode-traceview](hush-vscode-traceview/) | VS Code extension xem traces |
-
-## Tính năng chính
-
-- **Async-first**: Hỗ trợ parallel execution tự động
-- **Declarative data flow**: Syntax `PARENT["key"]` rõ ràng, dễ hiểu
-- **Built-in tracing**: Local SQLite tracer với Web UI và VS Code extension
-- **Modular**: Cài đặt theo nhu cầu, không bloat
-- **Type-safe**: Schema validation tại build time và runtime
+| [hush-observability](hush-observability/) | Tracing backends (Langfuse, Phoenix) |
+| [hush-tutorial](hush-tutorial/) | Tutorials và examples |
+| [hush-vscode-traceview](hush-vscode-traceview/) | VS Code extension |
 
 ## Local Trace Viewer
 
@@ -115,18 +106,6 @@ python -m hush.core.ui.server
 
 Hoặc cài VS Code extension: [hush-vscode-traceview](hush-vscode-traceview/)
 
-## Tài liệu
-
-- [Bắt đầu nhanh](docs/getting-started/quickstart.md)
-- [Khái niệm cốt lõi](docs/concepts/overview.md)
-- [Hướng dẫn xây dựng workflow](docs/guides/building-workflows.md)
-- [Ví dụ](docs/examples/)
-- [API Reference](docs/reference/)
-
 ## License
 
 MIT
-
-## Liên hệ
-
-thanglq150188@gmail.com
