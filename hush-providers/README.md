@@ -1,6 +1,6 @@
 # Hush Providers
 
-LLM, embedding và reranking providers cho Hush workflow engine.
+> LLM, embedding và reranking providers cho Hush workflow engine.
 
 ## Cài đặt
 
@@ -8,14 +8,8 @@ LLM, embedding và reranking providers cho Hush workflow engine.
 pip install hush-providers
 
 # Với provider cụ thể
-pip install hush-providers[openai]      # OpenAI
-pip install hush-providers[azure]       # Azure OpenAI
 pip install hush-providers[gemini]      # Google Gemini
-
-# Local inference (nhẹ)
-pip install hush-providers[onnx]        # ONNX Runtime
-pip install hush-providers[embeddings]  # Embeddings (ONNX)
-pip install hush-providers[rerankers]   # Rerankers (ONNX)
+pip install hush-providers[onnx]        # Local ONNX Runtime
 
 # Tất cả
 pip install hush-providers[all-light]   # Không có ML frameworks nặng
@@ -80,38 +74,19 @@ rerank = RerankNode(
 
 ## Supported Providers
 
-### LLM
+| Type | Providers |
+|------|-----------|
+| LLM | OpenAI, Azure, Gemini, vLLM |
+| Embedding | vLLM, TEI, HuggingFace, ONNX |
+| Reranking | vLLM, Pinecone, HuggingFace, ONNX |
 
-| Provider | API Type | Mô tả |
-|----------|----------|-------|
-| OpenAI | `openai` | OpenAI API và compatible endpoints (vLLM) |
-| Azure | `azure` | Azure OpenAI Service |
-| Gemini | `gemini` | Google Gemini via Vertex AI |
-
-### Embedding
-
-| Provider | API Type | Mô tả |
-|----------|----------|-------|
-| vLLM | `vllm` | OpenAI-compatible embedding API |
-| TEI | `tei` | HuggingFace Text Embedding Inference |
-| ONNX | `onnx` | Local ONNX Runtime |
-
-### Reranking
-
-| Provider | API Type | Mô tả |
-|----------|----------|-------|
-| vLLM | `vllm` | OpenAI-compatible reranking API |
-| Pinecone | `pinecone` | Pinecone reranking API |
-| ONNX | `onnx` | Local ONNX Runtime |
-
-## Cấu hình với ResourceHub
+## Configuration
 
 ```yaml
 # resources.yaml
 llm:gpt-4o:
   _class: OpenAIConfig
   api_key: ${OPENAI_API_KEY}
-  api_type: openai
   base_url: https://api.openai.com/v1
   model: gpt-4o
 
@@ -122,14 +97,22 @@ embedding:bge-m3:
   model: BAAI/bge-m3
 ```
 
-## Tính năng
+## Features
 
 - Streaming và non-streaming responses
 - Token counting và usage tracking
 - Multimodal input (images)
 - Tool/function calling
 - Batch processing
-- YAML configuration
+
+## Documentation
+
+- [User Docs](../docs/) - Tutorials và guides
+- [Architecture](../architecture/providers/) - Internal documentation
+  - [LLM Abstraction](../architecture/providers/llm-abstraction.md)
+  - [Embedding Provider](../architecture/providers/embedding-provider.md)
+  - [Reranker Provider](../architecture/providers/reranker-provider.md)
+  - [Adding New Provider](../architecture/providers/adding-new-provider.md)
 
 ## License
 
