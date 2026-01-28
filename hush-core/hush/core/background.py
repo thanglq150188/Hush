@@ -198,7 +198,8 @@ def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
     """
     cursor = conn.execute("""
         SELECT id, node_name, parent_name, context_id, start_time, end_time,
-               duration_ms, workflow_name, user_id, session_id
+               duration_ms, workflow_name, user_id, session_id,
+               prompt_tokens, completion_tokens, total_tokens, cost_usd
         FROM traces
         WHERE request_id = ? AND status = 'writing'
         ORDER BY execution_order
@@ -208,12 +209,40 @@ def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
     if not rows:
         return
 
+    # Build a lookup of parent loop nodes (with input/output/metadata)
+    # to slice per-iteration values
+    parent_loop_cache: Dict[str, Dict] = {}
+
+    def _get_parent_loop(parent_name: str) -> Optional[Dict]:
+        if parent_name in parent_loop_cache:
+            return parent_loop_cache[parent_name]
+        cur = conn.execute("""
+            SELECT input, output, metadata
+            FROM traces
+            WHERE request_id = ? AND node_name = ? AND status = 'writing'
+            LIMIT 1
+        """, (request_id, parent_name))
+        r = cur.fetchone()
+        if r:
+            try:
+                inp = json.loads(r[0]) if r[0] else {}
+                out = json.loads(r[1]) if r[1] else {}
+                meta = json.loads(r[2]) if r[2] else {}
+                parent_loop_cache[parent_name] = {'input': inp, 'output': out, 'metadata': meta}
+            except (json.JSONDecodeError, TypeError):
+                parent_loop_cache[parent_name] = None
+        else:
+            parent_loop_cache[parent_name] = None
+        return parent_loop_cache[parent_name]
+
     # Group nodes by (parent_name, context_id)
     # Key: (parent_name, context_id) -> iteration group
     iteration_groups: Dict[Tuple[str, str], Dict] = {}
 
     for row in rows:
-        node_id, parent_name, context_id = row[0], row[2], row[3]
+        (node_id, node_name, parent_name, context_id, start_time, end_time,
+         duration_ms, workflow_name, user_id, session_id,
+         prompt_tokens, completion_tokens, total_tokens, cost_usd) = row
 
         if not context_id or not parent_name:
             continue
@@ -227,21 +256,35 @@ def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
                 'parent_name': parent_name,
                 'context_id': context_id,
                 'children': [],
-                'start_time': row[4],
-                'end_time': row[5],
-                'workflow_name': row[7],
-                'user_id': row[8],
-                'session_id': row[9],
+                'start_time': start_time,
+                'end_time': end_time,
+                'workflow_name': workflow_name,
+                'user_id': user_id,
+                'session_id': session_id,
+                'prompt_tokens': 0,
+                'completion_tokens': 0,
+                'total_tokens': 0,
+                'cost_usd': 0.0,
             }
 
         group = iteration_groups[key]
         group['children'].append(node_id)
 
+        # Aggregate tokens and cost
+        if prompt_tokens:
+            group['prompt_tokens'] += prompt_tokens
+        if completion_tokens:
+            group['completion_tokens'] += completion_tokens
+        if total_tokens:
+            group['total_tokens'] += total_tokens
+        if cost_usd:
+            group['cost_usd'] += cost_usd
+
         # Update time bounds
-        if row[4] and (not group['start_time'] or row[4] < group['start_time']):
-            group['start_time'] = row[4]
-        if row[5] and (not group['end_time'] or row[5] > group['end_time']):
-            group['end_time'] = row[5]
+        if start_time and (not group['start_time'] or start_time < group['start_time']):
+            group['start_time'] = start_time
+        if end_time and (not group['end_time'] or end_time > group['end_time']):
+            group['end_time'] = end_time
 
     # Create iteration group traces
     now = time()
@@ -272,27 +315,89 @@ def _create_iteration_groups(conn: sqlite3.Connection, request_id: str) -> None:
             except (ValueError, TypeError):
                 pass
 
+        # Extract iteration index from context_id (e.g., [0] -> 0, [0].[1] -> last is 1)
+        last_bracket = context_id[last_bracket_start:]
+        try:
+            iteration_index = int(last_bracket.strip('[]'))
+        except (ValueError, TypeError):
+            iteration_index = None
+
+        # Slice input/output from parent loop node at iteration_index
+        iter_input = None
+        iter_output = None
+
+        if iteration_index is not None:
+            parent_data = _get_parent_loop(parent_name)
+            if parent_data:
+                parent_input = parent_data['input']
+                parent_output = parent_data['output']
+                parent_meta = parent_data['metadata']
+
+                # Input: slice each "each" field at iteration_index
+                # metadata.each tells us which input fields are iterated
+                each_fields = parent_meta.get('each', [])
+                sliced_input = {}
+                for field_name, field_value in parent_input.items():
+                    if field_name in each_fields and isinstance(field_value, list):
+                        # Per-iteration value: slice at index
+                        if iteration_index < len(field_value):
+                            sliced_input[field_name] = field_value[iteration_index]
+                    else:
+                        # Shared value across all iterations
+                        sliced_input[field_name] = field_value
+                if sliced_input:
+                    iter_input = json.dumps(sliced_input)
+
+                # Output: slice array outputs at iteration_index
+                # Loop outputs are collected as arrays, one element per iteration
+                sliced_output = {}
+                for field_name, field_value in parent_output.items():
+                    if field_name.startswith('$') or field_name == 'iteration_metrics':
+                        continue
+                    if isinstance(field_value, list) and iteration_index < len(field_value):
+                        sliced_output[field_name] = field_value[iteration_index]
+                    else:
+                        sliced_output[field_name] = field_value
+                if sliced_output:
+                    iter_output = json.dumps(sliced_output)
+
+        # Build iteration metadata
+        iter_metadata = {
+            '_synthetic': True,
+            '_iteration_group': True,
+            'iteration_index': iteration_index,
+            'children_count': len(group['children']),
+        }
+
         # Insert iteration group trace
         conn.execute("""
             INSERT INTO traces (
                 request_id, workflow_name, node_name, node_type, parent_name, context_id,
                 execution_order, start_time, end_time, duration_ms,
+                prompt_tokens, completion_tokens, total_tokens, cost_usd,
+                input, output,
                 user_id, session_id, contain_generation, metadata,
                 status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, -1, ?, ?, ?, ?, ?, 0, ?, 'writing', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, -1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'writing', ?)
         """, (
             request_id,
             group['workflow_name'],
             iteration_name,
-            'iteration',  # node_type for iteration groups
+            'iteration',
             parent_name,
             parent_context,
             group['start_time'],
             group['end_time'],
             duration_ms,
+            group['prompt_tokens'] or None,
+            group['completion_tokens'] or None,
+            group['total_tokens'] or None,
+            group['cost_usd'] or None,
+            iter_input,
+            iter_output,
             group['user_id'],
             group['session_id'],
-            json.dumps({'_synthetic': True, '_iteration_group': True}),
+            json.dumps(iter_metadata),
             now,
         ))
 

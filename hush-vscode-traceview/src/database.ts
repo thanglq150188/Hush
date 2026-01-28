@@ -184,8 +184,28 @@ export class TraceDatabase {
         return results;
     }
 
-    public async getTraceList(limit: number = 100): Promise<TraceSummary[]> {
+    public async getTraceList(options: { limit?: number; offset?: number; timeFilter?: number } = {}): Promise<{ traces: TraceSummary[]; total: number }> {
         const db = await this.open();
+        const limit = options.limit || 50;
+        const offset = options.offset || 0;
+        const timeFilter = options.timeFilter; // seconds ago, undefined = all
+
+        // Build time condition
+        let timeCondition = '';
+        const params: any[] = [];
+        if (timeFilter) {
+            const cutoff = Date.now() / 1000 - timeFilter;
+            timeCondition = 'AND t.created_at >= ?';
+            params.push(cutoff);
+        }
+
+        // Get total count
+        const countRows = this.queryToObjects<any>(db, `
+            SELECT COUNT(DISTINCT t.request_id) as total
+            FROM traces t
+            WHERE t.status IN ('flushed', 'pending') ${timeCondition}
+        `, [...params]);
+        const total = countRows[0]?.total || 0;
 
         // Get root node's duration (parent_name IS NULL) instead of SUM
         // because parent durations already include child durations
@@ -204,13 +224,13 @@ export class TraceDatabase {
                 MAX(CASE WHEN t.parent_name IS NULL THEN t.input ELSE NULL END) as root_input,
                 MAX(CASE WHEN t.parent_name IS NULL THEN t.output ELSE NULL END) as root_output
             FROM traces t
-            WHERE t.status IN ('flushed', 'pending')
+            WHERE t.status IN ('flushed', 'pending') ${timeCondition}
             GROUP BY t.request_id
             ORDER BY MIN(t.created_at) DESC
-            LIMIT ?
-        `, [limit]);
+            LIMIT ? OFFSET ?
+        `, [...params, limit, offset]);
 
-        return rows.map(row => ({
+        const traces = rows.map(row => ({
             request_id: row.request_id,
             workflow_name: row.workflow_name,
             start_time: row.start_time || '',
@@ -224,6 +244,8 @@ export class TraceDatabase {
             input_preview: this.extractPreview(row.root_input),
             output_preview: this.extractPreview(row.root_output)
         }));
+
+        return { traces, total };
     }
 
     private extractPreview(jsonStr: string | null): string {

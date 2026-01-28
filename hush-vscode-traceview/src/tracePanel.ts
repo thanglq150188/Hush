@@ -74,7 +74,7 @@ export class TracePanel {
             message => {
                 switch (message.type) {
                     case 'getTraceList':
-                        this._sendTraceList();
+                        this._sendTraceList(message.timeFilter, message.page);
                         break;
                     case 'getTraceDetail':
                         this._sendTraceDetail(message.requestId);
@@ -110,26 +110,35 @@ export class TracePanel {
         }
     }
 
-    private async _sendTraceList() {
+    private async _sendTraceList(timeFilter?: number, page?: number) {
         try {
             if (!this._db.exists()) {
                 this._panel.webview.postMessage({
                     type: 'traceList',
                     traces: [],
+                    total: 0,
+                    page: 1,
                     error: null
                 });
                 return;
             }
-            const traces = await this._db.getTraceList();
+            const currentPage = page || 1;
+            const limit = 50;
+            const offset = (currentPage - 1) * limit;
+            const result = await this._db.getTraceList({ limit, offset, timeFilter });
             this._panel.webview.postMessage({
                 type: 'traceList',
-                traces,
+                traces: result.traces,
+                total: result.total,
+                page: currentPage,
                 error: null
             });
         } catch (e: any) {
             this._panel.webview.postMessage({
                 type: 'traceList',
                 traces: [],
+                total: 0,
+                page: 1,
                 error: e.message
             });
         }

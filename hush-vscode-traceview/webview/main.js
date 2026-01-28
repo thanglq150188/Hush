@@ -14,6 +14,10 @@ let currentTab = 'preview';
 let leftPanelView = 'tree'; // 'tree' or 'timeline'
 let splitPosition = 350; // pixels for left panel width
 let isResizing = false;
+let currentTimeFilter = undefined; // seconds ago, undefined = all
+let currentPage = 1;
+let totalTraces = 0;
+const PAGE_SIZE = 50;
 
 // Request initial data
 vscode.postMessage({ type: 'getTraceList' });
@@ -25,6 +29,8 @@ window.addEventListener('message', event => {
     switch (message.type) {
         case 'traceList':
             currentTraces = message.traces || [];
+            totalTraces = message.total || 0;
+            currentPage = message.page || 1;
             if (currentView === 'list') {
                 renderTraceList(message.traces, message.error);
             }
@@ -40,8 +46,25 @@ window.addEventListener('message', event => {
 });
 
 function refresh() {
-    vscode.postMessage({ type: 'getTraceList' });
+    fetchTraceList();
     vscode.postMessage({ type: 'getDbInfo' });
+}
+
+function fetchTraceList() {
+    vscode.postMessage({ type: 'getTraceList', timeFilter: currentTimeFilter, page: currentPage });
+}
+
+function setTimeFilter(seconds) {
+    currentTimeFilter = seconds || undefined;
+    currentPage = 1;
+    fetchTraceList();
+}
+
+function goToPage(page) {
+    const totalPages = Math.ceil(totalTraces / PAGE_SIZE) || 1;
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    fetchTraceList();
 }
 
 function clearTraces() {
@@ -99,6 +122,20 @@ function renderTraceList(traces, error) {
         });
     }
 
+    // Render time filter buttons
+    const timeFilters = [
+        { label: '1h', value: 3600 },
+        { label: '24h', value: 86400 },
+        { label: '7d', value: 604800 },
+        { label: '30d', value: 2592000 },
+        { label: 'All', value: undefined },
+    ];
+    const timeFilterHtml = `
+        <div class="time-filter-container">
+            ${timeFilters.map(f => `<button class="time-filter-btn ${currentTimeFilter === f.value ? 'active' : ''}" onclick="setTimeFilter(${f.value})">${f.label}</button>`).join('')}
+        </div>
+    `;
+
     // Render search bar
     let searchHtml = `
         <div class="search-container">
@@ -127,7 +164,7 @@ function renderTraceList(traces, error) {
         `;
     }
 
-    let html = searchHtml + filterHtml + `
+    let html = timeFilterHtml + searchHtml + filterHtml + `
         <table class="trace-table">
             <thead>
                 <tr>
@@ -180,6 +217,22 @@ function renderTraceList(traces, error) {
 
     if (filteredTraces.length === 0 && (selectedTags.size > 0 || searchQuery)) {
         html += '<div class="empty-state">No traces match your filters.</div>';
+    }
+
+    // Pagination
+    const totalPages = Math.ceil(totalTraces / PAGE_SIZE) || 1;
+    if (totalTraces > 0) {
+        const from = (currentPage - 1) * PAGE_SIZE + 1;
+        const to = Math.min(currentPage * PAGE_SIZE, totalTraces);
+        let paginationHtml = `<div class="pagination">`;
+        paginationHtml += `<span class="page-info">${from}–${to} of ${totalTraces}</span>`;
+        paginationHtml += `<button class="page-btn" onclick="goToPage(1)" ${currentPage === 1 ? 'disabled' : ''}>«</button>`;
+        paginationHtml += `<button class="page-btn" onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>‹</button>`;
+        paginationHtml += `<span class="page-num">Page ${currentPage} / ${totalPages}</span>`;
+        paginationHtml += `<button class="page-btn" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>›</button>`;
+        paginationHtml += `<button class="page-btn" onclick="goToPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''}>»</button>`;
+        paginationHtml += `</div>`;
+        html += paginationHtml;
     }
 
     listEl.innerHTML = html;
@@ -707,6 +760,15 @@ function getNodeIcon(node) {
 
 function getShortName(name) {
     if (!name) return 'unknown';
+
+    // For iteration nodes like iteration[0][1][2], just show the last [N]
+    if (name.includes('iteration[')) {
+        const match = name.match(/\[(\d+)\](?!.*\[)/);
+        if (match) {
+            return `[${match[1]}]`;
+        }
+    }
+
     // Get everything after the last dot
     const lastDot = name.lastIndexOf('.');
     if (lastDot === -1) return name;
@@ -810,21 +872,27 @@ function renderNodeDetail(node) {
     if (currentTab === 'preview') {
         // Preview tab - key-value tables
         if (node.input) {
-            html += `
-                <div class="node-section">
-                    <div class="node-section-title">Input</div>
-                    ${renderKeyValueTable(node.input)}
-                </div>
-            `;
+            const inputHtml = renderKeyValueTable(node.input, { filterSystemVars: true });
+            if (inputHtml && !inputHtml.includes('empty-table')) {
+                html += `
+                    <div class="node-section">
+                        <div class="node-section-title">Input</div>
+                        ${inputHtml}
+                    </div>
+                `;
+            }
         }
 
         if (node.output) {
-            html += `
-                <div class="node-section">
-                    <div class="node-section-title">Output</div>
-                    ${renderKeyValueTable(node.output)}
-                </div>
-            `;
+            const outputHtml = renderKeyValueTable(node.output, { filterSystemVars: true });
+            if (outputHtml && !outputHtml.includes('empty-table')) {
+                html += `
+                    <div class="node-section">
+                        <div class="node-section-title">Output</div>
+                        ${outputHtml}
+                    </div>
+                `;
+            }
         }
 
         if (node.metadata) {
@@ -876,8 +944,10 @@ function switchTab(tab) {
     }
 }
 
-function renderKeyValueTable(obj) {
+function renderKeyValueTable(obj, options = {}) {
     if (!obj) return '';
+
+    const { filterSystemVars = false } = options;
 
     // Handle string values
     if (typeof obj === 'string') {
@@ -891,9 +961,9 @@ function renderKeyValueTable(obj) {
         for (let i = 0; i < obj.length; i++) {
             const val = obj[i];
             if (typeof val === 'object' && val !== null) {
-                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value nested">${renderKeyValueTable(val)}</div></div>`;
+                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value nested">${renderKeyValueTable(val, options)}</div></div>`;
             } else {
-                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value">${escapeHtml(String(val))}</div></div>`;
+                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value">${formatValue(val)}</div></div>`;
             }
         }
         html += '</div>';
@@ -902,16 +972,54 @@ function renderKeyValueTable(obj) {
 
     // Handle objects
     if (typeof obj === 'object' && obj !== null) {
-        const keys = Object.keys(obj);
-        if (keys.length === 0) return '<div class="kv-table"><div class="kv-row"><div class="kv-value">{}</div></div></div>';
+        let keys = Object.keys(obj);
+
+        // Filter out system variables (starting with @ or $)
+        if (filterSystemVars) {
+            keys = keys.filter(k => !k.startsWith('@') && !k.startsWith('$'));
+        }
+
+        if (keys.length === 0) return '<div class="kv-table empty-table"></div>';
+        // Check if this object has code_fn (to skip function_name)
+        const hasCodeFn = 'code_fn' in obj;
+
         let html = '<div class="kv-table">';
         for (const key of keys) {
             const val = obj[key];
+
+            // Skip function_name if code_fn exists (it's redundant)
+            if (key === 'function_name' && hasCodeFn) {
+                continue;
+            }
+
+            // Special rendering for name - show as path breadcrumb
+            if (key === 'name' && typeof val === 'string' && val.includes('.')) {
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><div class="node-path">${formatNodePath(val)}</div></div></div>`;
+                continue;
+            }
+
+            // Special rendering for code_fn - format as code block with syntax highlighting
+            if (key === 'code_fn' && typeof val === 'string') {
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><pre class="code-block">${highlightPython(val)}</pre></div></div>`;
+                continue;
+            }
+
+            // Special rendering for input_connects - show as "varName ← source"
+            if (key === 'input_connects' && typeof val === 'object' && val !== null) {
+                html += renderConnectsTable(key, val, 'input');
+                continue;
+            }
+
+            // Special rendering for output_connects - show as "varName → target"
+            if (key === 'output_connects' && typeof val === 'object' && val !== null) {
+                html += renderConnectsTable(key, val, 'output');
+                continue;
+            }
+
             if (typeof val === 'object' && val !== null) {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value nested">${renderKeyValueTable(val)}</div></div>`;
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value nested">${renderKeyValueTable(val, options)}</div></div>`;
             } else {
-                const displayVal = val === null ? 'null' : val === undefined ? 'undefined' : String(val);
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value">${escapeHtml(displayVal)}</div></div>`;
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value">${formatValue(val)}</div></div>`;
             }
         }
         html += '</div>';
@@ -919,6 +1027,94 @@ function renderKeyValueTable(obj) {
     }
 
     return `<div class="kv-table"><div class="kv-row"><div class="kv-value">${escapeHtml(String(obj))}</div></div></div>`;
+}
+
+function renderConnectsTable(key, connects, direction) {
+    const entries = Object.entries(connects).filter(([_, val]) => val !== null && val !== undefined);
+
+    if (entries.length === 0) {
+        return ''; // Hide if all values are null
+    }
+
+    let html = `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value nested"><div class="connects-table">`;
+
+    for (const [varName, source] of entries) {
+        let refHtml = '';
+        let isNodeRef = false;
+
+        // Check if source is a node reference or a raw value
+        if (typeof source === 'object' && source !== null && !Array.isArray(source)) {
+            // Object format: {"full.node.name": "output_key"} - check if key is a valid node
+            const sourceEntries = Object.entries(source);
+            if (sourceEntries.length === 1) {
+                const [nodeKey, outputKey] = sourceEntries[0];
+                if (typeof nodeKey === 'string' && typeof outputKey === 'string') {
+                    // Check if this node actually exists
+                    const nodeExists = findNodeByName(currentNodes, nodeKey);
+                    if (nodeExists) {
+                        const fullNodeName = nodeKey;
+                        const lastDot = fullNodeName.lastIndexOf('.');
+                        const nodeName = lastDot >= 0 ? fullNodeName.slice(lastDot + 1) : fullNodeName;
+
+                        refHtml = `<span class="connect-ref" title="${escapeHtml(fullNodeName)}" onclick="selectNodeByName('${escapeHtml(fullNodeName)}')">${escapeHtml(nodeName)}</span><span class="connect-key">["${escapeHtml(outputKey)}"]</span>`;
+                        isNodeRef = true;
+                    }
+                }
+            }
+        } else if (typeof source === 'string') {
+            // String format: "full.node.name" - check if node exists
+            const nodeExists = findNodeByName(currentNodes, source);
+            if (nodeExists) {
+                const fullNodeName = source;
+                const lastDot = source.lastIndexOf('.');
+                const nodeName = lastDot >= 0 ? source.slice(lastDot + 1) : source;
+
+                refHtml = `<span class="connect-ref" title="${escapeHtml(fullNodeName)}" onclick="selectNodeByName('${escapeHtml(fullNodeName)}')">${escapeHtml(nodeName)}</span>`;
+                isNodeRef = true;
+            }
+        }
+
+        // If not a node reference, display as raw value
+        if (!isNodeRef) {
+            const rawValue = JSON.stringify(source);
+            refHtml = `<span class="connect-raw">${escapeHtml(rawValue)}</span>`;
+        }
+
+        if (direction === 'input') {
+            html += `<div class="connect-row input">
+                <span class="connect-var">${escapeHtml(varName)}</span>
+                <span class="connect-arrow">${isNodeRef ? '←' : '='}</span>
+                ${refHtml}
+            </div>`;
+        } else {
+            html += `<div class="connect-row output">
+                <span class="connect-var">${escapeHtml(varName)}</span>
+                <span class="connect-arrow">→</span>
+                ${refHtml}
+            </div>`;
+        }
+    }
+
+    html += '</div></div></div>';
+    return html;
+}
+
+function selectNodeByName(nodeName) {
+    const node = findNodeByName(currentNodes, nodeName);
+    if (node) {
+        selectNode(node);
+    }
+}
+
+function findNodeByName(nodes, name) {
+    for (const node of nodes) {
+        if (node.node_name === name) return node;
+        if (node.children) {
+            const found = findNodeByName(node.children, name);
+            if (found) return found;
+        }
+    }
+    return null;
 }
 
 function backToList() {
@@ -945,6 +1141,35 @@ function formatTime(isoString) {
     } catch {
         return isoString;
     }
+}
+
+// Format a primitive value with type-based syntax highlighting
+function formatValue(val) {
+    if (val === null) {
+        return '<span class="kv-null">null</span>';
+    }
+    if (val === undefined) {
+        return '<span class="kv-null">undefined</span>';
+    }
+    if (typeof val === 'boolean') {
+        const cls = val ? 'kv-boolean-true' : 'kv-boolean-false';
+        return `<span class="${cls}">${val}</span>`;
+    }
+    if (typeof val === 'number') {
+        return `<span class="kv-number">${val}</span>`;
+    }
+    // String value
+    return `<span class="kv-string">${escapeHtml(String(val))}</span>`;
+}
+
+// Format node name as breadcrumb chain
+function formatNodePath(name) {
+    if (!name) return '';
+    const parts = name.split('.');
+    return parts.map((part, i) => {
+        const isLast = i === parts.length - 1;
+        return `<span class="path-segment${isLast ? ' current' : ''}">${escapeHtml(part)}</span>`;
+    }).join('<span class="path-separator">›</span>');
 }
 
 function formatDuration(ms) {
@@ -989,4 +1214,108 @@ function syntaxHighlight(json) {
             return '<span class="' + cls + '">' + match + '</span>';
         }
     );
+}
+
+function highlightPython(code) {
+    if (!code) return '';
+
+    const keywords = new Set(['def', 'class', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally',
+                      'with', 'as', 'import', 'from', 'return', 'yield', 'raise', 'pass', 'break',
+                      'continue', 'and', 'or', 'not', 'in', 'is', 'lambda', 'None', 'True', 'False',
+                      'async', 'await', 'global', 'nonlocal', 'assert', 'del']);
+
+    const builtins = new Set(['print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
+                      'open', 'input', 'type', 'isinstance', 'hasattr', 'getattr', 'setattr', 'super',
+                      'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed', 'sum', 'min', 'max',
+                      'abs', 'round', 'any', 'all', 'format', 'repr', 'sleep']);
+
+    // Tokenize and highlight
+    const lines = code.split('\n');
+    const result = [];
+
+    for (const line of lines) {
+        let html = '';
+        let i = 0;
+
+        while (i < line.length) {
+            // Check for comment
+            if (line[i] === '#') {
+                html += `<span class="py-comment">${escapeHtml(line.slice(i))}</span>`;
+                break;
+            }
+
+            // Check for decorator
+            if (line[i] === '@' && (i === 0 || /\s/.test(line[i-1]))) {
+                const match = line.slice(i).match(/^@\w+/);
+                if (match) {
+                    html += `<span class="py-decorator">${escapeHtml(match[0])}</span>`;
+                    i += match[0].length;
+                    continue;
+                }
+            }
+
+            // Check for strings
+            if (line[i] === '"' || line[i] === "'") {
+                const quote = line[i];
+                const triple = line.slice(i, i + 3) === quote.repeat(3);
+                const endQuote = triple ? quote.repeat(3) : quote;
+                const start = i;
+                i += triple ? 3 : 1;
+
+                while (i < line.length) {
+                    if (line[i] === '\\') {
+                        i += 2;
+                    } else if (line.slice(i, i + endQuote.length) === endQuote) {
+                        i += endQuote.length;
+                        break;
+                    } else {
+                        i++;
+                    }
+                }
+                html += `<span class="py-string">${escapeHtml(line.slice(start, i))}</span>`;
+                continue;
+            }
+
+            // Check for numbers
+            if (/\d/.test(line[i]) && (i === 0 || !/\w/.test(line[i-1]))) {
+                const match = line.slice(i).match(/^\d+\.?\d*/);
+                if (match) {
+                    html += `<span class="py-number">${match[0]}</span>`;
+                    i += match[0].length;
+                    continue;
+                }
+            }
+
+            // Check for identifiers/keywords
+            if (/[a-zA-Z_]/.test(line[i])) {
+                const match = line.slice(i).match(/^[a-zA-Z_]\w*/);
+                if (match) {
+                    const word = match[0];
+                    const nextChar = line[i + word.length] || '';
+
+                    if (keywords.has(word)) {
+                        html += `<span class="py-keyword">${word}</span>`;
+                    } else if (builtins.has(word) && nextChar === '(') {
+                        html += `<span class="py-builtin">${word}</span>`;
+                    } else if (i > 0 && line.slice(Math.max(0, i - 4), i).match(/def\s+$/)) {
+                        html += `<span class="py-function">${word}</span>`;
+                    } else if (i > 0 && line.slice(Math.max(0, i - 6), i).match(/class\s+$/)) {
+                        html += `<span class="py-class">${word}</span>`;
+                    } else {
+                        html += escapeHtml(word);
+                    }
+                    i += word.length;
+                    continue;
+                }
+            }
+
+            // Regular character
+            html += escapeHtml(line[i]);
+            i++;
+        }
+
+        result.push(html);
+    }
+
+    return result.join('\n');
 }
