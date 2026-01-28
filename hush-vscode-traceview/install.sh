@@ -4,9 +4,17 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VSIX_FILE="$SCRIPT_DIR/hush-vscode-traceview-0.1.0.vsix"
 
+# Install dependencies
+echo "Installing dependencies..."
+cd "$SCRIPT_DIR"
+npm install
+if [ $? -ne 0 ]; then
+    echo "Failed to install dependencies!"
+    exit 1
+fi
+
 # Build the extension
 echo "Building extension..."
-cd "$SCRIPT_DIR"
 npm run package
 if [ $? -ne 0 ]; then
     echo "Build failed!"

@@ -3,9 +3,18 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VsixFile = Join-Path $ScriptDir "hush-vscode-traceview-0.1.0.vsix"
 
+# Install dependencies
+Write-Host "Installing dependencies..."
+Push-Location $ScriptDir
+npm install
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to install dependencies!" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
+
 # Build the extension
 Write-Host "Building extension..."
-Push-Location $ScriptDir
 npm run package
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
