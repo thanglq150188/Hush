@@ -2056,3 +2056,131 @@ body {
 .timeline-icon.tool-executor { background: rgba(139, 148, 158, 0.2); color: var(--text-secondary); }
 .timeline-icon.mcp { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
 .timeline-icon.iteration { background: transparent; border: 1px dashed rgba(88, 166, 255, 0.5); color: var(--accent-blue); }
+
+/* ==================== Graph View ==================== */
+.graph-wrapper {
+    min-width: max-content;
+    min-height: 100%;
+}
+
+.graph-canvas {
+    position: relative;
+}
+
+.graph-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.graph-node {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    z-index: 1;
+    transition: background 0.1s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    border-left: 3px solid var(--border-color);
+    overflow: hidden;
+}
+
+.graph-node:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.graph-node.selected {
+    background: var(--bg-selected);
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Type-colored left borders */
+.graph-node.llm { border-left-color: var(--accent-purple); }
+.graph-node.embedding { border-left-color: #c4a5f7; }
+.graph-node.rerank { border-left-color: var(--accent-purple); }
+.graph-node.branch { border-left-color: var(--accent-yellow); }
+.graph-node.for { border-left-color: var(--accent-orange); }
+.graph-node.map { border-left-color: var(--accent-orange); }
+.graph-node.while { border-left-color: #f59e0b; }
+.graph-node.stream { border-left-color: var(--accent-cyan); }
+.graph-node.code { border-left-color: var(--accent-green); }
+.graph-node.lambda { border-left-color: #86efac; }
+.graph-node.parser { border-left-color: var(--accent-cyan); }
+.graph-node.prompt { border-left-color: var(--accent-pink); }
+.graph-node.doc-processor { border-left-color: var(--accent-blue); }
+.graph-node.milvus { border-left-color: #7dd3fc; }
+.graph-node.mongo { border-left-color: #4ade80; }
+.graph-node.s3 { border-left-color: #fb923c; }
+.graph-node.graph { border-left-color: var(--accent-cyan); }
+.graph-node.data { border-left-color: var(--accent-blue); }
+.graph-node.default { border-left-color: var(--text-muted); }
+.graph-node.dummy { border-left-color: var(--border-color); border-left-style: dashed; }
+.graph-node.tool-executor { border-left-color: var(--text-secondary); }
+.graph-node.mcp { border-left-color: var(--accent-red); }
+.graph-node.iteration { border-left-color: var(--accent-blue); border-left-style: dashed; }
+
+.graph-node-icon {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* Reuse tree-icon type colors for graph-node-icon */
+.graph-node-icon.llm { background: var(--tag-purple-bg); color: var(--accent-purple); }
+.graph-node-icon.embedding { background: rgba(163, 113, 247, 0.25); color: #c4a5f7; }
+.graph-node-icon.rerank { background: rgba(163, 113, 247, 0.1); color: var(--accent-purple); }
+.graph-node-icon.branch { background: var(--tag-yellow-bg); color: var(--accent-yellow); }
+.graph-node-icon.for { background: rgba(219, 109, 40, 0.15); color: var(--accent-orange); }
+.graph-node-icon.map { background: rgba(219, 109, 40, 0.2); color: var(--accent-orange); }
+.graph-node-icon.while { background: rgba(219, 109, 40, 0.25); color: #f59e0b; }
+.graph-node-icon.stream { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
+.graph-node-icon.code { background: var(--tag-green-bg); color: var(--accent-green); }
+.graph-node-icon.lambda { background: rgba(63, 185, 80, 0.25); color: #86efac; }
+.graph-node-icon.parser { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
+.graph-node-icon.prompt { background: rgba(219, 97, 162, 0.15); color: var(--accent-pink); }
+.graph-node-icon.doc-processor { background: var(--tag-blue-bg); color: var(--accent-blue); }
+.graph-node-icon.milvus { background: rgba(88, 166, 255, 0.2); color: #7dd3fc; }
+.graph-node-icon.mongo { background: var(--tag-green-bg); color: #4ade80; }
+.graph-node-icon.s3 { background: rgba(219, 109, 40, 0.15); color: #fb923c; }
+.graph-node-icon.graph { background: var(--tag-cyan-bg); color: var(--accent-cyan); }
+.graph-node-icon.data { background: var(--tag-blue-bg); color: var(--accent-blue); }
+.graph-node-icon.default { background: var(--bg-tertiary); color: var(--text-muted); }
+.graph-node-icon.dummy { background: transparent; border: 1px dashed var(--border-color); color: var(--text-muted); }
+.graph-node-icon.tool-executor { background: rgba(139, 148, 158, 0.2); color: var(--text-secondary); }
+.graph-node-icon.mcp { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+.graph-node-icon.iteration { background: transparent; border: 1px dashed rgba(88, 166, 255, 0.5); color: var(--accent-blue); }
+
+.graph-node-name {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.graph-node-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}

@@ -364,6 +364,8 @@ function renderTraceDetail(requestId, nodes, error) {
     // Generate tree/timeline content
     const treeContent = leftPanelView === 'tree'
         ? `<div class="tree-root">${renderTree(currentNodes)}</div>`
+        : leftPanelView === 'graph'
+        ? renderGraph(currentNodes)
         : renderTimeline(currentNodes, totalDuration);
 
     let html = `
@@ -376,6 +378,9 @@ function renderTraceDetail(requestId, nodes, error) {
                     </button>
                     <button class="view-btn ${leftPanelView === 'timeline' ? 'active' : ''}" onclick="switchLeftView('timeline')" title="Timeline View">
                         <span class="view-icon">▬</span>
+                    </button>
+                    <button class="view-btn ${leftPanelView === 'graph' ? 'active' : ''}" onclick="switchLeftView('graph')" title="Graph View">
+                        <span class="view-icon">⬡</span>
                     </button>
                 </div>
             </div>
@@ -419,10 +424,13 @@ function switchLeftView(view) {
                 <button class="view-btn ${leftPanelView === 'timeline' ? 'active' : ''}" onclick="switchLeftView('timeline')" title="Timeline View">
                     <span class="view-icon">▬</span>
                 </button>
+                <button class="view-btn ${leftPanelView === 'graph' ? 'active' : ''}" onclick="switchLeftView('graph')" title="Graph View">
+                    <span class="view-icon">⬡</span>
+                </button>
             </div>
         </div>
         <div class="tree-content">
-            ${leftPanelView === 'tree' ? `<div class="tree-root">${renderTree(currentNodes)}</div>` : renderTimeline(currentNodes, totalDuration)}
+            ${leftPanelView === 'tree' ? `<div class="tree-root">${renderTree(currentNodes)}</div>` : leftPanelView === 'graph' ? renderGraph(currentNodes) : renderTimeline(currentNodes, totalDuration)}
         </div>
     `;
 
@@ -539,6 +547,160 @@ function flattenNodes(nodes) {
         }
     }
     return result;
+}
+
+// ==================== Graph View ====================
+
+const GRAPH_NODE_W = 180;
+const GRAPH_NODE_H = 48;
+const GRAPH_H_GAP = 80;
+const GRAPH_V_GAP = 20;
+const GRAPH_PAD = 24;
+
+/**
+ * Layout tree nodes into a hierarchical left-to-right graph.
+ * Returns Map<nodeId, {x, y, node}> and overall {width, height}.
+ */
+function layoutGraph(roots) {
+    const positions = new Map();
+
+    // Recursive: compute subtree height and assign positions
+    function computeSubtree(node, depth) {
+        const childLayouts = [];
+        if (node.children && node.children.length > 0) {
+            for (const child of node.children) {
+                childLayouts.push(computeSubtree(child, depth + 1));
+            }
+        }
+        const selfH = GRAPH_NODE_H;
+        let subtreeH;
+        if (childLayouts.length === 0) {
+            subtreeH = selfH;
+        } else {
+            subtreeH = childLayouts.reduce((sum, c) => sum + c.height, 0) + (childLayouts.length - 1) * GRAPH_V_GAP;
+            subtreeH = Math.max(subtreeH, selfH);
+        }
+        return { node, depth, selfH, subtreeH: subtreeH, childLayouts };
+    }
+
+    function assignPositions(layout, x, yStart) {
+        const { node, depth, subtreeH, childLayouts } = layout;
+        const nodeX = x;
+        const nodeCenterY = yStart + subtreeH / 2;
+        const nodeY = nodeCenterY - GRAPH_NODE_H / 2;
+        positions.set(node.id, { x: nodeX, y: nodeY, node });
+
+        if (childLayouts.length > 0) {
+            const childX = x + GRAPH_NODE_W + GRAPH_H_GAP;
+            const totalChildH = childLayouts.reduce((sum, c) => sum + c.subtreeH, 0) + (childLayouts.length - 1) * GRAPH_V_GAP;
+            let childY = nodeCenterY - totalChildH / 2;
+            for (const cl of childLayouts) {
+                assignPositions(cl, childX, childY);
+                childY += cl.subtreeH + GRAPH_V_GAP;
+            }
+        }
+    }
+
+    let totalH = 0;
+    const rootLayouts = roots.map(r => computeSubtree(r, 0));
+    const totalRootH = rootLayouts.reduce((s, l) => s + l.subtreeH, 0) + Math.max(0, rootLayouts.length - 1) * GRAPH_V_GAP;
+
+    let yOffset = GRAPH_PAD;
+    for (const rl of rootLayouts) {
+        assignPositions(rl, GRAPH_PAD, yOffset);
+        yOffset += rl.subtreeH + GRAPH_V_GAP;
+    }
+
+    // Compute canvas size
+    let maxX = 0, maxY = 0;
+    for (const pos of positions.values()) {
+        maxX = Math.max(maxX, pos.x + GRAPH_NODE_W);
+        maxY = Math.max(maxY, pos.y + GRAPH_NODE_H);
+    }
+
+    return { positions, width: maxX + GRAPH_PAD, height: maxY + GRAPH_PAD };
+}
+
+function getEdgeColor(nodeType) {
+    const colors = {
+        llm: 'rgba(163,113,247,0.6)', embedding: 'rgba(163,113,247,0.5)', rerank: 'rgba(163,113,247,0.5)',
+        branch: 'rgba(210,153,34,0.6)', 'for': 'rgba(219,109,40,0.6)', map: 'rgba(219,109,40,0.6)',
+        'while': 'rgba(245,158,11,0.6)', stream: 'rgba(34,211,238,0.6)',
+        code: 'rgba(63,185,80,0.6)', lambda: 'rgba(63,185,80,0.5)', parser: 'rgba(34,211,238,0.5)',
+        prompt: 'rgba(219,97,162,0.6)', 'doc-processor': 'rgba(88,166,255,0.6)',
+        milvus: 'rgba(88,166,255,0.5)', mongo: 'rgba(63,185,80,0.5)', s3: 'rgba(219,109,40,0.5)',
+        graph: 'rgba(34,211,238,0.6)', data: 'rgba(88,166,255,0.5)',
+        mcp: 'rgba(248,81,73,0.5)', 'tool-executor': 'rgba(139,148,158,0.5)',
+        iteration: 'rgba(88,166,255,0.4)', default: 'rgba(139,148,158,0.4)'
+    };
+    return colors[nodeType] || colors.default;
+}
+
+function renderGraphEdges(roots, positions) {
+    let paths = '';
+    function walk(node) {
+        const parentPos = positions.get(node.id);
+        if (!parentPos) return;
+        if (node.children) {
+            for (const child of node.children) {
+                const childPos = positions.get(child.id);
+                if (!childPos) continue;
+                const x1 = parentPos.x + GRAPH_NODE_W;
+                const y1 = parentPos.y + GRAPH_NODE_H / 2;
+                const x2 = childPos.x;
+                const y2 = childPos.y + GRAPH_NODE_H / 2;
+                const cpx = (x1 + x2) / 2;
+                const edgeColor = getEdgeColor(getNodeType(node));
+                paths += `<path d="M${x1},${y1} C${cpx},${y1} ${cpx},${y2} ${x2},${y2}" fill="none" stroke="${edgeColor}" stroke-width="2"/>`;
+                // Arrowhead
+                paths += `<polygon points="${x2},${y2} ${x2 - 6},${y2 - 4} ${x2 - 6},${y2 + 4}" fill="${edgeColor}"/>`;
+                walk(child);
+            }
+        }
+    }
+    for (const root of roots) walk(root);
+    return paths;
+}
+
+function renderGraph(nodes) {
+    if (!nodes || !Array.isArray(nodes) || nodes.length === 0) {
+        return '<div class="empty-tree">No nodes to display</div>';
+    }
+
+    const { positions, width, height } = layoutGraph(nodes);
+
+    // Build SVG edges
+    const edgesSvg = renderGraphEdges(nodes, positions);
+
+    // Build node cards
+    let nodesHtml = '';
+    for (const [id, pos] of positions) {
+        const node = pos.node;
+        const nodeType = getNodeType(node);
+        const shortName = getShortName(node.node_name);
+        const icon = getNodeIcon(node);
+        const duration = node.duration_ms ? formatDuration(node.duration_ms) : '';
+        const isSelected = selectedNode && selectedNode.id === id;
+
+        nodesHtml += `
+            <div class="graph-node ${nodeType}${isSelected ? ' selected' : ''}" data-id="${id}"
+                 style="left:${pos.x}px; top:${pos.y}px; width:${GRAPH_NODE_W}px; height:${GRAPH_NODE_H}px"
+                 onclick="selectNodeById(${id})">
+                <span class="graph-node-icon ${nodeType}">${icon}</span>
+                <span class="graph-node-name">${escapeHtml(shortName)}</span>
+                ${duration ? `<span class="graph-node-badge">${duration}</span>` : ''}
+            </div>
+        `;
+    }
+
+    return `
+        <div class="graph-wrapper">
+            <div class="graph-canvas" style="width:${width}px; height:${height}px; position:relative;">
+                <svg class="graph-svg" width="${width}" height="${height}">${edgesSvg}</svg>
+                ${nodesHtml}
+            </div>
+        </div>
+    `;
 }
 
 function renderTimeRuler(totalMs, trackWidth) {
@@ -761,11 +923,13 @@ function toggleNode(id) {
         const totalDuration = trace ? trace.total_duration_ms : (currentNodes[0]?.duration_ms || 1000);
         treeContent.innerHTML = leftPanelView === 'tree'
             ? `<div class="tree-root">${renderTree(currentNodes)}</div>`
+            : leftPanelView === 'graph'
+            ? renderGraph(currentNodes)
             : renderTimeline(currentNodes, totalDuration);
 
         // Re-apply selection
         if (selectedNode) {
-            const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-row[data-id="${selectedNode.id}"]`);
+            const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-row[data-id="${selectedNode.id}"], .graph-node[data-id="${selectedNode.id}"]`);
             if (el) {
                 el.classList.add('selected');
             }
@@ -856,13 +1020,14 @@ function findNodeById(nodes, id) {
 function selectNode(node, highlightKey) {
     selectedNode = node;
 
-    // Update selection UI for both tree and timeline views
-    document.querySelectorAll('.tree-item, .timeline-row, .timeline-track-abs').forEach(el => {
+    // Update selection UI for tree, timeline, and graph views
+    document.querySelectorAll('.tree-item, .timeline-row, .timeline-track-abs, .graph-node').forEach(el => {
         el.classList.remove('selected');
     });
     const treeEl = document.querySelector(`.tree-item[data-id="${node.id}"]`);
     const timelineRowEl = document.querySelector(`.timeline-row[data-id="${node.id}"]`);
     const timelineTrackEl = document.querySelector(`.timeline-track-abs[data-id="${node.id}"]`);
+    const graphEl = document.querySelector(`.graph-node[data-id="${node.id}"]`);
     if (treeEl) {
         treeEl.classList.add('selected');
     }
@@ -871,6 +1036,9 @@ function selectNode(node, highlightKey) {
     }
     if (timelineTrackEl) {
         timelineTrackEl.classList.add('selected');
+    }
+    if (graphEl) {
+        graphEl.classList.add('selected');
     }
 
     renderNodeDetail(node);
