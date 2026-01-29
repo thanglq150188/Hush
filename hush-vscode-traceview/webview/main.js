@@ -19,6 +19,32 @@ let currentPage = 1;
 let totalTraces = 0;
 const PAGE_SIZE = 50;
 
+// Instant tooltip for data-tooltip elements
+(function initTooltip() {
+    const tip = document.createElement('div');
+    tip.className = 'connect-tooltip';
+    tip.style.display = 'none';
+    document.body.appendChild(tip);
+
+    document.addEventListener('mouseover', (e) => {
+        const el = e.target.closest('[data-tooltip]');
+        if (el) {
+            tip.textContent = el.getAttribute('data-tooltip');
+            const rect = el.getBoundingClientRect();
+            tip.style.display = 'block';
+            tip.style.left = (rect.right + 8) + 'px';
+            tip.style.top = rect.top + 'px';
+        }
+    });
+    document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest('[data-tooltip]');
+        if (el) tip.style.display = 'none';
+    });
+    document.addEventListener('click', () => {
+        tip.style.display = 'none';
+    });
+})();
+
 // Request initial data
 vscode.postMessage({ type: 'getTraceList' });
 vscode.postMessage({ type: 'getDbInfo' });
@@ -801,7 +827,7 @@ function findNodeById(nodes, id) {
     return null;
 }
 
-function selectNode(node) {
+function selectNode(node, highlightKey) {
     selectedNode = node;
 
     // Update selection UI for both tree and timeline views
@@ -818,6 +844,23 @@ function selectNode(node) {
     }
 
     renderNodeDetail(node);
+
+    // Highlight the specific variable key if provided
+    if (highlightKey) {
+        const panel = document.getElementById('node-panel');
+        if (panel) {
+            const allKeys = panel.querySelectorAll('.kv-key');
+            for (const keyEl of allKeys) {
+                if (keyEl.textContent.trim() === highlightKey) {
+                    keyEl.classList.add('highlighted');
+                    keyEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Remove highlight after animation
+                    setTimeout(() => keyEl.classList.remove('highlighted'), 500);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 function renderNodeDetail(node) {
@@ -877,10 +920,14 @@ function renderNodeDetail(node) {
         <div class="tab-content">
     `;
 
+    // Extract connects from metadata
+    const inputConnects = (node.metadata && node.metadata.input_connects) || null;
+    const outputConnects = (node.metadata && node.metadata.output_connects) || null;
+
     if (currentTab === 'preview') {
         // Preview tab - key-value tables
         if (node.input) {
-            const inputHtml = renderKeyValueTable(node.input, { filterSystemVars: true });
+            const inputHtml = renderKeyValueTable(node.input, { filterSystemVars: true, connects: inputConnects, connectDirection: 'input' });
             if (inputHtml && !inputHtml.includes('empty-table')) {
                 html += `
                     <div class="node-section section-input">
@@ -895,7 +942,7 @@ function renderNodeDetail(node) {
         }
 
         if (node.output) {
-            const outputHtml = renderKeyValueTable(node.output, { filterSystemVars: true });
+            const outputHtml = renderKeyValueTable(node.output, { filterSystemVars: true, connects: outputConnects, connectDirection: 'output' });
             if (outputHtml && !outputHtml.includes('empty-table')) {
                 html += `
                     <div class="node-section section-output">
@@ -916,7 +963,7 @@ function renderNodeDetail(node) {
                         <span class="section-icon">≡</span>
                         <span class="section-label">METADATA</span>
                     </div>
-                    ${renderKeyValueTable(node.metadata)}
+                    ${renderKeyValueTable(node.metadata, { skipKeys: ['input_connects', 'output_connects'] })}
                 </div>
             `;
         }
@@ -973,7 +1020,7 @@ function switchTab(tab) {
 function renderKeyValueTable(obj, options = {}) {
     if (!obj) return '';
 
-    const { filterSystemVars = false } = options;
+    const { filterSystemVars = false, connects = null, connectDirection = null, skipKeys = [] } = options;
 
     // Handle string values
     if (typeof obj === 'string') {
@@ -1021,6 +1068,11 @@ function renderKeyValueTable(obj, options = {}) {
             keys = keys.filter(k => !k.startsWith('@') && !k.startsWith('$'));
         }
 
+        // Skip specified keys
+        if (skipKeys.length > 0) {
+            keys = keys.filter(k => !skipKeys.includes(k));
+        }
+
         if (keys.length === 0) return '<div class="kv-table empty-table"></div>';
         // Check if this object has code_fn (to skip function_name)
         const hasCodeFn = 'code_fn' in obj;
@@ -1028,6 +1080,7 @@ function renderKeyValueTable(obj, options = {}) {
         let html = '<div class="kv-table">';
         for (const key of keys) {
             const val = obj[key];
+            const keyHtml = connects ? renderLinkedKey(key, connects, connectDirection) : `<div class="kv-key">${escapeHtml(key)}</div>`;
 
             // Skip function_name if code_fn exists (it's redundant)
             if (key === 'function_name' && hasCodeFn) {
@@ -1036,7 +1089,7 @@ function renderKeyValueTable(obj, options = {}) {
 
             // Special rendering for id - monospace hash style
             if (key === 'id' && typeof val === 'string') {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><span class="meta-id">${escapeHtml(val)}</span></div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value"><span class="meta-id">${escapeHtml(val)}</span></div></div>`;
                 continue;
             }
 
@@ -1044,19 +1097,19 @@ function renderKeyValueTable(obj, options = {}) {
             if (key === 'type' && typeof val === 'string') {
                 const typeClass = val.toLowerCase().replace(/[^a-z0-9-]/g, '-');
                 const icon = getNodeIcon({ node_type: val });
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><span class="meta-type-badge ${typeClass}"><span class="meta-type-icon ${typeClass}">${icon}</span>${escapeHtml(val)}</span></div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value"><span class="meta-type-badge ${typeClass}"><span class="meta-type-icon ${typeClass}">${icon}</span>${escapeHtml(val)}</span></div></div>`;
                 continue;
             }
 
             // Special rendering for name - show as path breadcrumb
             if (key === 'name' && typeof val === 'string' && val.includes('.')) {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><div class="node-path">${formatNodePath(val)}</div></div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value"><div class="node-path">${formatNodePath(val)}</div></div></div>`;
                 continue;
             }
 
             // Special rendering for code_fn - format as code block with syntax highlighting
             if (key === 'code_fn' && typeof val === 'string') {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><pre class="code-block">${highlightPython(val)}</pre></div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value"><pre class="code-block">${highlightPython(val)}</pre></div></div>`;
                 continue;
             }
 
@@ -1073,9 +1126,9 @@ function renderKeyValueTable(obj, options = {}) {
             }
 
             if (typeof val === 'object' && val !== null) {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value nested">${renderKeyValueTable(val, options)}</div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value nested">${renderKeyValueTable(val, options)}</div></div>`;
             } else {
-                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value">${formatValue(val)}</div></div>`;
+                html += `<div class="kv-row">${keyHtml}<div class="kv-value">${formatValue(val)}</div></div>`;
             }
         }
         html += '</div>';
@@ -1083,6 +1136,53 @@ function renderKeyValueTable(obj, options = {}) {
     }
 
     return `<div class="kv-table"><div class="kv-row"><div class="kv-value">${escapeHtml(String(obj))}</div></div></div>`;
+}
+
+// Resolve a single connect value to { nodeName, fullNodeName, outputKey, isNodeRef }
+function resolveConnectRef(source) {
+    if (typeof source === 'object' && source !== null && !Array.isArray(source)) {
+        const entries = Object.entries(source);
+        if (entries.length === 1) {
+            const [nodeKey, outputKey] = entries[0];
+            if (typeof nodeKey === 'string' && typeof outputKey === 'string') {
+                const nodeExists = findNodeByName(currentNodes, nodeKey);
+                if (nodeExists) {
+                    const lastDot = nodeKey.lastIndexOf('.');
+                    return { nodeName: lastDot >= 0 ? nodeKey.slice(lastDot + 1) : nodeKey, fullNodeName: nodeKey, outputKey, isNodeRef: true };
+                }
+            }
+        }
+    } else if (typeof source === 'string') {
+        const nodeExists = findNodeByName(currentNodes, source);
+        if (nodeExists) {
+            const lastDot = source.lastIndexOf('.');
+            return { nodeName: lastDot >= 0 ? source.slice(lastDot + 1) : source, fullNodeName: source, outputKey: null, isNodeRef: true };
+        }
+    }
+    return { isNodeRef: false };
+}
+
+// Render a kv-key that is linked to its connect source/target
+function renderLinkedKey(key, connects, direction) {
+    const source = connects ? connects[key] : null;
+    if (!source) {
+        return `<div class="kv-key">${escapeHtml(key)}</div>`;
+    }
+
+    const ref = resolveConnectRef(source);
+    if (!ref.isNodeRef) {
+        // Raw value connect — show as tooltip only
+        const rawVal = JSON.stringify(source);
+        return `<div class="kv-key has-connect" data-tooltip="${direction === 'input' ? '← ' : '→ '}${escapeHtml(rawVal)}">${escapeHtml(key)}</div>`;
+    }
+
+    const arrow = direction === 'input' ? '←' : '→';
+    const tooltip = ref.outputKey
+        ? `${arrow} ${ref.fullNodeName}["${ref.outputKey}"]`
+        : `${arrow} ${ref.fullNodeName}`;
+
+    const highlightKey = ref.outputKey ? escapeHtml(ref.outputKey) : escapeHtml(key);
+    return `<div class="kv-key has-connect linked" data-tooltip="${escapeHtml(tooltip)}" onclick="event.stopPropagation(); selectNodeByName('${escapeHtml(ref.fullNodeName)}', '${highlightKey}')">${escapeHtml(key)}</div>`;
 }
 
 function renderConnectsTable(key, connects, direction) {
@@ -1155,10 +1255,10 @@ function renderConnectsTable(key, connects, direction) {
     return html;
 }
 
-function selectNodeByName(nodeName) {
+function selectNodeByName(nodeName, highlightKey) {
     const node = findNodeByName(currentNodes, nodeName);
     if (node) {
-        selectNode(node);
+        selectNode(node, highlightKey);
     }
 }
 

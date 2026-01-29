@@ -810,6 +810,41 @@ body {
     content: ']';
 }
 
+/* Linked keys (keys with connect references) */
+.kv-key.has-connect.linked {
+    cursor: pointer;
+    color: var(--accent-blue);
+}
+
+.kv-key.has-connect.linked:hover {
+    color: var(--accent-cyan);
+}
+
+/* Custom instant tooltip (JS-based, appended to body) */
+.connect-tooltip {
+    position: fixed;
+    background: var(--bg-elevated, #1e1e2e);
+    color: var(--text-primary, #cdd6f4);
+    border: 1px solid var(--border-color, #45475a);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 10000;
+    pointer-events: none;
+}
+
+.kv-key.highlighted {
+    background: rgba(88, 166, 255, 0.25);
+    border-radius: 3px;
+    animation: highlight-fade 2s ease-out;
+}
+
+@keyframes highlight-fade {
+    0% { background: rgba(88, 166, 255, 0.4); }
+    100% { background: rgba(88, 166, 255, 0); }
+}
+
 /* Array cards for complex arrays (list of objects) */
 .array-cards {
     display: flex;
