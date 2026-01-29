@@ -11,6 +11,9 @@ export class TracePanel {
     private readonly _extensionUri: vscode.Uri;
     private _db: TraceDatabase;
     private _disposables: vscode.Disposable[] = [];
+    private _pollTimer: NodeJS.Timeout | null = null;
+    private _lastDbSize: number = 0;
+    private _lastWalSize: number = 0;
 
     public static createOrShow(extensionUri: vscode.Uri) {
         const column = vscode.window.activeTextEditor
@@ -66,6 +69,9 @@ export class TracePanel {
         // Set the webview's initial html content
         this._update();
 
+        // Watch traces.db for changes and auto-refresh
+        this._startFileWatcher();
+
         // Listen for when the panel is disposed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
@@ -90,6 +96,40 @@ export class TracePanel {
             null,
             this._disposables
         );
+    }
+
+    private _getFileSize(filePath: string): number {
+        try {
+            return fs.statSync(filePath).size;
+        } catch {
+            return 0;
+        }
+    }
+
+    private _startFileWatcher() {
+        this._stopFileWatcher();
+        const dbPath = this._db.getDbPath();
+        const walPath = dbPath + '-wal';
+        this._lastDbSize = this._getFileSize(dbPath);
+        this._lastWalSize = this._getFileSize(walPath);
+
+        // Poll every 2 seconds for changes to db or WAL file size
+        this._pollTimer = setInterval(() => {
+            const dbSize = this._getFileSize(dbPath);
+            const walSize = this._getFileSize(walPath);
+            if (dbSize !== this._lastDbSize || walSize !== this._lastWalSize) {
+                this._lastDbSize = dbSize;
+                this._lastWalSize = walSize;
+                this._refresh();
+            }
+        }, 1000);
+    }
+
+    private _stopFileWatcher() {
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
     }
 
     private _refresh() {
@@ -174,6 +214,7 @@ export class TracePanel {
 
     public dispose() {
         TracePanel.currentPanel = undefined;
+        this._stopFileWatcher();
         this._panel.dispose();
         this._db.close();
         while (this._disposables.length) {

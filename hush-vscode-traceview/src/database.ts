@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 
 /**
@@ -152,11 +153,29 @@ export class TraceDatabase {
         return stats.size;
     }
 
+    private checkpointWal(): void {
+        // sql.js reads the .db file as a raw buffer and ignores the WAL file.
+        // Force a WAL checkpoint so pending writes are flushed to the main file.
+        const walPath = this.dbPath + '-wal';
+        if (!fs.existsSync(walPath)) {
+            return;
+        }
+        try {
+            execSync(
+                `python -c "import sqlite3; c=sqlite3.connect(r'${this.dbPath}'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"`,
+                { timeout: 5000, stdio: 'ignore' }
+            );
+        } catch {
+            // If python is not available, ignore — manual refresh still works
+        }
+    }
+
     private async open(): Promise<SqlJsDatabase> {
         if (!this.db) {
             if (!this.exists()) {
                 throw new Error(`Database not found: ${this.dbPath}`);
             }
+            this.checkpointWal();
             const sqlJs = await getSqlJs();
             const fileBuffer = fs.readFileSync(this.dbPath);
             this.db = new sqlJs.Database(fileBuffer);
