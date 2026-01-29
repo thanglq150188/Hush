@@ -16,6 +16,7 @@
     "onCommand:hush.refreshTraces",
     "onCommand:hush.clearTraces"
   ],
+  "icon": "resources/icon.png",
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

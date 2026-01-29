@@ -687,6 +687,10 @@ function getNodeType(node) {
     if (node.node_type) {
         return node.node_type;
     }
+    // Fallback to metadata.type
+    if (node.metadata && node.metadata.type) {
+        return node.metadata.type;
+    }
     // Fallback to inference for legacy data
     if (node.contain_generation) return 'llm';
     if (node.node_name && node.node_name.includes('iteration[')) return 'iteration';
@@ -723,13 +727,14 @@ function getNodeIcon(node) {
     // Icons/symbols for each node type
     const icons = {
         // AI/ML nodes
-        'llm': '◆',           // Diamond for LLM
+        'llm': '🧠',           // Brain for AI/LLM
         'embedding': '◈',     // Diamond with dot
-        'rerank': '◇',        // Empty diamond
+        'rerank': '⇅',        // Reordering arrows
 
         // Flow control nodes
-        'branch': '◊',        // Branch symbol
+        'branch': '⑂',        // OCR Branch symbol
         'for': '↻',           // Loop arrow
+        'map': '⊶',           // Parallel map
         'while': '↺',         // Repeat arrow
         'stream': '≋',        // Stream waves
 
@@ -742,19 +747,22 @@ function getNodeIcon(node) {
 
         // Database/storage nodes
         'milvus': '⬡',        // Hexagon (vector db)
-        'mongo': '⬢',         // Filled hexagon
+        'mongo': '🍃',         // MongoDB leaf
         's3': '☁',           // Cloud
 
         // Special nodes
-        'graph': '▣',         // Graph/container
+        'graph': null,         // Uses hush logo image
         'data': '⬤',          // Data circle
         'default': '○',       // Default circle
         'dummy': '◌',         // Dashed circle
         'tool-executor': '⚙', // Gear
-        'mcp': '⚡',          // Lightning (MCP)
+        'mcp': '⧉',          // Two joined squares (MCP)
         'iteration': '⟳',     // Iteration cycle
     };
 
+    if (nodeType === 'graph' && window.hushIcons) {
+        return `<img src="${window.hushIcons.icon16}" class="hush-logo-icon" alt="graph" />`;
+    }
     return icons[nodeType] || '•';
 }
 
@@ -875,8 +883,11 @@ function renderNodeDetail(node) {
             const inputHtml = renderKeyValueTable(node.input, { filterSystemVars: true });
             if (inputHtml && !inputHtml.includes('empty-table')) {
                 html += `
-                    <div class="node-section">
-                        <div class="node-section-title">Input</div>
+                    <div class="node-section section-input">
+                        <div class="section-header-styled input">
+                            <span class="section-icon">↓</span>
+                            <span class="section-label">INPUT</span>
+                        </div>
                         ${inputHtml}
                     </div>
                 `;
@@ -887,8 +898,11 @@ function renderNodeDetail(node) {
             const outputHtml = renderKeyValueTable(node.output, { filterSystemVars: true });
             if (outputHtml && !outputHtml.includes('empty-table')) {
                 html += `
-                    <div class="node-section">
-                        <div class="node-section-title">Output</div>
+                    <div class="node-section section-output">
+                        <div class="section-header-styled output">
+                            <span class="section-icon">↑</span>
+                            <span class="section-label">OUTPUT</span>
+                        </div>
                         ${outputHtml}
                     </div>
                 `;
@@ -897,8 +911,11 @@ function renderNodeDetail(node) {
 
         if (node.metadata) {
             html += `
-                <div class="node-section">
-                    <div class="node-section-title">Metadata</div>
+                <div class="node-section section-metadata">
+                    <div class="section-header-styled metadata">
+                        <span class="section-icon">≡</span>
+                        <span class="section-label">METADATA</span>
+                    </div>
                     ${renderKeyValueTable(node.metadata)}
                 </div>
             `;
@@ -907,8 +924,11 @@ function renderNodeDetail(node) {
         // Log view - raw JSON
         if (node.input) {
             html += `
-                <div class="node-section">
-                    <div class="node-section-title">Input</div>
+                <div class="node-section section-input">
+                    <div class="section-header-styled input">
+                        <span class="section-icon">↓</span>
+                        <span class="section-label">INPUT</span>
+                    </div>
                     <div class="json-view">${formatJson(node.input)}</div>
                 </div>
             `;
@@ -916,8 +936,11 @@ function renderNodeDetail(node) {
 
         if (node.output) {
             html += `
-                <div class="node-section">
-                    <div class="node-section-title">Output</div>
+                <div class="node-section section-output">
+                    <div class="section-header-styled output">
+                        <span class="section-icon">↑</span>
+                        <span class="section-label">OUTPUT</span>
+                    </div>
                     <div class="json-view">${formatJson(node.output)}</div>
                 </div>
             `;
@@ -925,8 +948,11 @@ function renderNodeDetail(node) {
 
         if (node.metadata) {
             html += `
-                <div class="node-section">
-                    <div class="node-section-title">Metadata</div>
+                <div class="node-section section-metadata">
+                    <div class="section-header-styled metadata">
+                        <span class="section-icon">≡</span>
+                        <span class="section-label">METADATA</span>
+                    </div>
                     <div class="json-view">${formatJson(node.metadata)}</div>
                 </div>
             `;
@@ -956,15 +982,31 @@ function renderKeyValueTable(obj, options = {}) {
 
     // Handle arrays
     if (Array.isArray(obj)) {
-        if (obj.length === 0) return '<div class="kv-table"><div class="kv-row"><div class="kv-value">[]</div></div></div>';
-        let html = '<div class="kv-table">';
+        if (obj.length === 0) return '<div class="kv-table"><div class="kv-row"><div class="kv-value"><span class="kv-null">[]</span></div></div></div>';
+
+        // Check if all elements are primitives — render as inline chips
+        const allPrimitive = obj.every(v => v === null || typeof v !== 'object');
+        if (allPrimitive) {
+            let html = '<div class="array-inline">';
+            for (let i = 0; i < obj.length; i++) {
+                html += `<span class="array-chip"><span class="array-index">${i}</span>${formatValue(obj[i])}</span>`;
+            }
+            html += '</div>';
+            return html;
+        }
+
+        // Complex arrays — render as indexed cards
+        let html = '<div class="array-cards">';
         for (let i = 0; i < obj.length; i++) {
             const val = obj[i];
+            html += `<div class="array-card">`;
+            html += `<div class="array-card-header"><span class="array-card-index">${i}</span></div>`;
             if (typeof val === 'object' && val !== null) {
-                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value nested">${renderKeyValueTable(val, options)}</div></div>`;
+                html += `<div class="array-card-body">${renderKeyValueTable(val, options)}</div>`;
             } else {
-                html += `<div class="kv-row"><div class="kv-key">[${i}]</div><div class="kv-value">${formatValue(val)}</div></div>`;
+                html += `<div class="array-card-body">${formatValue(val)}</div>`;
             }
+            html += `</div>`;
         }
         html += '</div>';
         return html;
@@ -989,6 +1031,20 @@ function renderKeyValueTable(obj, options = {}) {
 
             // Skip function_name if code_fn exists (it's redundant)
             if (key === 'function_name' && hasCodeFn) {
+                continue;
+            }
+
+            // Special rendering for id - monospace hash style
+            if (key === 'id' && typeof val === 'string') {
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><span class="meta-id">${escapeHtml(val)}</span></div></div>`;
+                continue;
+            }
+
+            // Special rendering for type - colored badge with icon
+            if (key === 'type' && typeof val === 'string') {
+                const typeClass = val.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                const icon = getNodeIcon({ node_type: val });
+                html += `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div class="kv-value"><span class="meta-type-badge ${typeClass}"><span class="meta-type-icon ${typeClass}">${icon}</span>${escapeHtml(val)}</span></div></div>`;
                 continue;
             }
 

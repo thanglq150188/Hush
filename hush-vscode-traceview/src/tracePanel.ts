@@ -204,9 +204,13 @@ export class TracePanel {
             const cacheBust = Date.now();
             const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'styles.css'));
             const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'main.js'));
+            const hushIcon16Uri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'hush-icon-16.png'));
+            const hushIcon20Uri = webview.asWebviewUri(vscode.Uri.joinPath(webviewPath, 'hush-icon-20.png'));
             const cspSource = webview.cspSource;
             html = html.replace(/\{\{cssUri\}\}/g, `${cssUri.toString()}?v=${cacheBust}`);
             html = html.replace(/\{\{jsUri\}\}/g, `${jsUri.toString()}?v=${cacheBust}`);
+            html = html.replace(/\{\{hushIcon16Uri\}\}/g, hushIcon16Uri.toString());
+            html = html.replace(/\{\{hushIcon20Uri\}\}/g, hushIcon20Uri.toString());
             html = html.replace(/\{\{cspSource\}\}/g, cspSource);
             return html;
         }
