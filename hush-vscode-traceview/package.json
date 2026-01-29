@@ -11,18 +11,33 @@
     "Visualization",
     "Debuggers"
   ],
-  "activationEvents": [
-    "onCommand:hush.openTraces",
-    "onCommand:hush.refreshTraces",
-    "onCommand:hush.clearTraces"
-  ],
+  "activationEvents": [],
   "icon": "resources/icon.png",
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hush-traceview",
+          "title": "Hush Traces",
+          "icon": "resources/hush-activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "hush-traceview": [
+        {
+          "type": "webview",
+          "id": "hush.traceViewPanel",
+          "name": "Traces"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "hush.openTraces",
-        "title": "Hush: Open Traces"
+        "title": "Hush: Open Traces",
+        "icon": "resources/hush-activity-bar.svg"
       },
       {
         "command": "hush.refreshTraces",

@@ -1,10 +1,21 @@
 import * as vscode from 'vscode';
 import { TracePanel } from './tracePanel';
+import { TraceViewProvider } from './traceViewProvider';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Hush Traces extension activated');
 
-    // Register command: Open Traces
+    // Register sidebar webview provider
+    const provider = new TraceViewProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            TraceViewProvider.viewType,
+            provider,
+            { webviewOptions: { retainContextWhenHidden: true } }
+        )
+    );
+
+    // Register command: Open Traces (editor panel)
     context.subscriptions.push(
         vscode.commands.registerCommand('hush.openTraces', () => {
             TracePanel.createOrShow(context.extensionUri);
@@ -15,6 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('hush.refreshTraces', () => {
             TracePanel.refresh();
+            TraceViewProvider.refresh();
         })
     );
 
@@ -22,6 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('hush.clearTraces', () => {
             TracePanel.clear();
+            TraceViewProvider.clear();
         })
     );
 }

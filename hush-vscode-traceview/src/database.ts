@@ -78,6 +78,8 @@ export interface TraceSummary {
 
 export interface TraceNode {
     id: number;
+    request_id: string;
+    session_id: string | null;
     node_name: string;
     node_type: string | null;
     parent_name: string | null;
@@ -324,6 +326,8 @@ export class TraceDatabase {
 
             const node: TraceNode = {
                 id: row.id,
+                request_id: row.request_id,
+                session_id: row.session_id,
                 node_name: row.node_name,
                 node_type: row.node_type,
                 parent_name: row.parent_name,

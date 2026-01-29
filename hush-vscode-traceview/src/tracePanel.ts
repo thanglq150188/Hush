@@ -40,6 +40,7 @@ export class TracePanel {
             }
         );
 
+        panel.iconPath = vscode.Uri.joinPath(extensionUri, 'webview', 'hush-icon-16.png');
         TracePanel.currentPanel = new TracePanel(panel, extensionUri);
     }
 

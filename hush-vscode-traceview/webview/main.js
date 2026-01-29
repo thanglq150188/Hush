@@ -119,10 +119,7 @@ function renderTraceList(traces, error) {
         return;
     }
 
-    if (!traces || traces.length === 0) {
-        listEl.innerHTML = '<div class="empty-state">No traces found.<br><br>Run a workflow with a tracer to see traces here.</div>';
-        return;
-    }
+    if (!traces) traces = [];
 
     // Collect all unique tags
     allTags = collectAllTags(traces);
@@ -241,8 +238,12 @@ function renderTraceList(traces, error) {
 
     html += '</tbody></table>';
 
-    if (filteredTraces.length === 0 && (selectedTags.size > 0 || searchQuery)) {
-        html += '<div class="empty-state">No traces match your filters.</div>';
+    if (filteredTraces.length === 0) {
+        if (traces.length === 0) {
+            html += '<div class="empty-state">No traces found.<br><br>Run a workflow with a tracer to see traces here.</div>';
+        } else {
+            html += '<div class="empty-state">No traces match your filters.</div>';
+        }
     }
 
     // Pagination
@@ -267,6 +268,11 @@ function renderTraceList(traces, error) {
 function handleSearch(query) {
     searchQuery = query;
     renderTraceList(currentTraces, null);
+    const input = document.querySelector('.search-input');
+    if (input) {
+        input.focus();
+        input.setSelectionRange(query.length, query.length);
+    }
 }
 
 function clearSearch() {
@@ -348,10 +354,6 @@ function renderTraceDetail(requestId, nodes, error) {
     }
 
     const trace = currentTraces.find(t => t.request_id === requestId);
-    const workflowName = trace ? trace.workflow_name : 'Unknown';
-    const time = trace && trace.start_time ? formatTime(trace.start_time) : '';
-    const duration = trace && trace.total_duration_ms ? formatDuration(trace.total_duration_ms) : '-';
-    const cost = trace && trace.total_cost ? '$' + trace.total_cost.toFixed(4) : '-';
 
     // Expand all nodes by default
     expandAllNodes(currentNodes);
@@ -365,13 +367,6 @@ function renderTraceDetail(requestId, nodes, error) {
         : renderTimeline(currentNodes, totalDuration);
 
     let html = `
-        <div id="detail-header">
-            <button id="back-btn" onclick="backToList()">← Back</button>
-            <div class="detail-info">
-                <span class="detail-workflow">${escapeHtml(workflowName)}</span>
-                <span class="detail-meta">${time} · ${duration} · ${cost}</span>
-            </div>
-        </div>
         <div id="tree-panel">
             <div class="tree-header">
                 <span class="tree-title">Trace</span>
@@ -433,7 +428,7 @@ function switchLeftView(view) {
 
     // Re-apply selection
     if (selectedNode) {
-        const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-track[data-id="${selectedNode.id}"]`);
+        const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-row[data-id="${selectedNode.id}"]`);
         if (el) {
             el.classList.add('selected');
         }
@@ -510,10 +505,27 @@ function renderTimeline(nodes, totalDuration) {
     // Generate time ruler
     const rulerHtml = renderTimeRuler(effectiveRange, trackWidth);
 
+    // Collect tracks (flat) while rendering labels (nested)
+    const tracks = [];
+    const labelsHtml = renderTimelineNodes(nodes, minTime, effectiveRange, trackWidth, tracks);
+
+    // Render flat tracks overlay — all aligned at same left edge
+    const ROW_HEIGHT = 28;
+    const tracksHtml = tracks.map((t, i) =>
+        `<div class="timeline-track-abs" data-id="${t.id}" style="top: ${i * ROW_HEIGHT + 4}px; width: ${trackWidth}px" onclick="selectNodeById(${t.id})">
+            <div class="timeline-bar ${t.nodeType}" style="left: ${t.leftPx}px; width: ${t.widthPx}px">
+                <span class="bar-duration">${t.durationText}</span>
+            </div>
+        </div>`
+    ).join('');
+
+    const containerHeight = tracks.length * ROW_HEIGHT;
+
     let html = '<div class="timeline-wrapper">';
     html += rulerHtml;
-    html += '<div class="timeline-container">';
-    html += renderTimelineNodes(nodes, minTime, effectiveRange, trackWidth, 0);
+    html += `<div class="timeline-container" style="min-height: ${containerHeight}px">`;
+    html += `<div class="timeline-labels">${labelsHtml}</div>`;
+    html += `<div class="timeline-tracks">${tracksHtml}</div>`;
     html += '</div></div>';
     return html;
 }
@@ -562,10 +574,15 @@ function renderTimeRuler(totalMs, trackWidth) {
     return html;
 }
 
-function renderTimelineNodes(nodes, minTime, totalRange, trackWidth, depth) {
+function renderTimelineNodes(nodes, minTime, totalRange, trackWidth, tracks) {
+    const chevronDown = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const chevronRight = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
     let html = '';
     for (const node of nodes) {
         const nodeType = getNodeType(node);
+        const hasChildren = node.children && node.children.length > 0;
+        const isExpanded = expandedNodes.has(node.id);
 
         // Calculate position and width in pixels based on actual times
         let leftPx = 0;
@@ -593,26 +610,31 @@ function renderTimelineNodes(nodes, minTime, totalRange, trackWidth, depth) {
             widthPx = trackWidth - leftPx;
         }
 
-        // Only show duration text if bar is wide enough (approx 45px for text + margin)
+        // Only show duration text if bar is wide enough
         const durationText = (node.duration_ms && widthPx >= 50) ? formatDuration(node.duration_ms) : '';
 
+        // Collect track data for flat overlay
+        tracks.push({ id: node.id, nodeType, leftPx, widthPx, durationText, trackWidth });
+
+        // Render label tree (nested structure for connectors)
         html += `
-            <div class="timeline-row">
-                <div class="timeline-label" style="padding-left: ${depth * 12}px">
-                    <span class="timeline-icon ${nodeType}">${getNodeIcon(node)}</span>
-                    <span class="timeline-name">${escapeHtml(getShortName(node.node_name))}</span>
-                </div>
-                <div class="timeline-track" style="width: ${trackWidth}px" data-id="${node.id}" onclick="selectNodeById(${node.id})">
-                    <div class="timeline-bar ${nodeType}" style="left: ${leftPx}px; width: ${widthPx}px">
-                        <span class="bar-duration">${durationText}</span>
+            <div class="tree-node">
+                <div class="timeline-row" data-id="${node.id}" onclick="selectNodeById(${node.id})">
+                    <div class="timeline-label">
+                        <span class="tree-icon ${nodeType}">${getNodeIcon(node)}</span>
+                        <span class="timeline-name">${escapeHtml(getShortName(node.node_name))}</span>
                     </div>
+                    ${hasChildren ? `<span class="tree-toggle has-children" onclick="event.stopPropagation(); toggleNode(${node.id})">${isExpanded ? chevronDown : chevronRight}</span>` : '<span class="tree-toggle"></span>'}
                 </div>
-            </div>
         `;
 
-        if (node.children && node.children.length > 0) {
-            html += renderTimelineNodes(node.children, minTime, totalRange, trackWidth, depth + 1);
+        if (hasChildren && isExpanded) {
+            html += `<div class="tree-children">`;
+            html += renderTimelineNodes(node.children, minTime, totalRange, trackWidth, tracks);
+            html += '</div>';
         }
+
+        html += '</div>';
     }
     return html;
 }
@@ -680,18 +702,18 @@ function renderTreeNode(node, isLast = false) {
     const duration = node.duration_ms ? formatDuration(node.duration_ms) : '';
     const tokens = node.total_tokens ? `${node.total_tokens} tok` : '';
 
+    const chevronDown = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const chevronRight = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
     let html = `
-        <div class="tree-node ${isLast ? 'last' : ''}">
+        <div class="tree-node">
             <div class="tree-item ${nodeType}" data-id="${node.id}" onclick="selectNodeById(${node.id})">
-                <span class="tree-toggle ${hasChildren ? 'has-children' : ''}" onclick="event.stopPropagation(); toggleNode(${node.id})">
-                    ${hasChildren ? (isExpanded ? '▾' : '▸') : ''}
-                </span>
                 <span class="tree-icon ${nodeType}">${getNodeIcon(node)}</span>
-                <span class="tree-name">${escapeHtml(getShortName(node.node_name))}</span>
-                <span class="tree-info">
-                    ${duration ? `<span class="tree-duration">${duration}</span>` : ''}
-                    ${tokens ? `<span class="tree-tokens">${tokens}</span>` : ''}
+                <span class="tree-node-content">
+                    <span class="tree-name">${escapeHtml(getShortName(node.node_name))}</span>
                 </span>
+                ${duration ? `<span class="tree-duration">${duration}</span>` : ''}
+                ${hasChildren ? `<span class="tree-toggle has-children" onclick="event.stopPropagation(); toggleNode(${node.id})">${isExpanded ? chevronDown : chevronRight}</span>` : '<span class="tree-toggle"></span>'}
             </div>
     `;
 
@@ -732,14 +754,18 @@ function toggleNode(id) {
         expandedNodes.add(id);
     }
 
-    // Re-render just the tree content
+    // Re-render the current view
     const treeContent = document.querySelector('.tree-content');
     if (treeContent) {
-        treeContent.innerHTML = `<div class="tree-root">${renderTree(currentNodes)}</div>`;
+        const trace = currentTraces.find(t => t.request_id === currentNodes[0]?.request_id);
+        const totalDuration = trace ? trace.total_duration_ms : (currentNodes[0]?.duration_ms || 1000);
+        treeContent.innerHTML = leftPanelView === 'tree'
+            ? `<div class="tree-root">${renderTree(currentNodes)}</div>`
+            : renderTimeline(currentNodes, totalDuration);
 
         // Re-apply selection
         if (selectedNode) {
-            const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"]`);
+            const el = document.querySelector(`.tree-item[data-id="${selectedNode.id}"], .timeline-row[data-id="${selectedNode.id}"]`);
             if (el) {
                 el.classList.add('selected');
             }
@@ -831,16 +857,20 @@ function selectNode(node, highlightKey) {
     selectedNode = node;
 
     // Update selection UI for both tree and timeline views
-    document.querySelectorAll('.tree-item, .timeline-track').forEach(el => {
+    document.querySelectorAll('.tree-item, .timeline-row, .timeline-track-abs').forEach(el => {
         el.classList.remove('selected');
     });
     const treeEl = document.querySelector(`.tree-item[data-id="${node.id}"]`);
-    const timelineEl = document.querySelector(`.timeline-track[data-id="${node.id}"]`);
+    const timelineRowEl = document.querySelector(`.timeline-row[data-id="${node.id}"]`);
+    const timelineTrackEl = document.querySelector(`.timeline-track-abs[data-id="${node.id}"]`);
     if (treeEl) {
         treeEl.classList.add('selected');
     }
-    if (timelineEl) {
-        timelineEl.classList.add('selected');
+    if (timelineRowEl) {
+        timelineRowEl.classList.add('selected');
+    }
+    if (timelineTrackEl) {
+        timelineTrackEl.classList.add('selected');
     }
 
     renderNodeDetail(node);
@@ -885,14 +915,22 @@ function renderNodeDetail(node) {
         tagsHtml = `<div class="tags-container">${tags}</div>`;
     }
 
+    const traceId = node.request_id || '-';
+    const sessionId = node.session_id || '';
+
     let html = `
         <div class="node-header">
+            <button class="detail-close-btn" onclick="backToList()" title="Close">×</button>
             <div class="node-title-row">
                 <span class="node-type-icon ${nodeType}">${getNodeIcon(node)}</span>
                 <span class="node-title">${escapeHtml(getShortName(node.node_name))}</span>
                 <span class="node-type-badge">${nodeType}</span>
             </div>
             <div class="node-fullname">${escapeHtml(node.node_name)}</div>
+            <div class="detail-id-buttons">
+                <button class="detail-id-btn">Trace: ${escapeHtml(traceId)}</button>
+                ${sessionId ? `<button class="detail-id-btn">Session: ${escapeHtml(sessionId)}</button>` : ''}
+            </div>
         </div>
         ${tagsHtml}
         <div class="node-metrics">
