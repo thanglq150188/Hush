@@ -28,6 +28,7 @@ from hush.core.nodes.graph.graph_node import GraphNode
 from hush.core.states import StateSchema
 from hush.core.streams import STREAM_SERVICE
 from hush.core.loggings import LOGGER
+from hush.core.background import get_background
 
 if TYPE_CHECKING:
     from hush.core.tracers import BaseTracer, TraceStore
@@ -83,6 +84,9 @@ class Hush:
         # Build graph and create schema immediately
         self.graph.build()
         self._schema = StateSchema(self.graph)
+
+        # Eagerly start background process to avoid spawn cost during first node execution
+        get_background()._ensure_started()
 
         LOGGER.debug("Hush engine initialized for workflow [highlight]%s[/highlight]", self.name)
 
