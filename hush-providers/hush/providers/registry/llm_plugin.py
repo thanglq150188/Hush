@@ -4,14 +4,14 @@ Auto-registers LLM config classes and factory handlers with hush-core.
 """
 
 from hush.core.registry import REGISTRY
-from hush.providers.llms.config import LLMConfig, OpenAIConfig, AzureConfig, GeminiConfig
+from hush.providers.llms.config import LLMConfig
 from hush.providers.llms.factory import LLMFactory
 
 
 class LLMPlugin:
     """Plugin for auto-registering LLM resources with ResourceHub.
 
-    Call LLMPlugin.register() to register all LLM config classes and factory handlers.
+    Call LLMPlugin.register() to register the LLM config class and factory handler.
 
     Example:
         ```python
@@ -31,15 +31,11 @@ class LLMPlugin:
 
     @classmethod
     def register(cls):
-        """Register all LLM config classes and factory handler."""
+        """Register LLM config class and factory handler."""
         if cls._registered:
             return
 
-        # Register all config classes with their factory
         REGISTRY.register(LLMConfig, LLMFactory.create)
-        REGISTRY.register(OpenAIConfig, LLMFactory.create)
-        REGISTRY.register(AzureConfig, LLMFactory.create)
-        REGISTRY.register(GeminiConfig, LLMFactory.create)
 
         cls._registered = True
 

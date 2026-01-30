@@ -23,7 +23,7 @@ class EmbeddingFactory:
     ) -> BaseEmbedder:
         if config.api_type == EmbeddingType.TEXT_EMBEDDING_INFERENCE:
             model_class = TEIEmbedding
-        elif config.api_type == EmbeddingType.VLLM:
+        elif config.api_type in (EmbeddingType.VLLM, EmbeddingType.OPENAI, EmbeddingType.AZURE):
             model_class = VLLMEmbedding
         elif config.api_type == EmbeddingType.HF:
             model_class = HFEmbedding

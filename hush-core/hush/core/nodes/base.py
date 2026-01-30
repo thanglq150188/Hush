@@ -116,6 +116,7 @@ class BaseNode(ABC):
         'core',
         'father',
         'contain_generation',
+        'enabled',
     ]
 
     def __init__(
@@ -131,7 +132,8 @@ class BaseNode(ABC):
         start: bool = False,
         end: bool = False,
         contain_generation: bool = False,
-        verbose: bool = True
+        verbose: bool = True,
+        enabled: bool = True
     ):
         self.id = id or uuid.uuid4().hex
         self.name = name or unique_name()
@@ -141,6 +143,7 @@ class BaseNode(ABC):
         self.start = start
         self.end = end
         self.verbose = verbose
+        self.enabled = enabled
 
         self.sources: List[str] = sources or []
         self.targets: List[str] = targets or []
@@ -626,6 +629,11 @@ class BaseNode(ABC):
         """
         parent_name = self.father.full_name if self.father else None
         state.record_execution(self.full_name, parent_name, context_id)
+
+        # Skip disabled nodes
+        if not self.enabled:
+            LOGGER.debug("Skipped disabled node: %s", self.full_name)
+            return {}
 
         request_id = state.request_id
         start_time = datetime.now()

@@ -85,14 +85,10 @@ class TestPluginAutoRegistration:
         # Import plugins to trigger registration
         from hush.providers.registry import LLMPlugin, EmbeddingPlugin, RerankPlugin
 
-        # Check LLM configs are registered
-        assert REGISTRY.get_class("openai", category="llm") is not None
-        assert REGISTRY.get_class("azure", category="llm") is not None
-        assert REGISTRY.get_class("gemini", category="llm") is not None
-
-        # Check embedding and reranking configs are registered
-        assert REGISTRY.get_class("embedding", category="embedding") is not None
-        assert REGISTRY.get_class("reranking", category="reranking") is not None
+        # Check configs are registered by category
+        assert REGISTRY.get_class("llm") is not None
+        assert REGISTRY.get_class("embedding") is not None
+        assert REGISTRY.get_class("reranking") is not None
 
 
 class TestResourceHubIntegration:

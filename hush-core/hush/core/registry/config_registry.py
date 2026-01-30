@@ -17,14 +17,15 @@ class ConfigEntry:
 class ConfigRegistry:
     """Unified registry for all config types.
 
-    Replaces the old CLASS_NAME_MAP, TYPE_ALIAS_MAP, and FACTORY_HANDLERS.
+    Each category has exactly one config class registered.
+    Resolution: category -> ConfigEntry (config_class + factory).
 
     Usage:
         # Register a config class with its factory
-        REGISTRY.register(OpenAIConfig, LLMFactory.create)
+        REGISTRY.register(LLMConfig, LLMFactory.create)
 
-        # Get config class by type and category
-        config_class = REGISTRY.get_class("openai", category="llm")
+        # Get config class by category
+        config_class = REGISTRY.get_class("llm")
 
         # Create instance from config
         instance = REGISTRY.create(config)
@@ -33,8 +34,10 @@ class ConfigRegistry:
     _instance: Optional['ConfigRegistry'] = None
 
     def __init__(self):
-        # category -> type -> ConfigEntry
-        self._entries: Dict[str, Dict[str, ConfigEntry]] = {}
+        # category -> ConfigEntry (one per category)
+        self._entries: Dict[str, ConfigEntry] = {}
+        # class name -> ConfigEntry (for lookup by class name / backward compat)
+        self._class_entries: Dict[str, ConfigEntry] = {}
 
     @classmethod
     def instance(cls) -> 'ConfigRegistry':
@@ -56,53 +59,46 @@ class ConfigRegistry:
         """Register config class with factory.
 
         Args:
-            config_class: Config class with _type and _category attributes
+            config_class: Config class with _category attribute
             factory: Callable to create resource instance from config
         """
         category = getattr(config_class, '_category', '_default')
-        type_name = getattr(config_class, '_type', config_class.__name__)
-
         entry = ConfigEntry(config_class=config_class, factory=factory)
 
-        # Check duplicate in same category
-        if category in self._entries:
-            existing = self._entries[category].get(type_name)
-            if existing and existing.config_class != config_class:
-                raise ValueError(
-                    f"Duplicate type '{type_name}' in category '{category}': "
-                    f"{existing.config_class.__name__} vs {config_class.__name__}"
-                )
+        # Check duplicate category
+        existing = self._entries.get(category)
+        if existing and existing.config_class != config_class:
+            raise ValueError(
+                f"Duplicate category '{category}': "
+                f"{existing.config_class.__name__} vs {config_class.__name__}"
+            )
 
-        # Register by category + type
-        self._entries.setdefault(category, {})[type_name] = entry
+        # Register by category
+        self._entries[category] = entry
 
-        # Also register by class name (for lookup by class name)
-        self._entries.setdefault('_class', {})[config_class.__name__] = entry
+        # Also register by class name (for backward compat)
+        self._class_entries[config_class.__name__] = entry
 
-        LOGGER.debug("Registered: %s:%s -> %s", category, type_name, config_class.__name__)
+        LOGGER.debug("Registered: %s -> %s", category, config_class.__name__)
 
     def get_entry(
         self,
-        type_name: str,
-        category: Optional[str] = None
+        category: str,
     ) -> Optional[ConfigEntry]:
-        """Lookup ConfigEntry by type + category."""
-        # 1. Try category namespace
-        if category and category in self._entries:
-            entry = self._entries[category].get(type_name)
-            if entry:
-                return entry
+        """Lookup ConfigEntry by category."""
+        entry = self._entries.get(category)
+        if entry:
+            return entry
 
-        # 2. Fallback to class name
-        return self._entries.get('_class', {}).get(type_name)
+        # Fallback to class name
+        return self._class_entries.get(category)
 
     def get_class(
         self,
-        type_name: str,
-        category: Optional[str] = None
+        category: str,
     ) -> Optional[Type[YamlModel]]:
-        """Get config class by type + category."""
-        entry = self.get_entry(type_name, category)
+        """Get config class by category."""
+        entry = self.get_entry(category)
         return entry.config_class if entry else None
 
     def get_factory(
@@ -110,7 +106,7 @@ class ConfigRegistry:
         config_class: Type[YamlModel]
     ) -> Optional[Callable]:
         """Get factory for a config class."""
-        entry = self._entries.get('_class', {}).get(config_class.__name__)
+        entry = self._class_entries.get(config_class.__name__)
         return entry.factory if entry else None
 
     def create(self, config: YamlModel) -> Any:
@@ -128,12 +124,12 @@ class ConfigRegistry:
         config_type = type(config)
 
         # Try exact match first
-        entry = self._entries.get('_class', {}).get(config_type.__name__)
+        entry = self._class_entries.get(config_type.__name__)
 
         # If not found, try parent classes (for inheritance)
         if not entry:
             for parent_type in config_type.__mro__[1:]:
-                entry = self._entries.get('_class', {}).get(parent_type.__name__)
+                entry = self._class_entries.get(parent_type.__name__)
                 if entry:
                     break
 
@@ -145,14 +141,11 @@ class ConfigRegistry:
     def clear(self):
         """Clear all registrations."""
         self._entries.clear()
+        self._class_entries.clear()
 
     def categories(self) -> list[str]:
         """List all registered categories."""
-        return [c for c in self._entries.keys() if c != '_class']
-
-    def types_in_category(self, category: str) -> list[str]:
-        """List all types in a category."""
-        return list(self._entries.get(category, {}).keys())
+        return list(self._entries.keys())
 
 
 # Global singleton

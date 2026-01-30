@@ -1,6 +1,8 @@
-# Embeddings và Reranking
+# Embeddings và RAG
 
-Hướng dẫn sử dụng embedding và reranking cho các ứng dụng RAG (Retrieval-Augmented Generation).
+Sử dụng embedding, reranking cho RAG (Retrieval-Augmented Generation).
+
+> **Ví dụ chạy được**: `examples/07_embeddings_and_rag.py`, `examples/14_rag_advanced.py`
 
 ## Embedding Providers
 
@@ -15,14 +17,13 @@ Hướng dẫn sử dụng embedding và reranking cho các ứng dụng RAG (Re
 
 ## Cấu hình Embedding
 
-### OpenAI Embeddings
+### OpenAI
 
 ```yaml
 embedding:openai:
-  _class: EmbeddingConfig
   api_type: openai
   api_key: ${OPENAI_API_KEY}
-  base_url: https://api.openai.com/v1
+  base_url: https://api.openai.com/v1/embeddings
   model: text-embedding-3-small
   dimensions: 1536
 ```
@@ -31,7 +32,6 @@ embedding:openai:
 
 ```yaml
 embedding:local:
-  _class: EmbeddingConfig
   api_type: vllm
   base_url: http://localhost:8080/v1
   model: BAAI/bge-m3
@@ -39,19 +39,16 @@ embedding:local:
   embed_batch_size: 32
 ```
 
-### HuggingFace (Local)
+### ONNX (Local)
 
 ```yaml
-embedding:hf:
-  _class: EmbeddingConfig
-  api_type: hf
-  model: BAAI/bge-small-en-v1.5
-  dimensions: 384
+embedding:bge-m3-onnx:
+  api_type: onnx
+  model: ${BGE_M3_EMBEDDING_PATH}
+  dimensions: 1024
 ```
 
 ## EmbeddingNode
-
-### Basic usage
 
 ```python
 from hush.core import GraphNode, START, END, PARENT
@@ -60,11 +57,10 @@ from hush.providers import EmbeddingNode
 with GraphNode(name="embed-workflow") as graph:
     embed = EmbeddingNode(
         name="embed",
-        resource_key="embedding:openai",
+        resource_key="openai",
         inputs={"texts": PARENT["documents"]},
         outputs={"embeddings": PARENT["vectors"]}
     )
-
     START >> embed >> END
 
 # Input: {"documents": ["Hello world", "Goodbye world"]}
@@ -80,129 +76,139 @@ with GraphNode(name="embed-workflow") as graph:
 | `dimensions` | int | Số dimensions |
 | `tokens_used` | int | Tổng số tokens |
 
+### Chọn model phù hợp
+
+| Use Case | Model |
+|----------|-------|
+| General English | `text-embedding-3-small` |
+| Multilingual | `BAAI/bge-m3` |
+| Code | `text-embedding-3-large` |
+| Fast/cheap | `BAAI/bge-small-en-v1.5` |
+
 ## Reranking Providers
 
 | Provider | Type | Đặc điểm |
 |----------|------|----------|
-| Cohere | API-based | Chất lượng cao |
 | Pinecone | API-based | Tích hợp vector DB |
+| Cohere | API-based | Chất lượng cao |
 | vLLM | Self-hosted | Cross-encoder models |
-| TEI | Self-hosted | HuggingFace optimized |
+| ONNX | Local | Fast inference |
 
 ## Cấu hình Reranking
 
-### Pinecone Reranker
-
 ```yaml
-rerank:pinecone:
-  _class: RerankConfig
+reranking:bge-m3:
   api_type: pinecone
   api_key: ${PINECONE_API_KEY}
   model: bge-reranker-v2-m3
   base_url: https://api.pinecone.io/rerank
 ```
 
-### Cohere Reranker
-
-```yaml
-rerank:cohere:
-  _class: RerankConfig
-  api_type: cohere
-  api_key: ${COHERE_API_KEY}
-  model: rerank-english-v3.0
-```
-
 ## RerankNode
-
-### Basic usage
 
 ```python
 from hush.providers import RerankNode
 
-with GraphNode(name="rerank-workflow") as graph:
-    rerank = RerankNode(
-        name="rerank",
-        resource_key="rerank:pinecone",
-        inputs={
-            "query": PARENT["query"],
-            "documents": PARENT["documents"],
-            "top_k": 5
-        },
-        outputs={"reranked_documents": PARENT["results"]}
-    )
-
-    START >> rerank >> END
+rerank = RerankNode(
+    name="rerank",
+    resource_key="bge-m3",
+    inputs={
+        "query": PARENT["query"],
+        "documents": PARENT["documents"],
+        "top_k": 5
+    }
+)
 ```
 
 ### RerankNode outputs
 
 | Output | Type | Mô tả |
 |--------|------|-------|
-| `reranked_documents` | list | Documents sorted by relevance |
+| `reranked_documents` / `reranks` | list | Documents sorted by relevance |
 | `scores` | list | Relevance scores |
 | `indices` | list | Original indices |
 
-## RAG Pipeline: Embed → Retrieve → Rerank
+## RAG Pipeline: Embed → Retrieve → Rerank → Generate
 
 ```python
-from hush.core import GraphNode, CodeNode, START, END, PARENT
-from hush.providers import EmbeddingNode, RerankNode, PromptNode, LLMNode
-
 with GraphNode(name="rag-pipeline") as graph:
-    # Step 1: Embed query
     embed_query = EmbeddingNode(
         name="embed_query",
-        resource_key="embedding:openai",
+        resource_key="openai",
         inputs={"texts": PARENT["query"]}
     )
-
-    # Step 2: Vector search (custom logic)
     retrieve = CodeNode(
         name="retrieve",
-        code_fn=lambda query_vector, documents, doc_vectors: {
-            "retrieved": retrieve_top_k(query_vector, documents, doc_vectors, k=20)
+        code_fn=lambda query_vec, docs, doc_vecs: {
+            "retrieved": cosine_search(query_vec, doc_vecs, docs, top_k=20)
         },
         inputs={
-            "query_vector": embed_query["embeddings"],
-            "documents": PARENT["knowledge_base"],
-            "doc_vectors": PARENT["doc_embeddings"]
+            "query_vec": embed_query["embeddings"],
+            "docs": PARENT["documents"],
+            "doc_vecs": PARENT["doc_embeddings"]
         }
     )
-
-    # Step 3: Rerank
     rerank = RerankNode(
         name="rerank",
-        resource_key="rerank:pinecone",
+        resource_key="bge-m3",
         inputs={
             "query": PARENT["query"],
             "documents": retrieve["retrieved"],
             "top_k": 5
         }
     )
-
-    # Step 4: Build prompt
     prompt = PromptNode(
         name="prompt",
         inputs={
-            "prompt": {
-                "system": "Trả lời dựa trên context sau:\n\n{context}",
-                "user": "{query}"
-            },
+            "prompt": {"system": "Trả lời dựa trên context:\n\n{context}", "user": "{query}"},
             "context": rerank["reranked_documents"],
             "query": PARENT["query"]
         }
     )
-
-    # Step 5: Generate answer
     llm = LLMNode(
         name="llm",
         resource_key="gpt-4o",
         inputs={"messages": prompt["messages"]},
         outputs={"content": PARENT["answer"]}
     )
-
     START >> embed_query >> retrieve >> rerank >> prompt >> llm >> END
 ```
+
+## Hybrid Search — Keyword + Vector + RRF
+
+Kết hợp keyword search và vector search, merge bằng Reciprocal Rank Fusion.
+
+```python
+with GraphNode(name="hybrid-rag") as graph:
+    # Song song: keyword + vector
+    kw_search = CodeNode(
+        name="keyword_search",
+        code_fn=lambda query, docs: {"results": keyword_search(query, docs, top_k=8)},
+        inputs={"query": PARENT["query"], "docs": PARENT["documents"]}
+    )
+    embed_q = EmbeddingNode(
+        name="embed_query",
+        resource_key="openai",
+        inputs={"texts": PARENT["query"]}
+    )
+    vec_search = CodeNode(
+        name="vector_search",
+        code_fn=lambda qv, docs, dvs: {"results": cosine_search(qv[0], dvs, docs, top_k=8)},
+        inputs={"qv": embed_q["embeddings"], "docs": PARENT["documents"], "dvs": PARENT["doc_vectors"]}
+    )
+    merge = CodeNode(
+        name="merge",
+        code_fn=lambda kw, vec: {"merged": reciprocal_rank_fusion([kw, vec])[:5]},
+        inputs={"kw": kw_search["results"], "vec": vec_search["results"]}
+    )
+
+    # Parallel: keyword + vector search
+    START >> [kw_search, embed_q]
+    embed_q >> vec_search
+    [kw_search, vec_search] >> merge >> END
+```
+
+Xem ví dụ đầy đủ tại `examples/14_rag_advanced.py`.
 
 ## Batch Embedding
 
@@ -211,16 +217,13 @@ from hush.core.nodes.iteration import MapNode
 from hush.core.nodes.iteration.base import Each
 
 with GraphNode(name="batch-embed") as graph:
-    # Split documents into batches
     batch = CodeNode(
         name="batch",
-        code_fn=lambda docs, batch_size: {
-            "batches": [docs[i:i+batch_size] for i in range(0, len(docs), batch_size)]
+        code_fn=lambda docs: {
+            "batches": [docs[i:i+100] for i in range(0, len(docs), 100)]
         },
-        inputs={"docs": PARENT["documents"], "batch_size": 100}
+        inputs={"docs": PARENT["documents"]}
     )
-
-    # Parallel embedding
     with MapNode(
         name="embed_batches",
         inputs={"batch": Each(batch["batches"])},
@@ -228,59 +231,29 @@ with GraphNode(name="batch-embed") as graph:
     ) as map_node:
         embed = EmbeddingNode(
             name="embed",
-            resource_key="embedding:openai",
+            resource_key="openai",
             inputs={"texts": PARENT["batch"]},
             outputs={"embeddings": PARENT}
         )
         START >> embed >> END
 
-    # Flatten results
     flatten = CodeNode(
         name="flatten",
-        code_fn=lambda batches: {
-            "all_embeddings": [e for batch in batches for e in batch]
-        },
+        code_fn=lambda batches: {"all_embeddings": [e for b in batches for e in b]},
         inputs={"batches": map_node["embeddings"]},
         outputs={"*": PARENT}
     )
-
     START >> batch >> map_node >> flatten >> END
 ```
 
 ## Best Practices
 
-### 1. Chọn embedding model phù hợp
+1. **Retrieval top_k > Rerank top_k** — Retrieve 20, rerank to 5
+2. **Chunk size**: 200-500 tokens với 10-20% overlap
+3. **Cache embeddings** — Pre-compute cho knowledge base
+4. **Batch embedding** — Dùng MapNode với max_concurrency cho throughput
 
-| Use Case | Recommended Model |
-|----------|-------------------|
-| General English | `text-embedding-3-small` |
-| Multilingual | `BAAI/bge-m3` |
-| Code | `text-embedding-3-large` |
-| High accuracy | `text-embedding-3-large` |
-| Fast/cheap | `BAAI/bge-small-en-v1.5` |
+## Tiếp theo
 
-### 2. Batch để tối ưu throughput
-
-```yaml
-embedding:optimized:
-  _class: EmbeddingConfig
-  api_type: openai
-  model: text-embedding-3-small
-  embed_batch_size: 100
-```
-
-### 3. Cache embeddings
-
-Pre-compute embeddings cho knowledge base và store trong vector database.
-
-### 4. Rerank để improve precision
-
-Two-stage retrieval:
-- Stage 1: Fast retrieval (top 50)
-- Stage 2: Rerank (top 5)
-
-## Xem thêm
-
-- [RAG Workflow](../examples/rag-workflow.md)
-- [Tích hợp LLM](llm-integration.md)
-- [Thực thi song song](parallel-execution.md)
+- [Error Handling](07-error-handling.md) — Xử lý lỗi
+- [Parallel Execution](08-parallel-execution.md) — Chi tiết parallel patterns

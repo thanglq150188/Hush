@@ -129,23 +129,32 @@ class ResourceHub:
 
         # Extract category from key prefix: "llm:gpt-4" -> "llm"
         category = key.split(":")[0] if ":" in key else None
-
-        # Prefer `type` (new), fallback `_class` (old/backward compatible)
-        config_type = config_data.get('type') or config_data.get('_class')
-        if not config_type:
-            LOGGER.warning("Missing 'type' or '_class' field for key: %s", key)
+        if not category:
+            LOGGER.warning("Invalid key format, missing category: %s", key)
             return None
 
-        # Lookup config class with category namespace
-        config_class = REGISTRY.get_class(config_type, category=category)
+        # Lookup config class by category
+        config_class = REGISTRY.get_class(category)
+
+        # Backward compat: fall back to 'type' or '_class' field
         if not config_class:
-            LOGGER.warning("Unknown config type: %s (category=%s)", config_type, category)
-            return None
+            config_type = config_data.get('type') or config_data.get('_class')
+            if config_type:
+                config_class = REGISTRY.get_class(config_type)
+            if not config_class:
+                LOGGER.warning("Unknown category: %s (key=%s)", category, key)
+                return None
 
         try:
             # Parse config (exclude type and _class fields)
             data = {k: v for k, v in config_data.items() if k not in ('type', '_class')}
-            config = config_class.model_validate(data)
+
+            # If config class has create_config, use it to dispatch to subclass
+            if hasattr(config_class, 'create_config'):
+                config = config_class.create_config(data)
+            else:
+                config = config_class.model_validate(data)
+
             self._cache[key] = CacheEntry(config=config)
             return config
         except Exception as e:
@@ -187,20 +196,8 @@ class ResourceHub:
 
         for key, config_data in all_configs.items():
             if key not in self._cache:
-                # Extract category from key prefix
-                category = key.split(":")[0] if ":" in key else None
-
-                # Prefer `type` (new), fallback `_class` (old)
-                config_type = config_data.get('type') or config_data.get('_class')
-                if config_type:
-                    config_class = REGISTRY.get_class(config_type, category=category)
-                    if config_class:
-                        try:
-                            data = {k: v for k, v in config_data.items() if k not in ('type', '_class')}
-                            config = config_class.model_validate(data)
-                            self._cache[key] = CacheEntry(config=config)
-                        except Exception as e:
-                            LOGGER.error("Cannot parse config '%s': %s", key, e)
+                # Use _load_config which handles category resolution
+                self._load_config(key)
 
         return list(self._cache.keys())
 
@@ -280,13 +277,8 @@ class ResourceHub:
         instance = REGISTRY.create(config)
         self._cache[registry_key] = CacheEntry(config=config, instance=instance)
 
-        # Persist to storage
+        # Persist to storage (no type field needed - category is in the key)
         config_dict = json.loads(config.model_dump_json(exclude_none=True))
-        # Use 'type' field if config has _type attribute, otherwise use _class
-        if hasattr(type(config), '_type'):
-            config_dict['type'] = getattr(type(config), '_type')
-        else:
-            config_dict['_class'] = type(config).__name__
         self._storage.save(registry_key, config_dict)
 
         LOGGER.debug("Registered: %s", registry_key)

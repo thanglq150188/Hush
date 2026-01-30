@@ -19,7 +19,6 @@ from hush.core.registry import (
 
 class MockServiceConfig(YamlModel):
     """Mock config for testing."""
-    _type: ClassVar[str] = "mock-service"
     _category: ClassVar[str] = "service"
 
     name: str = "default"
@@ -99,8 +98,8 @@ class TestConfigRegistry:
         """Test registering a config class with factory."""
         registry.register(MockServiceConfig, mock_service_factory)
 
-        # Should be findable by type + category
-        cls = registry.get_class("mock-service", category="service")
+        # Should be findable by category
+        cls = registry.get_class("service")
         assert cls == MockServiceConfig
 
         # Should also be findable by class name
@@ -133,30 +132,26 @@ class TestConfigRegistry:
         with pytest.raises(ValueError, match="No factory registered"):
             registry.create(config)
 
-    def test_duplicate_type_same_category_raises(self, registry):
-        """Test that registering duplicate type in same category raises error."""
+    def test_duplicate_category_raises(self, registry):
+        """Test that registering duplicate category raises error."""
         class ConfigA(YamlModel):
-            _type: ClassVar[str] = "duplicate"
             _category: ClassVar[str] = "test"
 
         class ConfigB(YamlModel):
-            _type: ClassVar[str] = "duplicate"
             _category: ClassVar[str] = "test"
 
         registry.register(ConfigA, lambda c: c)
 
-        with pytest.raises(ValueError, match="Duplicate type"):
+        with pytest.raises(ValueError, match="Duplicate category"):
             registry.register(ConfigB, lambda c: c)
 
-    def test_same_type_different_categories(self, registry):
-        """Test that same type name can exist in different categories."""
+    def test_different_categories(self, registry):
+        """Test that different categories resolve to different classes."""
         class ConfigA(YamlModel):
-            _type: ClassVar[str] = "openai"
             _category: ClassVar[str] = "llm"
             value: str = "a"
 
         class ConfigB(YamlModel):
-            _type: ClassVar[str] = "openai"
             _category: ClassVar[str] = "embedding"
             value: str = "b"
 
@@ -164,8 +159,8 @@ class TestConfigRegistry:
         registry.register(ConfigB, lambda c: c)
 
         # Should resolve to different classes based on category
-        assert registry.get_class("openai", category="llm") == ConfigA
-        assert registry.get_class("openai", category="embedding") == ConfigB
+        assert registry.get_class("llm") == ConfigA
+        assert registry.get_class("embedding") == ConfigB
 
     def test_categories_list(self, registry):
         """Test listing all categories."""
@@ -173,13 +168,6 @@ class TestConfigRegistry:
 
         categories = registry.categories()
         assert "service" in categories
-
-    def test_types_in_category(self, registry):
-        """Test listing types in a category."""
-        registry.register(MockServiceConfig, mock_service_factory)
-
-        types = registry.types_in_category("service")
-        assert "mock-service" in types
 
     def test_clear(self, registry):
         """Test clearing all registrations."""
@@ -415,8 +403,7 @@ class TestFilePersistence:
 # ============================================================================
 
 class MockLLMConfig(YamlModel):
-    """Mock LLM config for testing type-based registration."""
-    _type: ClassVar[str] = "mock-llm"
+    """Mock LLM config for testing category-based registration."""
     _category: ClassVar[str] = "llm"
 
     name: str = "default"
@@ -425,7 +412,6 @@ class MockLLMConfig(YamlModel):
 
 class MockEmbeddingConfig(YamlModel):
     """Mock embedding config for testing."""
-    _type: ClassVar[str] = "mock-embedding"
     _category: ClassVar[str] = "embedding"
 
     name: str = "default"
@@ -454,46 +440,41 @@ def mock_embedding_factory(config: MockEmbeddingConfig) -> MockEmbeddingService:
     return MockEmbeddingService(config)
 
 
-class TestTypeBasedRegistration:
-    """Test type-based config registration with category namespace."""
+class TestCategoryBasedRegistration:
+    """Test category-based config registration."""
 
     def test_register_with_category(self, registry):
         """Test registering config class with category."""
         registry.register(MockLLMConfig, mock_llm_factory)
 
         assert "llm" in registry.categories()
-        assert "mock-llm" in registry.types_in_category("llm")
-        assert registry.get_class("mock-llm", category="llm") == MockLLMConfig
+        assert registry.get_class("llm") == MockLLMConfig
 
-    def test_get_config_class_by_type_and_category(self, registry):
-        """Test looking up config class by type alias and category."""
+    def test_get_config_class_by_category(self, registry):
+        """Test looking up config class by category."""
         registry.register(MockLLMConfig, mock_llm_factory)
 
-        # Lookup by type + category
-        result = registry.get_class("mock-llm", category="llm")
+        # Lookup by category
+        result = registry.get_class("llm")
         assert result == MockLLMConfig
 
         # Lookup by class name should also work
         result = registry.get_class("MockLLMConfig")
         assert result == MockLLMConfig
 
-    def test_load_config_with_type_field(self, tmp_path, registry):
-        """Test loading config from YAML using new 'type' field."""
-        # Register mock config
+    def test_load_config_by_category(self, tmp_path, registry):
+        """Test loading config from YAML using category from key prefix."""
         registry.register(MockLLMConfig, mock_llm_factory)
 
-        # Create YAML file with new format
         config_file = tmp_path / "resources.yaml"
         config_file.write_text("""
 llm:test-model:
-  type: mock-llm
   name: test
   model: gpt-4-turbo
 """)
 
         hub = ResourceHub.from_yaml(config_file)
 
-        # Should load successfully using type field
         assert hub.has("llm:test-model")
         service = hub.get("llm:test-model")
         assert isinstance(service, MockLLMService)
@@ -502,10 +483,8 @@ llm:test-model:
 
     def test_load_config_backward_compatible_class(self, tmp_path, registry):
         """Test loading config using old '_class' field (backward compatible)."""
-        # Register mock config
         registry.register(MockLLMConfig, mock_llm_factory)
 
-        # Create YAML file with old format
         config_file = tmp_path / "resources.yaml"
         config_file.write_text("""
 llm:legacy-model:
@@ -516,7 +495,6 @@ llm:legacy-model:
 
         hub = ResourceHub.from_yaml(config_file)
 
-        # Should still work with _class field
         assert hub.has("llm:legacy-model")
         service = hub.get("llm:legacy-model")
         assert isinstance(service, MockLLMService)
@@ -525,19 +503,16 @@ llm:legacy-model:
 
     def test_category_extracted_from_key_prefix(self, tmp_path, registry):
         """Test that category is correctly extracted from key prefix."""
-        # Register configs
         registry.register(MockLLMConfig, mock_llm_factory)
         registry.register(MockEmbeddingConfig, mock_embedding_factory)
 
         config_file = tmp_path / "resources.yaml"
         config_file.write_text("""
 llm:my-llm:
-  type: mock-llm
   name: llm-test
   model: gpt-4
 
 embedding:my-embedding:
-  type: mock-embedding
   name: embed-test
   dimensions: 768
 """)

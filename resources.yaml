@@ -1,5 +1,5 @@
 # Hush Resources Configuration
-# Format: category:name with `type` field for type resolution
+# Format: category:name — category is inferred from key prefix
 
 # =============================================================================
 # LLM Configurations
@@ -7,38 +7,31 @@
 
 # OpenRouter - Claude Sonnet
 llm:or-claude-4-sonnet:
-  type: openai
+  api_type: openai
   api_key: ${OPENROUTER_API_KEY}
   base_url: https://openrouter.ai/api/v1
   model: anthropic/claude-sonnet-4
 
 # OpenAI GPT-4o
 llm:gpt-4o:
-  type: openai
+  api_type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o
 
 # OpenAI GPT-4o-mini (cheaper for testing)
 llm:gpt-4o-mini:
-  type: openai
+  api_type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
 
 # OpenAI GPT-4o Audio (for audio input tests)
 llm:gpt-4o-audio:
-  type: openai
+  api_type: openai
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
   model: gpt-4o-audio-preview
-
-# Local vLLM (for self-hosted models)
-llm:local-llama:
-  type: openai
-  api_key: "not-needed"
-  base_url: http://localhost:8000/v1
-  model: meta-llama/Llama-3.1-8B-Instruct
 
 # =============================================================================
 # Embedding Configurations
@@ -46,7 +39,6 @@ llm:local-llama:
 
 # DeepInfra BGE-M3
 embedding:bge-m3:
-  type: embedding
   api_type: vllm
   api_key: ${DEEPINFRA_API_KEY}
   base_url: https://api.deepinfra.com/v1/openai/embeddings
@@ -55,16 +47,14 @@ embedding:bge-m3:
 
 # OpenAI Embeddings
 embedding:openai:
-  type: embedding
   api_type: openai
   api_key: ${OPENAI_API_KEY}
-  base_url: https://api.openai.com/v1
+  base_url: https://api.openai.com/v1/embeddings
   model: text-embedding-3-small
   dimensions: 1536
 
 # Local ONNX Embedding
 embedding:bge-m3-onnx:
-  type: embedding
   api_type: onnx
   model: ${BGE_M3_EMBEDDING_PATH}
   dimensions: 1024
@@ -75,7 +65,6 @@ embedding:bge-m3-onnx:
 
 # Pinecone Reranker
 reranking:bge-m3:
-  type: reranking
   api_type: pinecone
   api_key: ${PINECONE_API_KEY}
   api_version: "2025-04"
@@ -84,7 +73,6 @@ reranking:bge-m3:
 
 # Local ONNX Reranker
 reranking:bge-m3-onnx:
-  type: reranking
   api_type: onnx
   model: ${BGE_M3_RERANKER_PATH}
   dimensions: 1024
@@ -95,7 +83,6 @@ reranking:bge-m3-onnx:
 
 # Langfuse
 langfuse:default:
-  type: langfuse
   public_key: ${LANGFUSE_PUBLIC_KEY}
   secret_key: ${LANGFUSE_SECRET_KEY}
   host: ${LANGFUSE_HOST}
@@ -104,7 +91,6 @@ langfuse:default:
 
 # OpenTelemetry - Langfuse (default)
 otel:default:
-  type: otel
   endpoint: ${LANGFUSE_HOST}/api/public/otel/v1/traces
   protocol: http
   service_name: hush-workflow

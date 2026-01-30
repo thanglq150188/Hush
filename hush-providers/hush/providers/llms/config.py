@@ -123,8 +123,6 @@ class OpenAIConfig(LLMConfig):
         batch_poll_interval: Seconds between batch status checks (default: 30.0)
         batch_timeout: Maximum wait time for batch completion in seconds (default: 86400 = 24h)
     """
-    _type: ClassVar[str] = "openai"
-    _category: ClassVar[str] = "llm"
     api_type: LLMType = LLMType.OPENAI  # Auto-assigned
     api_key: str
     base_url: str
@@ -145,8 +143,6 @@ class AzureConfig(LLMConfig):
         azure_endpoint: Base URL for Azure API requests
         model: Name of the deployment to use
     """
-    _type: ClassVar[str] = "azure"
-    _category: ClassVar[str] = "llm"
     api_type: LLMType = LLMType.AZURE  # Auto-assigned
     api_key: str
     api_version: str
@@ -171,8 +167,6 @@ class GeminiConfig(LLMConfig):
         location: Google Cloud region for Gemini API
         model_name: Gemini model version to use
     """
-    _type: ClassVar[str] = "gemini"
-    _category: ClassVar[str] = "llm"
     api_type: LLMType = LLMType.GEMINI  # Auto-assigned
     project_id: str
     private_key_id: str

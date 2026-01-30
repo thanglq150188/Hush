@@ -36,7 +36,6 @@ class EmbeddingConfig(YamlModel):
         dimensions (Optional[int]): The dimensionality of the generated embeddings.
             Required for OpenAI, Azure, and TEI. Default is None.
     """
-    _type: ClassVar[str] = "embedding"
     _category: ClassVar[str] = "embedding"
 
     api_type: EmbeddingType = EmbeddingType.VLLM

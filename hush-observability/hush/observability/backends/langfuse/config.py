@@ -22,7 +22,6 @@ class LangfuseConfig(YamlModel):
         ```yaml
         # resources.yaml
         langfuse:vpbank:
-          type: langfuse
           public_key: pk-...
           secret_key: sk-...
           host: https://cloud.langfuse.com
@@ -35,7 +34,6 @@ class LangfuseConfig(YamlModel):
         ```
     """
 
-    _type: ClassVar[str] = "langfuse"
     _category: ClassVar[str] = "langfuse"
 
     public_key: str

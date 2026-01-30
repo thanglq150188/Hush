@@ -5,16 +5,18 @@
 ## Cài đặt
 
 ```bash
-pip install hush-providers
+# Qua meta-package (khuyến nghị)
+uv pip install "hush-ai[standard] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
 # Với provider cụ thể
-pip install hush-providers[gemini]      # Google Gemini
-pip install hush-providers[onnx]        # Local ONNX Runtime
+uv pip install "hush-ai[openai,gemini] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
-# Tất cả
-pip install hush-providers[all-light]   # Không có ML frameworks nặng
-pip install hush-providers[all]         # Bao gồm transformers/torch
+# Hoặc editable (cho development)
+git clone https://github.com/thanglq150188/hush.git && cd hush
+uv pip install -e hush-core -e hush-providers
 ```
+
+Xem chi tiết tại [Cài đặt và Thiết lập](../hush-tutorial/docs/01-cai-dat-va-thiet-lap.md).
 
 ## Quick Start
 
@@ -107,7 +109,7 @@ embedding:bge-m3:
 
 ## Documentation
 
-- [User Docs](../docs/) - Tutorials và guides
+- [User Docs](../hush-tutorial/docs/) - Tutorials và guides
 - [Architecture](../architecture/providers/) - Internal documentation
   - [LLM Abstraction](../architecture/providers/llm-abstraction.md)
   - [Embedding Provider](../architecture/providers/embedding-provider.md)

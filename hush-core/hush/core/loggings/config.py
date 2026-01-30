@@ -1,5 +1,6 @@
 """Các model config cho logging."""
 
+import os
 from typing import Optional, List, Union, Dict, Any
 
 from pydantic import BaseModel, Field, ConfigDict
@@ -75,7 +76,7 @@ class LogConfig(BaseModel):
     """
 
     name: str = "hush"
-    level: str = "WARNING"
+    level: str = Field(default_factory=lambda: os.environ.get("LOG_LEVEL", "WARNING"))
     handlers: List[Union[HandlerConfig, Dict[str, Any]]] = Field(
         default_factory=lambda: [{"type": "console"}]
     )

@@ -15,7 +15,7 @@ hush/
 ├── hush-observability/ # Tracing integration (Langfuse, etc.)
 ├── hush-tutorial/      # Tutorials và examples
 ├── architecture/       # Internal documentation
-└── docs/               # User documentation
+└── hush-tutorial/docs/ # User documentation
 ```
 
 ## Clone Repository

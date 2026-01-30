@@ -13,15 +13,17 @@
 ## Cài đặt
 
 ```bash
-# Core engine
-pip install hush-core
+# Khuyến nghị — đầy đủ cho phát triển
+uv pip install "hush-ai[all] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
-# Với LLM providers
-pip install hush-providers
+# Nhẹ hơn — chỉ OpenAI + Langfuse
+uv pip install "hush-ai[openai,langfuse] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
-# Với observability (Langfuse, etc.)
-pip install hush-observability
+# Tối thiểu — chỉ workflow engine
+uv pip install "hush-ai[core] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 ```
+
+Xem chi tiết tại [Cài đặt và Thiết lập](hush-tutorial/docs/01-cai-dat-va-thiet-lap.md).
 
 ## Quick Start
 
@@ -81,7 +83,7 @@ asyncio.run(main())
 
 | Tài liệu | Mô tả |
 |----------|-------|
-| [docs/](docs/) | User documentation - tutorials, guides, examples |
+| [hush-tutorial/docs/](hush-tutorial/docs/) | User documentation - tutorials, guides, examples |
 | [architecture/](architecture/) | Internal documentation - cho developers và AI |
 
 ## Packages

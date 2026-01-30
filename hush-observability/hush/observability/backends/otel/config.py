@@ -29,7 +29,7 @@ class OTELConfig(YamlModel):
         ```yaml
         # resources.yaml - Jaeger
         otel:jaeger:
-          type: otel
+
           endpoint: http://localhost:4317
           protocol: grpc
           service_name: my-workflow
@@ -37,7 +37,7 @@ class OTELConfig(YamlModel):
 
         # resources.yaml - Grafana Tempo
         otel:tempo:
-          type: otel
+
           endpoint: https://tempo.example.com:4317
           protocol: grpc
           service_name: my-workflow
@@ -46,7 +46,7 @@ class OTELConfig(YamlModel):
 
         # resources.yaml - HTTP/Protobuf
         otel:collector:
-          type: otel
+
           endpoint: http://localhost:4318/v1/traces
           protocol: http
           service_name: my-workflow
@@ -59,7 +59,6 @@ class OTELConfig(YamlModel):
         ```
     """
 
-    _type: ClassVar[str] = "otel"
     _category: ClassVar[str] = "otel"
 
     endpoint: str

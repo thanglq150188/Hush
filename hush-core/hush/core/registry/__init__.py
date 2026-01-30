@@ -20,8 +20,7 @@ Extension from other packages:
 
 Config class requirements:
     class MyConfig(YamlModel):
-        _type: ClassVar[str] = "my-type"      # Type identifier in YAML
-        _category: ClassVar[str] = "custom"    # Category namespace
+        _category: ClassVar[str] = "custom"    # Category (matches key prefix)
         ...
 """
 

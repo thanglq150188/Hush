@@ -5,8 +5,15 @@
 ## Cài đặt
 
 ```bash
-pip install hush-core
+# Qua meta-package (khuyến nghị)
+uv pip install "hush-ai[core] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
+
+# Hoặc editable (cho development)
+git clone https://github.com/thanglq150188/hush.git && cd hush
+uv pip install -e hush-core
 ```
+
+Xem chi tiết tại [Cài đặt và Thiết lập](../hush-tutorial/docs/01-cai-dat-va-thiet-lap.md).
 
 ## Quick Start
 
@@ -87,7 +94,7 @@ await engine.run()
 
 ## Documentation
 
-- [User Docs](../docs/) - Tutorials và guides
+- [User Docs](../hush-tutorial/docs/) - Tutorials và guides
 - [Architecture](../architecture/) - Internal documentation
   - [Engine](../architecture/engine/) - Execution internals
   - [State](../architecture/state/) - State management

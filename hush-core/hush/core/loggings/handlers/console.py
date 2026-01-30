@@ -1,5 +1,6 @@
 """Các logging handler cho console."""
 
+import os
 import sys
 import re
 import copy
@@ -7,11 +8,22 @@ import codecs
 import logging
 from typing import Literal, Union
 
+from pydantic import Field
 from rich.logging import RichHandler
 from rich.console import Console
 from rich.highlighter import NullHighlighter
 
 from ..config import HandlerConfig
+
+
+def _parse_use_rich(value: str) -> Union[bool, str]:
+    """Parse LOG_USE_RICH env var thành bool hoặc 'auto'."""
+    v = value.strip().lower()
+    if v in ("true", "1", "yes"):
+        return True
+    if v in ("false", "0", "no"):
+        return False
+    return "auto"
 from ..theme import LOGGING_THEME
 
 # Regex để strip Rich markup tags
@@ -38,7 +50,9 @@ class ConsoleHandlerConfig(HandlerConfig):
     """
 
     type: Literal["console"] = "console"
-    use_rich: Union[bool, Literal["auto"]] = "auto"
+    use_rich: Union[bool, Literal["auto"]] = Field(
+        default_factory=lambda: _parse_use_rich(os.environ.get("LOG_USE_RICH", "auto"))
+    )
     show_name: bool = False
 
 

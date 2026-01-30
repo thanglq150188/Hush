@@ -20,7 +20,7 @@ def log_break(text: str = "") -> str:
         Text với tiền tố newline và indent
 
     Example:
-        LOGGER.info(f"Processing request{log_break('user_id: 123')}{log_break('action: update')}")
+    LOGGER.info(f"Processing request{log_break('user_id: 123')}{log_break('action: update')}")
         # Output:
         # [12/12/25 00:59:32] INFO     [hush.core] Processing request
         #                                           user_id: 123

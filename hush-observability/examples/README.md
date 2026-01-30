@@ -35,4 +35,4 @@ To add examples for other backends (Phoenix, Opik, LangSmith):
 2. Create corresponding example in this directory
 3. Update this README
 
-See the implementation plan in `docs/observability/IMPLEMENTATION_PLAN.md` for details.
+See the implementation plan in the architecture docs for details.

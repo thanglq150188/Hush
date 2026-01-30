@@ -5,15 +5,18 @@
 ## Cài đặt
 
 ```bash
-# Với Langfuse
-pip install hush-observability[langfuse]
+# Qua meta-package (khuyến nghị)
+uv pip install "hush-ai[langfuse] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
-# Với tất cả backends
-pip install hush-observability[all]
+# Hoặc với tất cả backends
+uv pip install "hush-ai[all] @ git+https://github.com/thanglq150188/hush.git#subdirectory=hush-ai"
 
-# Backends cụ thể
-pip install hush-observability[phoenix,opik]
+# Hoặc editable (cho development)
+git clone https://github.com/thanglq150188/hush.git && cd hush
+uv pip install -e hush-core -e "hush-observability[all]"
 ```
+
+Xem chi tiết tại [Cài đặt và Thiết lập](../hush-tutorial/docs/01-cai-dat-va-thiet-lap.md).
 
 ## Quick Start
 
@@ -91,7 +94,7 @@ tracer:phoenix:
 
 ## Documentation
 
-- [User Docs](../docs/) - Tutorials và guides
+- [User Docs](../hush-tutorial/docs/) - Tutorials và guides
 - [Architecture](../architecture/tracing/) - Internal documentation
   - [Tracer Interface](../architecture/tracing/tracer-interface.md)
   - [Local Tracer](../architecture/tracing/local-tracer.md)
